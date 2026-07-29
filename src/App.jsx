@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import * as XLSX from "xlsx";
 import { storageGet, storageSet } from "./storage";
 
+const FARSPEED_LOGO_DATA_URI = "data:image/jpeg;base64,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";
 const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;600;700&display=swap');`;
 
 const FONT_DISPLAY = "'Barlow Condensed','Noto Sans TC',sans-serif";
@@ -741,6 +742,17 @@ const TEXT = {
     dirNoneMsg: "No sites added yet.",
     selectFromDirectory: "Fill from Directory",
     selectFromDirectoryPlaceholder: "\u2014 pick a site to auto-fill \u2014",
+    saveNewSiteToDirectory: (name) => `Save "${name}" as a new site in the Directory, so future imports recognize it automatically`,
+
+    siteTotalsTitle: "CBM & KG Remaining by Construction Site",
+    siteTotalsColSite: "Construction Site",
+    siteTotalsColClient: "Client",
+    siteTotalsColItems: "Items",
+    siteTotalsColCbm: "CBM Left",
+    siteTotalsColKg: "KG Left",
+    siteTotalsNoneMsg: "Nothing currently at the depot.",
+    siteTotalsToggleHide: "Hide",
+    siteTotalsToggleShow: "Show",
 
     empTitle: "Employees",
     empDesc: "Add anyone who does data entry, devans/CFS, or deliveries. Roles can be picked from the list or typed fresh.",
@@ -1077,6 +1089,17 @@ const TEXT = {
     dirNoneMsg: "尚未新增任何地盤。",
     selectFromDirectory: "從目錄自動填寫",
     selectFromDirectoryPlaceholder: "— 選擇地盤以自動填寫 —",
+    saveNewSiteToDirectory: (name) => `將「${name}」儲存為目錄中的新地盤，日後匯入將自動識別`,
+
+    siteTotalsTitle: "各地盤存倉之CBM及KG",
+    siteTotalsColSite: "地盤",
+    siteTotalsColClient: "客戶",
+    siteTotalsColItems: "項目數",
+    siteTotalsColCbm: "剩餘CBM",
+    siteTotalsColKg: "剩餘KG",
+    siteTotalsNoneMsg: "目前貨倉內沒有貨物。",
+    siteTotalsToggleHide: "隱藏",
+    siteTotalsToggleShow: "顯示",
 
     empTitle: "員工",
     empDesc: "加入所有負責資料輸入、拆櫃／CFS或送貨的同事。職位可從清單選擇，亦可自行輸入新職位。",
@@ -1785,13 +1808,9 @@ function JobSheetPrint({ sheet, onClose, colors, t, lang }) {
           {/* Letterhead */}
           <div className="flex items-start justify-between" style={{ marginBottom: 10 }}>
             <div className="flex items-center gap-3">
-              <svg width="56" height="44" viewBox="0 0 56 44">
-                <polygon points="4,40 4,4 40,40" fill="#C0392B" />
-                <polygon points="10,40 22,14 34,40" fill="#2D6E5C" />
-                <polygon points="18,40 32,10 46,40" fill="#2A6FB0" />
-              </svg>
+              <img src={FARSPEED_LOGO_DATA_URI} alt="Farspeed" style={{ height: 52, width: "auto" }} />
               <div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: "#2D6E5C", letterSpacing: 0.5 }}>FARSPEED<span style={{ color: "#111", fontWeight: 500 }}> Contractors Limited</span></div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#111" }}>Contractors Limited</div>
                 <div style={{ fontSize: 10, color: "#333" }}>P. O. Box No. 1985, Yuen Long Post Office, Yuen Long, N.T., Hong Kong</div>
                 <div style={{ fontSize: 10, color: "#333" }}>Tel: +852 5337-9500&nbsp;&nbsp;Fax: +852 2402-4450&nbsp;&nbsp;http://www.farspeed.hk</div>
               </div>
@@ -1861,7 +1880,8 @@ function JobSheetPrint({ sheet, onClose, colors, t, lang }) {
           </div>
 
           <div style={{ borderTop: "1px solid #ccc", paddingTop: 6, fontSize: 9, color: "#666", textAlign: "center" }}>
-            N.B. Farspeed Contractors Ltd. is a private company. All transaction(s) taken into account are subject to the STANDARD BUSINESS CONDITIONS of the company, details as behind.
+            Office and Depot: 21D Wang Toi Shan, Hung Mo Tam, Kam Tin. NT., HK
+            <div style={{ marginTop: 3 }}>N.B. Farspeed Contractors Ltd. is a private company. All transaction(s) taken into account are subject to the STANDARD BUSINESS CONDITIONS of the company, details as behind.</div>
             <div style={{ marginTop: 2 }}>(a member of FARSPEED Group)</div>
           </div>
         </div>
@@ -2132,7 +2152,7 @@ function exportToExcel(items) {
   XLSX.writeFile(wb, `farspeed-depot-export-${todayStr()}.xlsx`);
 }
 
-function ImportPanel({ onImportRows, existingItems, directory, colors, t, lang }) {
+function ImportPanel({ onImportRows, existingItems, directory, setDirectory, colors, t, lang }) {
   const [mode, setMode] = useState("packinglist");
   const [excelPreview, setExcelPreview] = useState(null);
   const [included, setIncluded] = useState([]);
@@ -2165,6 +2185,7 @@ function ImportPanel({ onImportRows, existingItems, directory, colors, t, lang }
       jobRef: matchedSite ? matchedSite.jobRef : "",
       orderedBy: matchedSite ? matchedSite.orderedBy : "",
       constructionSite: matchedSite ? (matchedSite.siteZh || matchedSite.siteEn) : (project || ""),
+      saveToDirectory: !matchedSite,
     });
     return true;
   }
@@ -2287,6 +2308,22 @@ If CBM isn't given directly but dimensions in mm are (e.g. LxWxH), compute cbm a
 
   function importPackingList() {
     const sharedJobNumber = plCommon.jobNumber || nextJobNumber(existingItems);
+    let effectiveDirectoryId = plCommon.directoryId || "";
+
+    if (plCommon.saveToDirectory && !plCommon.directoryId && plCommon.project) {
+      const newSite = {
+        id: `SITE${Date.now()}`,
+        siteEn: plCommon.project,
+        siteZh: plCommon.constructionSite && plCommon.constructionSite !== plCommon.project ? plCommon.constructionSite : "",
+        client: plCommon.client,
+        jobRef: plCommon.jobRef || "",
+        orderedBy: plCommon.orderedBy || "",
+        accountOfficer: "",
+      };
+      setDirectory((d) => [...d, newSite]);
+      effectiveDirectoryId = newSite.id;
+    }
+
     const newItems = plPreview.map((g) => {
       const base = emptyForm();
       return {
@@ -2301,7 +2338,7 @@ If CBM isn't given directly but dimensions in mm are (e.g. LxWxH), compute cbm a
         jobNumber: sharedJobNumber,
         jobRef: plCommon.jobRef || "",
         orderedBy: plCommon.orderedBy || "",
-        directoryId: plCommon.directoryId || "",
+        directoryId: effectiveDirectoryId,
         itemType: "Separate Items",
         unitCode: g.lot,
         weightKg: g.totalWeight ? String(Math.round(g.totalWeight * 10) / 10) : "",
@@ -2382,6 +2419,7 @@ If CBM isn't given directly but dimensions in mm are (e.g. LxWxH), compute cbm a
                             constructionSite: site.siteZh || site.siteEn || c.constructionSite,
                             jobRef: site.jobRef || c.jobRef,
                             orderedBy: site.orderedBy || c.orderedBy,
+                            saveToDirectory: false,
                           }));
                         }}
                       >
@@ -2398,7 +2436,7 @@ If CBM isn't given directly but dimensions in mm are (e.g. LxWxH), compute cbm a
                     </select>
                   </Field>
                   <Field label={t.packingListApplyProject} colors={colors}>
-                    <input className={inputClass} style={inputStyle} value={plCommon.project} onChange={(e) => setPlCommon((c) => ({ ...c, project: e.target.value }))} />
+                    <input className={inputClass} style={inputStyle} value={plCommon.project} onChange={(e) => setPlCommon((c) => ({ ...c, project: e.target.value, directoryId: "" }))} />
                   </Field>
                   <Field label={t.fOrderedBy} colors={colors}>
                     <input className={inputClass} style={inputStyle} value={plCommon.orderedBy || ""} onChange={(e) => setPlCommon((c) => ({ ...c, orderedBy: e.target.value }))} />
@@ -2436,6 +2474,16 @@ If CBM isn't given directly but dimensions in mm are (e.g. LxWxH), compute cbm a
                     </div>
                   </Field>
                 </div>
+                {!plCommon.directoryId && plCommon.project && (
+                  <label className="flex items-center gap-2 mt-4 text-sm" style={{ color: colors.ink }}>
+                    <input
+                      type="checkbox"
+                      checked={!!plCommon.saveToDirectory}
+                      onChange={(e) => setPlCommon((c) => ({ ...c, saveToDirectory: e.target.checked }))}
+                    />
+                    {t.saveNewSiteToDirectory(plCommon.project)}
+                  </label>
+                )}
               </div>
 
               <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
@@ -2561,6 +2609,7 @@ export default function FarspeedInventory() {
   const [exitingItem, setExitingItem] = useState(null);
   const [printJobSheet, setPrintJobSheet] = useState(null);
   const [expandedRowId, setExpandedRowId] = useState(null);
+  const [siteTotalsOpen, setSiteTotalsOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newEntryMenuOpen, setNewEntryMenuOpen] = useState(false);
   const [directory, setDirectoryState] = useState([]);
@@ -2743,6 +2792,30 @@ export default function FarspeedInventory() {
   const lfdWarnings = activeItemsList.filter((i) => { const a = lfdAlert(i); return a && (a.level === "soon" || a.level === "overdue"); });
   const duplicateGroups = useMemo(() => findDuplicateGroups(activeItemsList), [activeItemsList]);
   const duplicateIds = useMemo(() => new Set(duplicateGroups.flat().map((i) => i.id)), [duplicateGroups]);
+  const siteTotals = useMemo(() => {
+    const map = {};
+    openForDelivery.forEach((it) => {
+      const key = it.directoryId || sigPart(it.project) || "unspecified";
+      if (!map[key]) {
+        const dirEntry = it.directoryId ? (directory || []).find((d) => d.id === it.directoryId) : null;
+        map[key] = {
+          key,
+          label: dirEntry ? dirEntry.siteEn : (it.project || "—"),
+          labelZh: dirEntry ? dirEntry.siteZh : (it.constructionSite || ""),
+          client: it.client,
+          cbm: 0,
+          kg: 0,
+          count: 0,
+        };
+      }
+      map[key].cbm += remainingVolumeCbm(it);
+      map[key].kg += remainingWeightKg(it);
+      map[key].count += 1;
+    });
+    return Object.values(map)
+      .map((s) => ({ ...s, cbm: Math.round(s.cbm * 1000) / 1000, kg: Math.round(s.kg * 10) / 10 }))
+      .sort((a, b) => b.cbm - a.cbm);
+  }, [openForDelivery, directory]);
   const jobLog = useMemo(() => {
     const rows = [];
     items.forEach((it) => {
@@ -3034,6 +3107,47 @@ export default function FarspeedInventory() {
 
         {view === "inventory" && (
           <div className="flex flex-col gap-4">
+            <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+              <div
+                className="px-4 py-2 flex items-center justify-between cursor-pointer"
+                style={{ background: colors.surfaceDim }}
+                onClick={() => setSiteTotalsOpen((o) => !o)}
+              >
+                <span className="text-sm font-bold" style={{ color: colors.ink, fontFamily: FONT_DISPLAY }}>{t.siteTotalsTitle}</span>
+                <span className="text-xs font-semibold" style={{ color: colors.amberText }}>
+                  {siteTotalsOpen ? t.siteTotalsToggleHide : t.siteTotalsToggleShow}
+                </span>
+              </div>
+              {siteTotalsOpen && (
+                <table className="w-full text-sm" style={{ background: colors.surface }}>
+                  <thead>
+                    <tr style={{ background: colors.surfaceDim }}>
+                      {[t.siteTotalsColSite, t.siteTotalsColClient, t.siteTotalsColItems, t.siteTotalsColCbm, t.siteTotalsColKg].map((h) => (
+                        <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {siteTotals.length === 0 && (
+                      <tr><td colSpan={5} className="px-3 py-4 text-center text-sm" style={{ color: colors.inkFaint }}>{t.siteTotalsNoneMsg}</td></tr>
+                    )}
+                    {siteTotals.map((s) => (
+                      <tr key={s.key} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
+                        <td className="px-3 py-2">
+                          <div>{s.label}</div>
+                          {s.labelZh && <div className="text-xs" style={{ color: colors.inkFaint }}>{s.labelZh}</div>}
+                        </td>
+                        <td className="px-3 py-2">{s.client}</td>
+                        <td className="px-3 py-2">{s.count}</td>
+                        <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{s.cbm}</td>
+                        <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{s.kg}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
             <div className="flex flex-wrap gap-3 items-end">
               <Field label={t.searchLabel} colors={colors}>
                 <input className={inputClass} style={{ ...inputStyleFor(colors), minWidth: 220 }} placeholder={t.searchPlaceholder} value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -3257,7 +3371,7 @@ export default function FarspeedInventory() {
         )}
 
         {view === "import" && (
-          <ImportPanel onImportRows={handleImportRows} existingItems={items} directory={directory} colors={colors} t={t} lang={lang} />
+          <ImportPanel onImportRows={handleImportRows} existingItems={items} directory={directory} setDirectory={setDirectory} colors={colors} t={t} lang={lang} />
         )}
 
         {view === "directory" && (
