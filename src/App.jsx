@@ -3262,15 +3262,17 @@ export default function FarspeedInventory() {
                         <td className="px-3 py-2">{totalUnits(i)}</td>
                         <td className="px-3 py-2">{i.volumeCbm || "—"}</td>
                         <td className="px-3 py-2">{i.weightKg || "—"}</td>
-                        <td className="px-3 py-2 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                          {["at_depot", "partial"].includes(deriveStatus(i)) && (
-                            <button className="text-xs font-semibold mr-3" style={{ color: colors.amberText }} onClick={() => { setExitingItem(i); setView("exit"); }}>{t.deliverBtn}</button>
-                          )}
-                          <button className="text-xs font-semibold mr-3" style={{ color: colors.amberText }} onClick={() => { setEditing(i); setView("add"); }}>{t.editBtn}</button>
-                          {i.jobNumber && (
-                            <button className="text-xs font-semibold mr-3" style={{ color: colors.inkFaint }} onClick={() => handleCancelItem(i.id)}>{t.cancelJobBtn}</button>
-                          )}
-                          <button className="text-xs font-semibold" style={{ color: colors.red }} onClick={() => handleDelete(i.id)}>{t.deleteBtn}</button>
+                        <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex flex-wrap justify-end items-center gap-x-3 gap-y-1">
+                            {["at_depot", "partial"].includes(deriveStatus(i)) && (
+                              <button className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => { setExitingItem(i); setView("exit"); }}>{t.deliverBtn}</button>
+                            )}
+                            <button className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => { setEditing(i); setView("add"); }}>{t.editBtn}</button>
+                            {i.jobNumber && (
+                              <button className="text-xs font-semibold" style={{ color: colors.inkFaint }} onClick={() => handleCancelItem(i.id)}>{t.cancelJobBtn}</button>
+                            )}
+                            <button className="text-xs font-semibold" style={{ color: colors.red }} onClick={() => handleDelete(i.id)}>{t.deleteBtn}</button>
+                          </div>
                         </td>
                       </tr>
                       {expandedRowId === i.id && (
