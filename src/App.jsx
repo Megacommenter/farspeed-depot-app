@@ -2140,18 +2140,9 @@ function ImportPanel({ onImportRows, existingItems, directory, colors, t, lang }
   const [plPreview, setPlPreview] = useState(null);
   const [plError, setPlError] = useState("");
   const [plCommon, setPlCommon] = useState(null);
-  const [apiKey, setApiKey] = useState(() => {
-    try { return window.localStorage.getItem("farspeed_anthropic_api_key") || ""; } catch (e) { return ""; }
-  });
-  const [apiKeyDraft, setApiKeyDraft] = useState(apiKey);
   const [pdfStatus, setPdfStatus] = useState("idle"); // idle | scanning
   const [pdfError, setPdfError] = useState("");
   const inputStyle = inputStyleFor(colors);
-
-  function saveApiKey() {
-    setApiKey(apiKeyDraft);
-    try { window.localStorage.setItem("farspeed_anthropic_api_key", apiKeyDraft); } catch (e) {}
-  }
 
   function applyParsedResult({ groups, client, project }) {
     if (!groups || groups.length === 0) { return false; }
@@ -2194,14 +2185,9 @@ function ImportPanel({ onImportRows, existingItems, directory, colors, t, lang }
       const prompt = `This is a packing list, delivery memo, shipping list, or similar logistics document for elevator/escalator materials, possibly in English, Traditional or Simplified Chinese, or mixed. It may cover one or more lifts/lots/field modules, each containing individual cases/packages with descriptions, quantities, weights, and CBM or dimensions. Extract a JSON object with EXACTLY this shape and nothing else (no markdown fences, no commentary):
 {"client": "best-guess client name or ''", "project": "site/building/project name found in the document, or ''", "groups": [{"lot": "unit/lift/lot/shop-order code that identifies this batch", "containers": ["container numbers if any, else empty array"], "packages": [{"code": "case/package number", "description": "item description", "weightKg": number_or_empty_string, "cbm": number_or_empty_string}]}]}
 If CBM isn't given directly but dimensions in mm are (e.g. LxWxH), compute cbm as L*W*H/1000000000. If the document only has one overall lot/shipment with no explicit lift/case breakdown, put everything under a single group with a sensible lot name.`;
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      const response = await fetch("/api/scan-pdf", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-5",
           max_tokens: 4000,
@@ -2212,7 +2198,7 @@ If CBM isn't given directly but dimensions in mm are (e.g. LxWxH), compute cbm a
         }),
       });
       const data = await response.json();
-      if (data.error) throw new Error(data.error.message || "API error");
+      if (data.error) throw new Error(data.error.message || data.error || "API error");
       const text = (data.content || []).map((b) => b.text || "").join("");
       const clean = text.replace(/```json|```/g, "").trim();
       const parsed = JSON.parse(clean);
@@ -2362,39 +2348,10 @@ If CBM isn't given directly but dimensions in mm are (e.g. LxWxH), compute cbm a
               <p className="text-sm" style={{ color: colors.inkFaint }}>{t.pdfDesc}</p>
             </div>
 
-            <div className="rounded p-3" style={{ background: colors.amberSoft, color: colors.amberText, fontSize: 12 }}>
-              {t.pdfKeyWarning}
-            </div>
-
-            <div className="flex gap-2 items-end flex-wrap">
-              <Field label={t.pdfApiKeyLabel} hint={t.pdfApiKeyHint} colors={colors}>
-                <input
-                  type="password"
-                  className={inputClass}
-                  style={{ ...inputStyle, minWidth: 280 }}
-                  placeholder="sk-ant-..."
-                  value={apiKeyDraft}
-                  onChange={(e) => setApiKeyDraft(e.target.value)}
-                />
-              </Field>
-              <button
-                className="px-3 py-1.5 rounded text-sm font-semibold h-fit"
-                style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY }}
-                onClick={saveApiKey}
-              >
-                {t.pdfSaveKeyBtn}
-              </button>
-              {apiKey && <Badge tone="green" colors={colors}>{t.pdfKeySavedBadge}</Badge>}
-            </div>
-
-            {apiKey ? (
-              <label className="px-3 py-2 rounded text-sm font-semibold cursor-pointer w-fit" style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}>
-                {t.choosePdfBtn}
-                <input type="file" accept="application/pdf" className="hidden" onChange={handlePdfScanFile} />
-              </label>
-            ) : (
-              <div className="text-xs" style={{ color: colors.inkFaint }}>{t.pdfNeedKeyMsg}</div>
-            )}
+            <label className="px-3 py-2 rounded text-sm font-semibold cursor-pointer w-fit" style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}>
+              {t.choosePdfBtn}
+              <input type="file" accept="application/pdf" className="hidden" onChange={handlePdfScanFile} />
+            </label>
             {pdfStatus === "scanning" && <div className="text-sm" style={{ color: colors.inkFaint }}>{t.scanningMsg}</div>}
             {pdfError && <div className="px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>{pdfError}</div>}
           </div>

@@ -54,10 +54,20 @@ compliant option for a company tool, and that's what needs a card.
 
 ### 5. PDF packing list scanning (optional, its own card)
 
-Uses your own Anthropic API key, entered directly in the app's
-**Import → PDF Scan** screen (from [console.anthropic.com](https://console.anthropic.com)),
-saved only in your browser — not a server variable. Everything else in
-the app works fully without it.
+Unlike earlier versions of this project, this now works for EVERYONE
+using the app automatically — nobody (including Irene or other staff)
+needs to enter or know an API key. You set it up once, as the admin:
+
+1. Get an API key at [console.anthropic.com](https://console.anthropic.com)
+2. In your Vercel project: **Settings -> Environment Variables**
+3. Add a variable named exactly `ANTHROPIC_API_KEY` with your key as the
+   value. Do NOT prefix it with `VITE_` (that would expose it to the
+   browser, which defeats the point).
+4. Redeploy (Deployments tab -> "..." on the latest one -> Redeploy)
+
+From then on, the "Import -> PDF Scan" button just works for everyone,
+no key entry, no setup on their end. Everything else in the app works
+fully without this step too, if you'd rather skip it for now.
 
 ## Important limitation: no login yet
 
