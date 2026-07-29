@@ -2238,7 +2238,7 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "claude-sonnet-5",
+          model: "claude-sonnet-4-6",
           max_tokens: 16000,
           messages: [{ role: "user", content: [
             { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
@@ -2275,7 +2275,9 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
       if (err.message === "truncated-or-invalid-json") {
         setPdfError(t.pdfTruncatedMsg);
       } else {
-        setPdfError(t.pdfReadErrorMsg || "Couldn't read this PDF. Please check the file, or enter the details manually below.");
+        const friendly = t.pdfReadErrorMsg || "Couldn't read this PDF. Please check the file, or enter the details manually below.";
+        const detail = err && err.message ? err.message : "";
+        setPdfError(detail ? `${friendly} (${detail})` : friendly);
       }
       setPdfStatus("idle");
     }
