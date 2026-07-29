@@ -613,6 +613,7 @@ const TEXT = {
     choosePdfBtn: "Choose PDF",
     scanningMsg: "Reading document…",
     pdfReadErrorMsg: "Couldn't automatically read this PDF. Please check the file, or enter the details manually below.",
+    pdfTruncatedMsg: "This document is very dense (lots of cases/items) and the automatic read got cut off partway through. Try again \u2014 it sometimes succeeds on a second attempt \u2014 or enter the details manually below.",
     pdfKeyWarning: "This uses your own Anthropic API key, entered below and saved only in this browser. Since it's used directly from this page, anyone who opens this file's developer tools could see it — fine for internal testing among trusted staff, not for wider distribution.",
     pdfApiKeyLabel: "Anthropic API Key",
     pdfApiKeyHint: "From console.anthropic.com — saved only in this browser",
@@ -960,6 +961,7 @@ const TEXT = {
     choosePdfBtn: "選擇PDF檔案",
     scanningMsg: "正在讀取文件…",
     pdfReadErrorMsg: "未能自動讀取此PDF。請檢查檔案，或於下方手動輸入資料。",
+    pdfTruncatedMsg: "此文件內容非常密集（件數/項目眾多），自動讀取中途被截斷。請再試一次（有時第二次會成功），或於下方手動輸入資料。",
     pdfKeyWarning: "此功能使用您自己的Anthropic API金鑰，於下方輸入並只保存在此瀏覽器內。由於是直接從此頁面使用，任何開啟此檔案開發人員工具的人都有機會看到金鑰 — 適合內部信任員工測試，不適合對外派發。",
     pdfApiKeyLabel: "Anthropic API 金鑰",
     pdfApiKeyHint: "從 console.anthropic.com 取得 — 只保存在此瀏覽器",
@@ -1321,6 +1323,11 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, directory, emplo
   const [form, setForm] = useState(initial || { ...emptyForm(), recordedBy: currentUser || "" });
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const inputStyle = inputStyleFor(colors);
+  const siteSuggestions = useMemo(() => {
+    const fromDirectory = (directory || []).map((s) => s.siteEn).filter(Boolean);
+    const fromItems = (items || []).map((i) => i.project).filter(Boolean);
+    return [...new Set([...fromDirectory, ...fromItems])];
+  }, [directory, items]);
 
   function applyDirectoryEntry(id) {
     const site = (directory || []).find((s) => s.id === id);
@@ -1360,7 +1367,10 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, directory, emplo
           </select>
         </Field>
         <Field label={t.fProject} colors={colors}>
-          <input className={inputClass} style={inputStyle} placeholder={t.fProjectPlaceholder} value={form.project} onChange={set("project")} />
+          <input list="itemform-site-suggestions" className={inputClass} style={inputStyle} placeholder={t.fProjectPlaceholder} value={form.project} onChange={set("project")} />
+          <datalist id="itemform-site-suggestions">
+            {siteSuggestions.map((s) => <option key={s} value={s} />)}
+          </datalist>
         </Field>
         <Field label={t.fInvoiceNo} hint={t.fInvoiceHint} colors={colors}>
           <input className={inputClass} style={inputStyle} value={form.invoiceNumber} onChange={set("invoiceNumber")} />
@@ -2163,6 +2173,11 @@ function ImportPanel({ onImportRows, existingItems, directory, setDirectory, col
   const [pdfStatus, setPdfStatus] = useState("idle"); // idle | scanning
   const [pdfError, setPdfError] = useState("");
   const inputStyle = inputStyleFor(colors);
+  const siteSuggestions = useMemo(() => {
+    const fromDirectory = (directory || []).map((s) => s.siteEn).filter(Boolean);
+    const fromItems = (existingItems || []).map((i) => i.project).filter(Boolean);
+    return [...new Set([...fromDirectory, ...fromItems])];
+  }, [directory, existingItems]);
 
   function applyParsedResult({ groups, client, project }) {
     if (!groups || groups.length === 0) { return false; }
@@ -2203,15 +2218,28 @@ function ImportPanel({ onImportRows, existingItems, directory, setDirectory, col
         r.onerror = () => reject(new Error("read failed"));
         r.readAsDataURL(file);
       });
-      const prompt = `This is a packing list, delivery memo, shipping list, or similar logistics document for elevator/escalator materials, possibly in English, Traditional or Simplified Chinese, or mixed. It may cover one or more lifts/lots/field modules, each containing individual cases/packages with descriptions, quantities, weights, and CBM or dimensions. Extract a JSON object with EXACTLY this shape and nothing else (no markdown fences, no commentary):
-{"client": "best-guess client name or ''", "project": "site/building/project name found in the document, or ''", "groups": [{"lot": "unit/lift/lot/shop-order code that identifies this batch", "containers": ["container numbers if any, else empty array"], "packages": [{"code": "case/package number", "description": "item description", "weightKg": number_or_empty_string, "cbm": number_or_empty_string}]}]}
-If CBM isn't given directly but dimensions in mm are (e.g. LxWxH), compute cbm as L*W*H/1000000000. If the document only has one overall lot/shipment with no explicit lift/case breakdown, put everything under a single group with a sensible lot name.`;
+      const prompt = `This is a packing list, delivery memo, shipping list, or similar logistics document for elevator/escalator materials, possibly in English, Traditional or Simplified Chinese, or mixed.
+
+Follow these extraction rules exactly - they keep the output compact even for long, dense documents:
+
+1. Each row/block of the table is ONE case/package. For each case extract exactly these 5 things:
+   - "code": the case/box number as printed (e.g. "C01", "C21", "17A10A01").
+   - "lot": the lift/unit number. This is very often printed right next to the case number in parentheses, like "(#.01)" or "(#.23)" - extract just the number (e.g. "01", "23"). Different cases sharing the same case-number prefix (e.g. multiple "C21" cases) but different lift numbers are DIFFERENT packages in DIFFERENT lots. If there's no such lift marker anywhere, use the shop order number or another batch identifier as the lot instead.
+   - "description": ONLY the general category/heading text for that case (e.g. "Guide Rail", "Rail Bracket", "Traction Machine", "Installation Material"). Do NOT list the individual part numbers or sub-components underneath it even if the document itemizes many - this is the single most important rule for keeping output size manageable on long documents.
+   - "weightKg": use the GROSS weight (毛重 / GROSS column), not net weight - gross is what matters here.
+   - "cbm": if a CBM/volume figure is already given directly for that case, use it as-is. Otherwise read that case's dimensions (often shown as "L*W*H", e.g. "500*20*20") and check the column header/label to see whether dimensions are in cm or mm. If in cm, compute cbm = (L*W*H) / 1,000,000. If in mm, compute cbm = (L*W*H) / 1,000,000,000.
+2. Group all cases by their lot/lift number into the "groups" array - one entry per distinct lot.
+3. Keep everything as compact as possible: short descriptions, no commentary, no repeated sub-item lists.
+
+Respond with ONLY a raw JSON object in EXACTLY this shape and nothing else (no markdown fences, no commentary, no explanation before or after):
+{"client": "best-guess client name or ''", "project": "site/building/project name found in the document, or ''", "groups": [{"lot": "lift/lot/shop-order number identifying this batch", "containers": ["container numbers if any, else empty array"], "packages": [{"code": "case/package number", "description": "short category name, a few words only", "weightKg": number_or_empty_string, "cbm": number_or_empty_string}]}]}
+If the document only has one overall lot/shipment with no explicit lift/case breakdown, put everything under a single group with a sensible lot name.`;
       const response = await fetch("/api/scan-pdf", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-5",
-          max_tokens: 4000,
+          max_tokens: 16000,
           messages: [{ role: "user", content: [
             { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
             { type: "text", text: prompt },
@@ -2222,7 +2250,12 @@ If CBM isn't given directly but dimensions in mm are (e.g. LxWxH), compute cbm a
       if (data.error) throw new Error(data.error.message || data.error || "API error");
       const text = (data.content || []).map((b) => b.text || "").join("");
       const clean = text.replace(/```json|```/g, "").trim();
-      const parsed = JSON.parse(clean);
+      let parsed;
+      try {
+        parsed = JSON.parse(clean);
+      } catch (parseErr) {
+        throw new Error("truncated-or-invalid-json");
+      }
       const normalizedGroups = (parsed.groups || []).map((g) => ({
         lot: g.lot || "UNSPECIFIED",
         containers: g.containers || [],
@@ -2239,7 +2272,11 @@ If CBM isn't given directly but dimensions in mm are (e.g. LxWxH), compute cbm a
       if (!ok) setPdfError(t.packingListNoStructure);
       setPdfStatus("idle");
     } catch (err) {
-      setPdfError(t.pdfReadErrorMsg || "Couldn't read this PDF. Check your API key and try again.");
+      if (err.message === "truncated-or-invalid-json") {
+        setPdfError(t.pdfTruncatedMsg);
+      } else {
+        setPdfError(t.pdfReadErrorMsg || "Couldn't read this PDF. Please check the file, or enter the details manually below.");
+      }
       setPdfStatus("idle");
     }
     e.target.value = "";
@@ -2436,7 +2473,10 @@ If CBM isn't given directly but dimensions in mm are (e.g. LxWxH), compute cbm a
                     </select>
                   </Field>
                   <Field label={t.packingListApplyProject} colors={colors}>
-                    <input className={inputClass} style={inputStyle} value={plCommon.project} onChange={(e) => setPlCommon((c) => ({ ...c, project: e.target.value, directoryId: "" }))} />
+                    <input list="site-name-suggestions" className={inputClass} style={inputStyle} value={plCommon.project} onChange={(e) => setPlCommon((c) => ({ ...c, project: e.target.value, directoryId: "" }))} />
+                    <datalist id="site-name-suggestions">
+                      {siteSuggestions.map((s) => <option key={s} value={s} />)}
+                    </datalist>
                   </Field>
                   <Field label={t.fOrderedBy} colors={colors}>
                     <input className={inputClass} style={inputStyle} value={plCommon.orderedBy || ""} onChange={(e) => setPlCommon((c) => ({ ...c, orderedBy: e.target.value }))} />
