@@ -2137,14 +2137,14 @@ function JobSheetPrint({ sheet, onClose, colors, t, lang }) {
             {item.unitCode && <div style={{ fontWeight: "bold" }}>{item.unitCode}</div>}
             {item.description && <div>{item.description}</div>}
             {csLine && <div style={{ fontSize: 11, color: "#333" }}>C/S NO. {csLine}</div>}
-            <div style={{ marginTop: 8 }}>
-              {pkgs} {t.jsPkgs} &nbsp;&nbsp; {kgs || "—"} {t.jsKgs} &nbsp;&nbsp; {cbm || "—"} {t.jsCbm}
+            <div style={{ borderTop: "1px solid #111", marginTop: 12, paddingTop: 6 }}>
+              共:&nbsp;&nbsp;&nbsp;{pkgs} {t.jsPkgs} &nbsp;&nbsp;&nbsp; {kgs || "—"} {t.jsKgs} &nbsp;&nbsp;&nbsp; {cbm || "—"} {t.jsCbm}
             </div>
             {estimated && <div style={{ fontSize: 10, color: "#900", marginTop: 4 }}>{t.jsEstimatedNote}</div>}
           </div>
 
           <div style={{ fontSize: 12, marginBottom: 24 }}>
-            {t.jsSignatureLine}&nbsp;_________________________________
+            客戶簽署確認 / Customer signature confirming above work completed:&nbsp;_________________________________&nbsp;(工作妥當及完成)
           </div>
 
           <div style={{ borderTop: "1px solid #ccc", paddingTop: 6, fontSize: 9, color: "#666", textAlign: "center" }}>
