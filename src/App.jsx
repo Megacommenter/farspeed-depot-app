@@ -85,6 +85,24 @@ const DEFAULT_DIRECTORY = [
   },
 ];
 const FREE_DAYS = 14;
+const CLIENT_FREE_DAYS = { Schindler: 21 };
+let freeStorageRules = [];
+function setFreeStorageRulesGlobal(rules) {
+  freeStorageRules = Array.isArray(rules) ? rules : [];
+}
+function freeDaysFor(item) {
+  const proj = String(item.project || "").trim().toLowerCase();
+  const site = String(item.constructionSite || "").trim().toLowerCase();
+  for (const r of freeStorageRules) {
+    const key = String(r.project || "").trim().toLowerCase();
+    if (!key) continue;
+    if ((proj && proj.includes(key)) || (site && site.includes(key))) {
+      const d = Number(r.days);
+      if (d > 0) return d;
+    }
+  }
+  return CLIENT_FREE_DAYS[item.client] || FREE_DAYS;
+}
 
 const FIELD_DEFS = [
   { key: "client", label: "Client", aliases: ["client", "customer"] },
@@ -342,6 +360,27 @@ function remainingPackages(item) {
   const done = new Set(deliveredCodes(item));
   return item.packages.filter((p) => !done.has(p.code));
 }
+function activeArrivals(item) {
+  return item.arrivals || [];
+}
+function arrivedCodesSet(item) {
+  return new Set(activeArrivals(item).flatMap((a) => a.codes || []));
+}
+function usesArrivalBatches(item) {
+  return activeArrivals(item).length > 0 && (item.packages || []).length > 0;
+}
+function notYetArrivedPackages(item) {
+  if (!usesArrivalBatches(item)) return [];
+  const done = arrivedCodesSet(item);
+  return item.packages.filter((p) => !done.has(p.code));
+}
+function earliestArrivalDate(item) {
+  const ds = activeArrivals(item).map((a) => a.date).filter(Boolean).sort();
+  return ds.length ? ds[0] : "";
+}
+function effectiveDepotArrivalDate(item) {
+  return item.depotArrivalDate || earliestArrivalDate(item);
+}
 function lastDeliveryDate(item) {
   const ds = activeDeliveries(item).map((d) => d.date).filter(Boolean).sort();
   return ds.length ? ds[ds.length - 1] : null;
@@ -372,7 +411,7 @@ function depotRemainingTotals(items, depotValue) {
 }
 
 function deriveStatus(item) {
-  if (!item.depotArrivalDate) return "pending_collection";
+  if (!effectiveDepotArrivalDate(item)) return "pending_collection";
   const hasDeliveries = activeDeliveries(item).length > 0;
   const remaining = remainingUnits(item);
   if (hasDeliveries && remaining <= 0) return "delivered";
@@ -392,12 +431,50 @@ function lfdAlert(item) {
 function storageInfo(item) {
   const status = deriveStatus(item);
   if (status === "pending_collection") return null;
-  const freeUntil = addDays(item.depotArrivalDate, FREE_DAYS);
-  const endDate = status === "delivered" ? lastDeliveryDate(item) || todayStr() : todayStr();
-  const daysHeld = daysBetween(item.depotArrivalDate, endDate);
+  const freeDays = freeDaysFor(item);
+  const today = todayStr();
+
+  if (usesArrivalBatches(item)) {
+    // Each batch's cases run their own free-storage clock from that batch's devan/CFS date.
+    const deliveredAt = {};
+    activeDeliveries(item).forEach((d) => (d.codes || []).forEach((c) => { deliveredAt[c] = d.date; }));
+    let maxBillable = 0;
+    let maxHeld = 0;
+    let minLeft = Infinity;
+    let anyHolding = false;
+    activeArrivals(item).forEach((a) => {
+      if (!a.date) return;
+      (a.codes || []).forEach((code) => {
+        const end = deliveredAt[code] || today;
+        const held = daysBetween(a.date, end) || 0;
+        const over = held - freeDays;
+        if (over > 0) maxBillable = Math.max(maxBillable, over);
+        if (held > maxHeld) maxHeld = held;
+        if (!deliveredAt[code]) {
+          anyHolding = true;
+          const left = freeDays - held;
+          if (left < minLeft) minLeft = left;
+        }
+      });
+    });
+    const freeUntil = addDays(earliestArrivalDate(item), freeDays);
+    return {
+      freeUntil,
+      daysHeld: maxHeld,
+      billableDays: maxBillable,
+      billable: maxBillable > 0,
+      freeDays,
+      daysLeft: anyHolding && minLeft !== Infinity ? minLeft : null,
+    };
+  }
+
+  const arrivalDate = effectiveDepotArrivalDate(item);
+  const freeUntil = addDays(arrivalDate, freeDays);
+  const endDate = status === "delivered" ? lastDeliveryDate(item) || today : today;
+  const daysHeld = daysBetween(arrivalDate, endDate);
   const overFree = daysBetween(freeUntil, endDate);
   const billableDays = overFree && overFree > 0 ? overFree : 0;
-  return { freeUntil, daysHeld, billableDays, billable: billableDays > 0 };
+  return { freeUntil, daysHeld, billableDays, billable: billableDays > 0, freeDays, daysLeft: freeDays - daysHeld };
 }
 
 function currentYyMm() {
@@ -450,6 +527,7 @@ function emptyForm() {
     depotLocation: "",
     plannedDeliveryDate: "",
     deliveries: [],
+    arrivals: [],
     packages: [],
     jobNumber: "",
     orderedBy: "",
@@ -808,6 +886,28 @@ const TEXT = {
 
     newEntryManual: "Manual",
     newEntryImport: "Import",
+
+    splitArrivalLabel: "Split Arrival — Cases Arriving on Different Days",
+    splitArrivalHint: "If this packing list isn't all devanned / delivered to the depot on the same day, record each batch here with its own date and type. The main Depot Arrival Date will follow the earliest batch automatically.",
+    splitArrivalCasesCol: "Cases",
+    splitArrivalAddBtn: "Add Arrival Batch",
+    splitArrivalSelectHint: "Tap the cases that arrived in this batch, then add it.",
+    splitArrivalAllAssignedMsg: "All cases are assigned to an arrival batch.",
+    badgePartialArrival: (a, b) => `AT DEPOT ${a}/${b} · MORE ARRIVING`,
+    notYetArrivedTag: "not yet arrived",
+    notYetArrivedHint: "This case has not yet arrived at the depot, so it can't be delivered out yet.",
+    pendingArrivalNotice: (n) => `${n} case(s) have not yet arrived at the depot and can't be selected for delivery. Record their arrival batch on the Edit screen when they land.`,
+
+    tabFreeStorage: "Free Storage",
+    freeStorageTitle: "Free Storage Days",
+    freeStorageDesc: "Standard free storage is 14 days from each devan / CFS arrival (Schindler: 21 days). For projects with a special arrangement — e.g. Otis, which varies by project — add a rule below. The rule applies when the project or construction site name contains the text you enter, and overrides the client default.",
+    fFreeProject: "Project name contains",
+    fFreeProjectHint: "e.g. Kwu Tung North Area 19",
+    fFreeDays: "Free days",
+    freeStorageAddBtn: "Add Rule",
+    freeColProject: "Project match",
+    freeColDays: "Free days",
+    freeStorageNoneMsg: "No project rules yet — standard 14 days applies (Schindler: 21 days).",
   },
   zh: {
     appSubtitle: "倉庫及貨物存倉表",
@@ -1156,6 +1256,28 @@ const TEXT = {
 
     newEntryManual: "手動輸入",
     newEntryImport: "匯入",
+
+    splitArrivalLabel: "分批到倉（貨箱不同日子到貨）",
+    splitArrivalHint: "如同一張裝箱單不是同一日全部拆櫃／送到倉，可在此分批記錄，每批有自己的日期及類型。抵倉日期會自動跟隨最早一批。",
+    splitArrivalCasesCol: "貨箱",
+    splitArrivalAddBtn: "新增到倉批次",
+    splitArrivalSelectHint: "點選此批次到達的貨箱，然後新增。",
+    splitArrivalAllAssignedMsg: "所有貨箱已分配到倉批次。",
+    badgePartialArrival: (a, b) => `已到倉 ${a}/${b} · 其餘未到`,
+    notYetArrivedTag: "未到倉",
+    notYetArrivedHint: "此貨箱尚未到倉，未能安排送出。",
+    pendingArrivalNotice: (n) => `${n} 箱尚未到倉，未能選擇送貨。貨到後請在編輯頁記錄其到倉批次。`,
+
+    tabFreeStorage: "免費存倉",
+    freeStorageTitle: "免費存倉日數",
+    freeStorageDesc: "標準免費存倉為每批拆櫃／CFS到倉日起計14日（Schindler為21日）。如個別項目另有安排（例如Otis按項目而定），可在下方新增規則：當項目或地盤名稱包含所輸入的文字時，即採用指定日數，並優先於客戶預設。",
+    fFreeProject: "項目名稱包含",
+    fFreeProjectHint: "例如：Kwu Tung North Area 19",
+    fFreeDays: "免費日數",
+    freeStorageAddBtn: "新增規則",
+    freeColProject: "項目條件",
+    freeColDays: "免費日數",
+    freeStorageNoneMsg: "未有項目規則 — 採用標準14日（Schindler 21日）。",
   },
 };
 
@@ -1199,7 +1321,12 @@ function StatusBadge({ item, colors, t }) {
   if (status === "at_depot") {
     const info = storageInfo(item);
     if (info.billable) return <Badge tone="red" colors={colors}>{t.badgeBillable(info.billableDays)}</Badge>;
-    const left = FREE_DAYS - info.daysHeld;
+    const pendingArr = notYetArrivedPackages(item).length;
+    if (pendingArr > 0) {
+      const arrived = (item.packages || []).length - pendingArr;
+      return <Badge tone="amber" colors={colors}>{t.badgePartialArrival(arrived, (item.packages || []).length)}</Badge>;
+    }
+    const left = info.daysLeft != null ? info.daysLeft : info.freeDays - info.daysHeld;
     return <Badge tone="green" colors={colors}>{t.badgeFree(left)}</Badge>;
   }
   if (status === "partial") {
@@ -1479,6 +1606,10 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, directory, emplo
         <div />
         <div />
 
+        {(form.packages || []).length > 0 && (
+          <ArrivalBatchesEditor form={form} setForm={setForm} colors={colors} t={t} lang={lang} />
+        )}
+
         {(form.deliveries || []).length > 0 && (
           <div className="col-span-2 md:col-span-3 px-3 py-2 rounded text-sm" style={{ background: colors.greenSoft, color: colors.green }}>
             {t.deliveryProgress(deliveredUnits(form), totalUnits(form), form.deliveries.length)}
@@ -1569,6 +1700,112 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, directory, emplo
   );
 }
 
+function ArrivalBatchesEditor({ form, setForm, colors, t, lang }) {
+  const inputStyle = inputStyleFor(colors);
+  const [draft, setDraft] = useState({ date: todayStr(), type: ARRIVING_TYPES[0], codes: [] });
+  const arrivals = form.arrivals || [];
+  const assigned = new Set(arrivals.flatMap((a) => a.codes || []));
+  const unassigned = (form.packages || []).filter((p) => !assigned.has(p.code));
+
+  function toggleDraftCode(code) {
+    setDraft((d) => ({ ...d, codes: d.codes.includes(code) ? d.codes.filter((c) => c !== code) : [...d.codes, code] }));
+  }
+  function syncEarliestDate(list) {
+    const ds = list.map((a) => a.date).filter(Boolean).sort();
+    return ds.length ? ds[0] : "";
+  }
+  function addBatch() {
+    if (!draft.date || draft.codes.length === 0) return;
+    const next = [...arrivals, { id: `arr-${Date.now()}`, date: draft.date, type: draft.type, codes: draft.codes }];
+    setForm((f) => ({ ...f, arrivals: next, depotArrivalDate: syncEarliestDate(next) }));
+    setDraft({ date: todayStr(), type: ARRIVING_TYPES[0], codes: [] });
+  }
+  function removeBatch(id) {
+    const next = arrivals.filter((a) => a.id !== id);
+    setForm((f) => ({ ...f, arrivals: next, depotArrivalDate: next.length ? syncEarliestDate(next) : f.depotArrivalDate }));
+  }
+
+  return (
+    <div className="col-span-2 md:col-span-3 rounded p-3" style={{ border: `1px dashed ${colors.line}` }}>
+      <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
+        {t.splitArrivalLabel}
+      </div>
+      <div className="text-[11px] mb-2" style={{ color: colors.inkFaint }}>{t.splitArrivalHint}</div>
+
+      {arrivals.length > 0 && (
+        <div className="mb-3 rounded overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+          <table className="w-full text-xs" style={{ background: colors.surface }}>
+            <thead>
+              <tr style={{ background: colors.surfaceDim }}>
+                {[t.colDate, t.fArrivingType, t.splitArrivalCasesCol, ""].map((h, idx) => (
+                  <th key={idx} className="text-left px-2 py-1.5 font-semibold" style={{ color: colors.inkFaint }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {[...arrivals].sort((a, b) => (a.date || "").localeCompare(b.date || "")).map((a) => (
+                <tr key={a.id} style={{ borderTop: `1px solid ${colors.surfaceDim}` }}>
+                  <td className="px-2 py-1.5" style={{ color: colors.ink }}>{fmt(a.date)}</td>
+                  <td className="px-2 py-1.5" style={{ color: colors.ink }}>{a.type}</td>
+                  <td className="px-2 py-1.5" style={{ color: colors.ink }}>{(a.codes || []).join(", ")}</td>
+                  <td className="px-2 py-1.5 text-right">
+                    <button type="button" className="text-xs font-semibold" style={{ color: colors.red }} onClick={() => removeBatch(a.id)}>{t.deleteBtn}</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {unassigned.length > 0 ? (
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-end gap-3">
+            <Field label={t.colDate} colors={colors}>
+              <input type="date" className={inputClass} style={inputStyle} value={draft.date} onChange={(e) => setDraft((d) => ({ ...d, date: e.target.value }))} />
+            </Field>
+            <Field label={t.fArrivingType} colors={colors}>
+              <select className={inputClass} style={inputStyle} value={draft.type} onChange={(e) => setDraft((d) => ({ ...d, type: e.target.value }))}>
+                {ARRIVING_TYPES.map((a) => <option key={a}>{a}</option>)}
+              </select>
+            </Field>
+            <button
+              type="button"
+              className="px-3 py-1.5 rounded text-sm font-semibold"
+              style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY, opacity: draft.codes.length === 0 ? 0.5 : 1 }}
+              disabled={draft.codes.length === 0}
+              onClick={addBatch}
+            >
+              {t.splitArrivalAddBtn}
+            </button>
+          </div>
+          <div className="text-[11px]" style={{ color: colors.inkFaint }}>{t.splitArrivalSelectHint}</div>
+          <div className="flex flex-wrap gap-2">
+            {unassigned.map((p) => (
+              <button
+                key={p.code}
+                type="button"
+                onClick={() => toggleDraftCode(p.code)}
+                className="px-2.5 py-1.5 rounded text-xs font-semibold text-left"
+                style={{
+                  border: `1px solid ${draft.codes.includes(p.code) ? colors.amber : colors.line}`,
+                  background: draft.codes.includes(p.code) ? colors.amberSoft : colors.surface,
+                  color: draft.codes.includes(p.code) ? colors.amberText : colors.ink,
+                }}
+                title={p.description}
+              >
+                {p.code}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : arrivals.length > 0 ? (
+        <div className="text-xs" style={{ color: colors.green }}>{t.splitArrivalAllAssignedMsg}</div>
+      ) : null}
+    </div>
+  );
+}
+
 function DeliveryForm({ item, onAddDelivery, onDeleteDelivery, onCancel, onPrintJobSheet, employees, currentUser, items, colors, t, lang }) {
   const remaining = remainingUnits(item);
   const multiUnit = totalUnits(item) > 1;
@@ -1580,6 +1817,7 @@ function DeliveryForm({ item, onAddDelivery, onDeleteDelivery, onCancel, onPrint
   const qty = Number(form.packageCount) || 0;
   const overshoot = qty > remaining;
   const remainingPkgs = remainingPackages(item);
+  const pendingArrival = new Set(notYetArrivedPackages(item).map((p) => p.code));
 
   function toggleCode(code) {
     setSelectedCodes((prev) => (prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]));
@@ -1691,7 +1929,21 @@ function DeliveryForm({ item, onAddDelivery, onDeleteDelivery, onCancel, onPrint
                 {t.selectCodesLabel}
               </div>
               <div className="flex flex-wrap gap-2">
-                {remainingPkgs.map((p) => (
+                {remainingPkgs.map((p) => {
+                  const notHere = pendingArrival.has(p.code);
+                  if (notHere) {
+                    return (
+                      <span
+                        key={p.code}
+                        className="px-2.5 py-1.5 rounded text-xs font-semibold text-left"
+                        style={{ border: `1px dashed ${colors.line}`, background: colors.surfaceDim, color: colors.inkFaint, cursor: "not-allowed" }}
+                        title={t.notYetArrivedHint}
+                      >
+                        {p.code} · {t.notYetArrivedTag}
+                      </span>
+                    );
+                  }
+                  return (
                   <button
                     key={p.code}
                     type="button"
@@ -1706,8 +1958,14 @@ function DeliveryForm({ item, onAddDelivery, onDeleteDelivery, onCancel, onPrint
                   >
                     {p.code}{p.description ? ` — ${p.description}` : ""}
                   </button>
-                ))}
+                  );
+                })}
               </div>
+              {pendingArrival.size > 0 && (
+                <div className="mt-2 px-3 py-2 rounded text-xs" style={{ background: colors.amberSoft, color: colors.amberText }}>
+                  {t.pendingArrivalNotice(pendingArrival.size)}
+                </div>
+              )}
             </div>
           )}
 
@@ -1820,17 +2078,17 @@ function JobSheetPrint({ sheet, onClose, colors, t, lang }) {
             <div className="flex items-center gap-3">
               <img src={FARSPEED_LOGO_DATA_URI} alt="Farspeed" style={{ height: 52, width: "auto" }} />
               <div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: "#111" }}>Contractors Limited</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: "#00B000", lineHeight: 1.1 }}>FARSPEED Contractors Limited</div>
                 <div style={{ fontSize: 10, color: "#333" }}>P. O. Box No. 1985, Yuen Long Post Office, Yuen Long, N.T., Hong Kong</div>
                 <div style={{ fontSize: 10, color: "#333" }}>Tel: +852 5337-9500&nbsp;&nbsp;Fax: +852 2402-4450&nbsp;&nbsp;http://www.farspeed.hk</div>
               </div>
             </div>
-            <div className="flex items-stretch" style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.15 }}>
-              <div style={{ writingMode: "vertical-rl", color: "#C0392B" }}>快達承判</div>
-              <div style={{ writingMode: "vertical-rl", color: "#2D6E5C", marginLeft: 2 }}>有限公司</div>
+            <div className="flex items-start" style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.4 }}>
+              <div style={{ writingMode: "vertical-rl", color: "#00B000", letterSpacing: 3 }}>有限公司</div>
+              <div style={{ writingMode: "vertical-rl", color: "#00B000", letterSpacing: 3, marginLeft: 4 }}>快達承判</div>
             </div>
           </div>
-          <div style={{ borderTop: "2px solid #2D6E5C", marginBottom: 10 }} />
+          <div style={{ borderTop: "2px solid #111", marginBottom: 10 }} />
 
           <div className="text-center font-bold mb-3" style={{ fontSize: 20, letterSpacing: 3 }}>
             {t.jsTitleZh}&nbsp;&nbsp;{t.jsTitle}
@@ -1900,14 +2158,24 @@ function JobSheetPrint({ sheet, onClose, colors, t, lang }) {
   );
 }
 
-function DirectoryPanel({ directory, setDirectory, employees, setEmployees, colors, t }) {
+function DirectoryPanel({ directory, setDirectory, employees, setEmployees, freeRules, setFreeRules, colors, t }) {
   const [mode, setMode] = useState("sites");
   const [editingSite, setEditingSite] = useState(null);
   const [siteForm, setSiteForm] = useState(null);
   const [editingEmp, setEditingEmp] = useState(null);
   const [empForm, setEmpForm] = useState(null);
+  const [ruleDraft, setRuleDraft] = useState({ project: "", days: "" });
   const inputStyle = inputStyleFor(colors);
   const allRoles = [...new Set([...DEFAULT_ROLES, ...employees.map((e) => e.role)])];
+
+  function addFreeRule() {
+    if (!ruleDraft.project.trim() || !(Number(ruleDraft.days) > 0)) return;
+    setFreeRules((rs) => [...(rs || []), { id: `FR${Date.now()}`, project: ruleDraft.project.trim(), days: Number(ruleDraft.days) }]);
+    setRuleDraft({ project: "", days: "" });
+  }
+  function deleteFreeRule(id) {
+    setFreeRules((rs) => (rs || []).filter((r) => r.id !== id));
+  }
 
   function newSiteForm() {
     return { siteEn: "", siteZh: "", client: CLIENTS[0], jobRef: "", orderedBy: "", accountOfficer: "" };
@@ -1946,13 +2214,63 @@ function DirectoryPanel({ directory, setDirectory, employees, setEmployees, colo
   return (
     <div className="flex flex-col gap-4">
       <div className="flex gap-1 rounded-lg p-1 w-fit" style={{ background: colors.surfaceDim }}>
-        {[["sites", t.tabSitesAccounts], ["employees", t.tabEmployees]].map(([k, label]) => (
+        {[["sites", t.tabSitesAccounts], ["employees", t.tabEmployees], ["freedays", t.tabFreeStorage]].map(([k, label]) => (
           <button key={k} onClick={() => setMode(k)} className="px-3 py-1.5 rounded text-sm font-semibold"
             style={{ fontFamily: FONT_DISPLAY, background: mode === k ? colors.surface : "transparent", color: colors.ink }}>
             {label}
           </button>
         ))}
       </div>
+
+      {mode === "freedays" && (
+        <div className="flex flex-col gap-4">
+          <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+            <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.freeStorageTitle}</h3>
+            <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.freeStorageDesc}</p>
+            <div className="flex flex-wrap items-end gap-3">
+              <Field label={t.fFreeProject} hint={t.fFreeProjectHint} colors={colors}>
+                <input className={inputClass} style={{ ...inputStyle, minWidth: "260px" }} value={ruleDraft.project} onChange={(e) => setRuleDraft((d) => ({ ...d, project: e.target.value }))} />
+              </Field>
+              <Field label={t.fFreeDays} colors={colors}>
+                <input type="number" min="1" className={inputClass} style={{ ...inputStyle, width: "90px" }} value={ruleDraft.days} onChange={(e) => setRuleDraft((d) => ({ ...d, days: e.target.value }))} />
+              </Field>
+              <button
+                className="px-3 py-1.5 rounded text-sm font-semibold"
+                style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY, opacity: !ruleDraft.project.trim() || !(Number(ruleDraft.days) > 0) ? 0.5 : 1 }}
+                onClick={addFreeRule}
+              >
+                {t.freeStorageAddBtn}
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+            <table className="w-full text-sm" style={{ background: colors.surface }}>
+              <thead>
+                <tr style={{ background: colors.surfaceDim }}>
+                  {[t.freeColProject, t.freeColDays, ""].map((h, idx) => (
+                    <th key={idx} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {(freeRules || []).length === 0 && (
+                  <tr><td colSpan={3} className="px-3 py-6 text-center text-sm" style={{ color: colors.inkFaint }}>{t.freeStorageNoneMsg}</td></tr>
+                )}
+                {(freeRules || []).map((r) => (
+                  <tr key={r.id} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
+                    <td className="px-3 py-2">{r.project}</td>
+                    <td className="px-3 py-2">{r.days}</td>
+                    <td className="px-3 py-2 text-right">
+                      <button className="text-xs font-semibold" style={{ color: colors.red }} onClick={() => deleteFreeRule(r.id)}>{t.deleteBtn}</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {mode === "sites" && (
         <div className="flex flex-col gap-4">
@@ -2656,6 +2974,7 @@ export default function FarspeedInventory() {
   const [newEntryMenuOpen, setNewEntryMenuOpen] = useState(false);
   const [directory, setDirectoryState] = useState([]);
   const [employees, setEmployeesState] = useState([]);
+  const [freeRules, setFreeRulesState] = useState([]);
   const [currentUser, setCurrentUserState] = useState("");
   const [filterClient, setFilterClient] = useState("All");
   const [filterStatus, setFilterStatus] = useState("All");
@@ -2691,6 +3010,15 @@ export default function FarspeedInventory() {
         setEmployeesState(DEFAULT_EMPLOYEES);
       }
       try {
+        const res = await storageGet("freeStorageRules");
+        const rules = res ? JSON.parse(res.value) : [];
+        setFreeRulesState(rules);
+        setFreeStorageRulesGlobal(rules);
+      } catch (e) {
+        setFreeRulesState([]);
+        setFreeStorageRulesGlobal([]);
+      }
+      try {
         setCurrentUserState(window.localStorage.getItem("farspeed_current_user") || "");
       } catch (e) {}
       setLoaded(true);
@@ -2708,6 +3036,14 @@ export default function FarspeedInventory() {
     setEmployeesState((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater;
       storageSet("employees", JSON.stringify(next));
+      return next;
+    });
+  }
+  function setFreeRules(updater) {
+    setFreeRulesState((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      storageSet("freeStorageRules", JSON.stringify(next));
+      setFreeStorageRulesGlobal(next);
       return next;
     });
   }
@@ -3292,11 +3628,20 @@ export default function FarspeedInventory() {
                                   {i.packages && i.packages.length > 0 && (
                                     remaining.length > 0 ? (
                                       <div className="flex flex-wrap gap-1.5">
-                                        {remaining.map((p) => (
-                                          <span key={p.code} className="px-2 py-1 rounded text-xs" style={{ background: colors.surface, border: `1px solid ${colors.line}`, color: colors.ink }}>
-                                            {p.code}{p.description ? ` — ${p.description}` : ""}
-                                          </span>
-                                        ))}
+                                        {(() => {
+                                          const awaiting = new Set(notYetArrivedPackages(i).map((p) => p.code));
+                                          return remaining.map((p) => (
+                                            awaiting.has(p.code) ? (
+                                              <span key={p.code} className="px-2 py-1 rounded text-xs" style={{ background: colors.surfaceDim, border: `1px dashed ${colors.line}`, color: colors.inkFaint }} title={t.notYetArrivedHint}>
+                                                {p.code} · {t.notYetArrivedTag}
+                                              </span>
+                                            ) : (
+                                              <span key={p.code} className="px-2 py-1 rounded text-xs" style={{ background: colors.surface, border: `1px solid ${colors.line}`, color: colors.ink }}>
+                                                {p.code}{p.description ? ` — ${p.description}` : ""}
+                                              </span>
+                                            )
+                                          ));
+                                        })()}
                                       </div>
                                     ) : (
                                       <span className="text-xs" style={{ color: colors.inkFaint }}>{t.inventoryNoRemainingPkgsMsg}</span>
@@ -3419,7 +3764,7 @@ export default function FarspeedInventory() {
         )}
 
         {view === "directory" && (
-          <DirectoryPanel directory={directory} setDirectory={setDirectory} employees={employees} setEmployees={setEmployees} colors={colors} t={t} />
+          <DirectoryPanel directory={directory} setDirectory={setDirectory} employees={employees} setEmployees={setEmployees} freeRules={freeRules} setFreeRules={setFreeRules} colors={colors} t={t} />
         )}
 
         {view === "joblog" && (
