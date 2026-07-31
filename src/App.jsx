@@ -2146,21 +2146,6 @@ function SignedDocControl({ docKey, colors, t }) {
   );
 }
 
-function JsEdit({ value, onChange, rows = 2, placeholder }) {
-  return (
-    <>
-      <textarea
-        className="no-print"
-        rows={rows}
-        placeholder={placeholder}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        style={{ width: "100%", border: "1px dashed #C4A860", padding: 3, fontSize: 12, fontFamily: "inherit", background: "#FFFDF2", resize: "vertical", boxSizing: "border-box" }}
-      />
-      <span className="print-only-inline" style={{ whiteSpace: "pre-line" }}>{value}</span>
-    </>
-  );
-}
 
 const OVERSIZE_RULES = {
   Schindler: [
@@ -2214,23 +2199,6 @@ function computeOversizeText(item) {
   return lines.join("\n").trim();
 }
 
-function JsEditBig({ value, onChange, rows = 2, placeholder, size = 20, bold = false, mono = false }) {
-  const style = { fontSize: size, fontWeight: bold ? "bold" : "normal", fontFamily: mono ? "inherit" : "inherit" };
-  return (
-    <>
-      <textarea
-        className="no-print"
-        rows={rows}
-        placeholder={placeholder}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        style={{ width: "100%", border: "1px dashed #C4A860", padding: 3, ...style, background: "#FFFDF2", resize: "vertical", boxSizing: "border-box" }}
-      />
-      <span className="print-only-inline" style={{ whiteSpace: "pre-line", ...style }}>{value}</span>
-    </>
-  );
-}
-
 function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
   const { type, item, delivery } = sheet;
   const isDelivery = type === "Delivery";
@@ -2240,83 +2208,62 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
   const siteZh = (dirMatch && dirMatch.siteZh) || "";
   const siteContact = dirMatch ? [dirMatch.contactName, dirMatch.contactPhone].filter(Boolean).join(" ") : "";
 
-  function defaultFromTop(tpl) {
+  const initialTemplate = isDelivery ? "Delivery" : (JOB_SHEET_TEMPLATES.includes(type) ? type : "Devan");
+  const [template, setTemplate] = useState(initialTemplate);
+  const [cfsPresetKey, setCfsPresetKey] = useState(CFS_FROM_PRESETS[0].key);
+
+  function fromTopText(tpl) {
     if (tpl === "Devan") return `客人安排運輸送到${depotZh || depotEn}\n(共1櫃)`;
-    if (tpl === "CFS") return CFS_FROM_PRESETS[0].text;
+    if (tpl === "CFS") return (CFS_FROM_PRESETS.find((p) => p.key === cfsPresetKey) || CFS_FROM_PRESETS[0]).text;
     if (["Delivery", "Pick-up", "Day Work"].includes(tpl)) return [depotZh, depotEn].filter(Boolean).join("\n");
     return "";
   }
-  function defaultFromBottom(tpl) {
+  function fromBottomText(tpl) {
     if (tpl === "Devan") return "*由快達拆櫃";
     if (tpl === "CFS") return "*由客戶自行CFS";
     return "";
   }
-  function defaultToTop(tpl) {
+  function toTopText() {
     const site = item.constructionSite || item.project || "";
     const out = [];
     if (site) out.push(/^site\s+at/i.test(site) ? site : `SITE AT ${site}`);
     if (siteZh) out.push(siteZh);
     return out.join("\n");
   }
-  function defaultToBottom(tpl) {
+  function toBottomText(tpl) {
     if (tpl === "Devan" || tpl === "CFS") return `暫存${depotZh || depotEn}`;
     if (tpl === "Delivery") return siteContact || "";
     return "";
   }
-  function defaultSs(tpl) {
+  function ssText(tpl) {
     if (tpl === "Devan" || tpl === "CFS") return item.ssDoNo || "";
     return "";
   }
-  function defaultRef(tpl) {
+  function refText(tpl) {
     if (tpl !== "Delivery") return "";
-    const jn = item.jobNumber || "______";
+    const jn = item.jobNumber || "";
     let dates = [];
     if (usesArrivalBatches(item) && delivery && delivery.codes) {
       const set = new Set(delivery.codes);
       dates = [...new Set(activeArrivals(item).filter((a) => (a.codes || []).some((c) => set.has(c))).map((a) => a.date).filter(Boolean))];
     }
     if (dates.length === 0) dates = [effectiveDepotArrivalDate(item)].filter(Boolean);
-    if (dates.length === 0) return `Refer to job no. ${jn} on ______`;
+    if (dates.length === 0 || !jn) return "";
     return dates.map((d) => `Refer to job no. ${jn} on ${fmt(d)}`).join("\n");
   }
-  function defaultBody(tpl) {
+  function bodyText(tpl) {
     if (JOB_SHEET_ITEMIZED.includes(tpl)) return "";
     const site = (item.constructionSite || item.project || "").trim();
     const seed = JOB_SHEET_BODY_SEEDS[tpl] || "";
     return [site, seed].filter(Boolean).join("\n\n");
   }
-  function defaultOversize() {
-    if (!OVERSIZE_RULES[item.client]) return "";
-    return computeOversizeText(item);
-  }
-
-  const initialTemplate = isDelivery ? "Delivery" : (JOB_SHEET_TEMPLATES.includes(type) ? type : "Devan");
-  const [template, setTemplate] = useState(initialTemplate);
-  const [issuedBy, setIssuedBy] = useState((isDelivery ? delivery.recordedBy : item.recordedBy) || "");
-  const [fromTop, setFromTop] = useState(defaultFromTop(initialTemplate));
-  const [fromBottom, setFromBottom] = useState(defaultFromBottom(initialTemplate));
-  const [toTop, setToTop] = useState(defaultToTop(initialTemplate));
-  const [toBottom, setToBottom] = useState(defaultToBottom(initialTemplate));
-  const [ssText, setSsText] = useState(defaultSs(initialTemplate));
-  const [refText, setRefText] = useState(defaultRef(initialTemplate));
-  const [bodyText, setBodyText] = useState(defaultBody(initialTemplate));
-  const [oversizeText, setOversizeText] = useState(defaultOversize());
-
-  function switchTemplate(tpl) {
-    setTemplate(tpl);
-    setFromTop(defaultFromTop(tpl));
-    setFromBottom(defaultFromBottom(tpl));
-    setToTop(defaultToTop(tpl));
-    setToBottom(defaultToBottom(tpl));
-    setSsText(defaultSs(tpl));
-    setRefText(defaultRef(tpl));
-    setBodyText(defaultBody(tpl));
-  }
 
   const itemized = JOB_SHEET_ITEMIZED.includes(template);
   const dateText = isDelivery ? delivery.date : item.depotArrivalDate || effectiveDepotArrivalDate(item);
   const jobNo = isDelivery ? delivery.jobNumber : item.jobNumber;
+  const issuedBy = (isDelivery ? delivery.recordedBy : item.recordedBy) || "";
   const showOversize = ["Devan", "CFS"].includes(template) && !!OVERSIZE_RULES[item.client];
+  const oversizeText = showOversize ? computeOversizeText(item) : "";
 
   const pkgs = isDelivery ? (delivery.codes ? delivery.codes.length : Number(delivery.packageCount) || 0) : totalUnits(item);
   let kgs = item.weightKg || "";
@@ -2347,16 +2294,28 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
   const lbl = { border: "1px solid #111", fontWeight: "bold", padding: "4px 6px", verticalAlign: "top", width: 64, fontSize: 13.5 };
   const cel = { border: "1px solid #111", padding: 6, verticalAlign: "top" };
   const cel0 = { border: "1px solid #111", padding: 0, verticalAlign: "top" };
-  const fromHasBottom = !!fromBottom;
-  const toHasBottom = !!toBottom;
+  const fTop = fromTopText(template), fBottom = fromBottomText(template);
+  const tTop = toTopText(), tBottom = toBottomText(template);
+  const fromHasBottom = !!fBottom, toHasBottom = !!tBottom;
+  const bText = bodyText(template), rText = refText(template), sText = ssText(template);
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col" style={{ background: "rgba(0,0,0,0.5)" }}>
-      <div className="no-print flex flex-wrap items-center gap-2 p-3" style={{ background: colors.navy }}>
+    <div id="job-sheet-print-root" className="fixed inset-0 z-50 flex flex-col" style={{ background: "rgba(0,0,0,0.5)" }}>
+      <style>{`
+        @media print {
+          body * { visibility: hidden; }
+          #job-sheet-print-root, #job-sheet-print-root * { visibility: visible; }
+          #job-sheet-print-root { position: absolute; inset: auto; left: 0; top: 0; width: 100%; background: #fff !important; }
+          #job-sheet-print-toolbar { display: none !important; }
+          #job-sheet-print-scroll { overflow: visible !important; height: auto !important; padding: 0 !important; }
+          #job-sheet-print-area { margin: 0 !important; max-width: 100% !important; }
+        }
+      `}</style>
+      <div id="job-sheet-print-toolbar" className="flex flex-wrap items-center gap-2 p-3" style={{ background: colors.navy }}>
         <span className="text-sm font-semibold" style={{ color: colors.onDark, fontFamily: FONT_DISPLAY }}>{t.jsTemplateLabel}:</span>
         <select
           value={template}
-          onChange={(e) => switchTemplate(e.target.value)}
+          onChange={(e) => setTemplate(e.target.value)}
           className="px-2 py-1.5 rounded text-sm"
           style={{ background: colors.surface, color: colors.ink }}
         >
@@ -2364,16 +2323,14 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
         </select>
         {template === "CFS" && (
           <select
-            defaultValue=""
-            onChange={(e) => { const p = CFS_FROM_PRESETS.find((x) => x.key === e.target.value); if (p) setFromTop(p.text); e.target.value = ""; }}
+            value={cfsPresetKey}
+            onChange={(e) => setCfsPresetKey(e.target.value)}
             className="px-2 py-1.5 rounded text-sm"
             style={{ background: colors.surface, color: colors.ink }}
           >
-            <option value="" disabled>{t.jsCfsFromPreset}</option>
             {CFS_FROM_PRESETS.map((p) => <option key={p.key} value={p.key}>{p.key}</option>)}
           </select>
         )}
-        <span className="text-xs" style={{ color: colors.onDark, opacity: 0.75 }}>{t.jsEditableHint}</span>
         <div className="ml-auto flex gap-2">
           <button className="px-4 py-2 rounded text-sm font-semibold" style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }} onClick={() => window.print()}>
             {t.printBtn}
@@ -2383,8 +2340,8 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
           </button>
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto p-6" style={{ background: colors.bg }}>
-        <div className="print-area mx-auto" style={{ background: "#fff", color: "#111", maxWidth: 700, padding: 24, fontFamily: "Arial, sans-serif", fontSize: 15 }}>
+      <div id="job-sheet-print-scroll" className="flex-1 overflow-y-auto p-6" style={{ background: colors.bg }}>
+        <div id="job-sheet-print-area" className="mx-auto" style={{ background: "#fff", color: "#111", maxWidth: 700, padding: 24, fontFamily: "Arial, sans-serif", fontSize: 15 }}>
 
           {/* Letterhead */}
           <div className="flex items-start justify-between" style={{ marginBottom: 8 }}>
@@ -2407,28 +2364,28 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
             {t.jsTitleZh}&nbsp;&nbsp;{t.jsTitle}
           </div>
 
-          {/* FROM / TO — one real 2-row table so Chinese text lines up on the same horizontal, no divider between the two rows */}
+          {/* FROM / TO — one real 2-row table so the two sides line up on the same horizontal, no divider between rows */}
           <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", fontSize: 18 }}>
             <tbody>
               <tr>
                 <td style={lbl} rowSpan={2}>{t.jsFromZh}<br />{t.jsFrom}</td>
                 <td style={{ ...cel0, borderLeft: "1px solid #111", borderRight: "1px solid #111", borderTop: "1px solid #111", borderBottom: fromHasBottom ? "none" : "1px solid #111" }} rowSpan={fromHasBottom ? 1 : 2}>
-                  <div style={{ padding: "6px 8px" }}><JsEditBig value={fromTop} onChange={setFromTop} rows={3} size={20} /></div>
+                  <div style={{ padding: "6px 8px", whiteSpace: "pre-line", fontSize: 20 }}>{fTop}</div>
                 </td>
                 <td style={lbl} rowSpan={2}>{t.jsToZh}<br />{t.jsTo}</td>
                 <td style={{ ...cel0, borderLeft: "1px solid #111", borderRight: "1px solid #111", borderTop: "1px solid #111", borderBottom: toHasBottom ? "none" : "1px solid #111" }} rowSpan={toHasBottom ? 1 : 2}>
-                  <div style={{ padding: "6px 8px" }}><JsEditBig value={toTop} onChange={setToTop} rows={2} size={20} bold /></div>
+                  <div style={{ padding: "6px 8px", whiteSpace: "pre-line", fontSize: 20, fontWeight: "bold" }}>{tTop}</div>
                 </td>
               </tr>
               <tr>
                 {fromHasBottom && (
                   <td style={{ ...cel0, borderLeft: "1px solid #111", borderRight: "1px solid #111", borderBottom: "1px solid #111", borderTop: "none" }}>
-                    <div style={{ padding: "6px 8px" }}><JsEditBig value={fromBottom} onChange={setFromBottom} rows={1} size={20} bold /></div>
+                    <div style={{ padding: "6px 8px", whiteSpace: "pre-line", fontSize: 20, fontWeight: "bold" }}>{fBottom}</div>
                   </td>
                 )}
                 {toHasBottom && (
                   <td style={{ ...cel0, borderLeft: "1px solid #111", borderRight: "1px solid #111", borderBottom: "1px solid #111", borderTop: "none" }}>
-                    <div style={{ padding: "6px 8px" }}><JsEditBig value={toBottom} onChange={setToBottom} rows={1} size={20} bold /></div>
+                    <div style={{ padding: "6px 8px", whiteSpace: "pre-line", fontSize: 20, fontWeight: "bold" }}>{tBottom}</div>
                   </td>
                 )}
               </tr>
@@ -2455,9 +2412,7 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
               </tr>
               <tr>
                 <td style={lbl}>提單資料<br />SS/D.O. NO.</td>
-                <td style={cel} colSpan={5}>
-                  <JsEdit value={ssText} onChange={setSsText} rows={2} placeholder={'ex ss."船名 SHIP NAME" V.______; CONTAINERS NO. ______'} />
-                </td>
+                <td style={cel} colSpan={5}>{sText || "—"}</td>
               </tr>
             </tbody>
           </table>
@@ -2466,12 +2421,7 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
             <span style={{ flex: 1, textAlign: "center", fontWeight: "bold" }}>
               {t.jsDescriptionZh}<br /><span style={{ letterSpacing: 2 }}>{t.jsDescription}</span>
             </span>
-            <span style={{ fontSize: 12 }}>
-              <span className="no-print">
-                {t.jsIssuedByZh}: <input style={{ border: "1px solid #999", padding: "1px 4px", fontSize: 12 }} value={issuedBy} onChange={(e) => setIssuedBy(e.target.value)} />
-              </span>
-              <span className="print-only-inline">{t.jsIssuedByZh}: {issuedBy || "—"}</span>
-            </span>
+            <span style={{ fontSize: 12 }}>{t.jsIssuedByZh}: {issuedBy || "—"}</span>
           </div>
 
           <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #111", borderTop: "none", fontSize: 16 }}>
@@ -2480,7 +2430,7 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
                 <td style={{ padding: 8, verticalAlign: "top", height: 400 }}>
                   {itemized ? (
                     <>
-                      {template === "Delivery" && <div style={{ marginBottom: 6, textDecoration: "underline" }}><JsEdit value={refText} onChange={setRefText} rows={2} /></div>}
+                      {template === "Delivery" && rText && <div style={{ marginBottom: 6, textDecoration: "underline", whiteSpace: "pre-line" }}>{rText}</div>}
                       {template === "Devan" && item.shkNumber && <div style={{ fontWeight: "bold" }}>{item.shkNumber}</div>}
                       {item.unitCode && <div style={{ fontWeight: "bold" }}>{item.unitCode}</div>}
                       {item.description && <div>{item.description}</div>}
@@ -2489,18 +2439,16 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
                         共:&nbsp;&nbsp;&nbsp;{pkgs} {t.jsPkgs} &nbsp;&nbsp;&nbsp; {kgs || "—"} {t.jsKgs} &nbsp;&nbsp;&nbsp; {cbm || "—"} {t.jsCbm}
                       </div>
                       {estimated && <div style={{ fontSize: 10, color: "#900", marginTop: 4 }}>{t.jsEstimatedNote}</div>}
-                      {showOversize && (
+                      {showOversize && oversizeText && (
                         <div style={{ borderTop: "1px solid #111", marginTop: 12, paddingTop: 8 }}>
                           <div style={{ fontWeight: "bold", textDecoration: "underline" }}>{t.jsOversizeLabel}</div>
-                          <div style={{ marginTop: 4 }}>
-                            <JsEditBig value={oversizeText} onChange={setOversizeText} rows={6} size={13} placeholder={t.jsOversizePlaceholder} />
-                          </div>
+                          <div style={{ marginTop: 4, fontSize: 13, whiteSpace: "pre-line" }}>{oversizeText}</div>
                           <div style={{ fontSize: 10, color: "#111", marginTop: 4 }}>{t.jsOversizeNote}</div>
                         </div>
                       )}
                     </>
                   ) : (
-                    <JsEdit value={bodyText} onChange={setBodyText} rows={10} />
+                    <div style={{ whiteSpace: "pre-line" }}>{bText}</div>
                   )}
                 </td>
               </tr>
