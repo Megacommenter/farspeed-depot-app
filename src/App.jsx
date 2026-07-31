@@ -516,6 +516,7 @@ function emptyForm() {
     weightKg: "",
     volumeCbm: "",
     shkNumber: "",
+    ssDoNo: "",
     containers20: "",
     containers40: "",
     arrivingType: ARRIVING_TYPES[0],
@@ -565,7 +566,7 @@ const TEXT = {
     sinceLabel: "since",
 
     searchLabel: "Search",
-    searchPlaceholder: "Project, client, ID, SHK no.",
+    searchPlaceholder: "Project, client, ID, SHK no., case no., job no.",
     clientLabel: "Client",
     statusLabel: "Status",
     statusAll: "All",
@@ -801,6 +802,18 @@ const TEXT = {
     jsTemplateLabel: "Template",
     jsCfsFromPreset: "CFS location…",
     jsEditableHint: "Dashed boxes can be edited before printing.",
+    jsOversizeLabel: "Oversize Cases 超長/超大件:",
+    jsOversizePlaceholder: "#case codes @X.XXCBM per line, then (合共 Total: X CBM)  xN 倍",
+    jsOversizeNote: "Oversize CBM is charged at the listed multiplier. Applies to Schindler & Chevalier accounts only.",
+    deliveryHistoryLabel: "Delivery History",
+    signedDocArrivalLabel: "Signed arrival form (Devan/CFS)",
+    signedDocUploadBtn: "Upload signed copy",
+    signedDocReplaceBtn: "Replace signed copy",
+    signedDocViewBtn: "View signed copy",
+    signedDocSavingMsg: "Saving…",
+    signedDocFailMsg: "Couldn't save this file. Photos are compressed automatically, but PDFs must be under about 3 MB — try a photo of the signed sheet instead.",
+    fSsDoNo: "SS/D.O. No. (提單資料)",
+    fSsDoNoHint: "Vessel, voyage & container numbers — prefills the SS/D.O. row on Devan/CFS job sheets",
     jsEstimatedNote: "~ Weight/CBM estimated as a proportional share of the full entry — not individually weighed per package.",
 
     navDirectory: "Directory",
@@ -938,7 +951,7 @@ const TEXT = {
     sinceLabel: "由",
 
     searchLabel: "搜尋",
-    searchPlaceholder: "項目、客戶、編號、SHK編號",
+    searchPlaceholder: "項目、客戶、編號、SHK編號、件號、工單號",
     clientLabel: "客戶",
     statusLabel: "狀態",
     statusAll: "全部",
@@ -1174,6 +1187,18 @@ const TEXT = {
     jsTemplateLabel: "工單類型",
     jsCfsFromPreset: "CFS 起運地點…",
     jsEditableHint: "虛線框可於列印前編輯。",
+    jsOversizeLabel: "超長/超大件 Oversize Cases:",
+    jsOversizePlaceholder: "每行 #件號 @X.XXCBM，最後一行 (合共 Total: X CBM)  xN 倍",
+    jsOversizeNote: "超大件體積按上列倍數計算運費，僅適用於 Schindler 及 Chevalier 客戶。",
+    deliveryHistoryLabel: "送貨記錄",
+    signedDocArrivalLabel: "已簽收到倉工單 (拆櫃/CFS)",
+    signedDocUploadBtn: "上載已簽工單",
+    signedDocReplaceBtn: "更換已簽工單",
+    signedDocViewBtn: "查看已簽工單",
+    signedDocSavingMsg: "儲存中…",
+    signedDocFailMsg: "未能儲存此檔案。相片會自動壓縮，但PDF須小於約3MB — 可改為上載已簽工單的相片。",
+    fSsDoNo: "提單資料 SS/D.O. No.",
+    fSsDoNoHint: "船名、航次及櫃號 — 會自動填入拆櫃/CFS工單的提單資料欄",
     jsEstimatedNote: "~ 重量／CBM為按比例估算，並非逐件過磅。",
 
     navDirectory: "目錄",
@@ -1552,7 +1577,9 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, directory, emplo
         <Field label={t.fReference} hint={t.fReferenceHint} colors={colors}>
           <input className={inputClass} style={inputStyle} value={form.shkNumber} onChange={set("shkNumber")} />
         </Field>
-        <div />
+        <Field label={t.fSsDoNo} hint={t.fSsDoNoHint} colors={colors}>
+          <input className={inputClass} style={inputStyle} value={form.ssDoNo || ""} onChange={set("ssDoNo")} placeholder={'ex ss."SHIP" V.___; CONTAINERS NO. ___'} />
+        </Field>
 
         <Field label={t.fWeight} colors={colors}>
           <input type="number" className={inputClass} style={inputStyle} value={form.weightKg} onChange={set("weightKg")} />
@@ -2040,6 +2067,85 @@ const JOB_SHEET_BODY_SEEDS = {
   "Hoisting": "HOISTING WORK FOR ______\n\n1/ ",
 };
 
+async function compressFileToDataUri(file, maxDim = 1400, quality = 0.72) {
+  const readAsDataUrl = (f) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error("read-failed")); r.readAsDataURL(f); });
+  if (file.type === "application/pdf") {
+    if (file.size > 3.2 * 1024 * 1024) throw new Error("too-large");
+    return await readAsDataUrl(file);
+  }
+  const dataUrl = await readAsDataUrl(file);
+  const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error("bad-image")); i.src = dataUrl; });
+  const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(img.width * scale));
+  canvas.height = Math.max(1, Math.round(img.height * scale));
+  canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
+function SignedDocControl({ docKey, colors, t }) {
+  const [status, setStatus] = useState("loading");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let on = true;
+    (async () => {
+      try {
+        const r = await storageGet(docKey);
+        if (on) setStatus(r ? "saved" : "none");
+      } catch (e) {
+        if (on) setStatus("none");
+      }
+    })();
+    return () => { on = false; };
+  }, [docKey]);
+
+  async function handleFile(e) {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!f) return;
+    setBusy(true);
+    try {
+      const uri = await compressFileToDataUri(f);
+      const ok = await storageSet(docKey, JSON.stringify({ uri, name: f.name, at: todayStr() }));
+      if (!ok) throw new Error("save-failed");
+      setStatus("saved");
+    } catch (err) {
+      alert(t.signedDocFailMsg);
+    }
+    setBusy(false);
+  }
+
+  async function view() {
+    try {
+      const r = await storageGet(docKey);
+      if (!r) return;
+      const { uri, name } = JSON.parse(r.value);
+      const w = window.open("", "_blank");
+      if (!w) return;
+      if (uri.startsWith("data:application/pdf")) {
+        w.document.write(`<title>${name || "Signed copy"}</title><embed src="${uri}" type="application/pdf" style="width:100%;height:100vh;">`);
+      } else {
+        w.document.write(`<title>${name || "Signed copy"}</title><body style="margin:0;background:#333;display:flex;justify-content:center;"><img src="${uri}" style="max-width:100%;height:auto;"></body>`);
+      }
+    } catch (e) { /* noop */ }
+  }
+
+  if (status === "loading") return <span className="text-xs" style={{ color: colors.inkFaint }}>…</span>;
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {status === "saved" && (
+        <button type="button" className="text-xs font-semibold underline" style={{ color: colors.green }} onClick={view}>
+          ✓ {t.signedDocViewBtn}
+        </button>
+      )}
+      <label className="text-xs font-semibold underline cursor-pointer" style={{ color: colors.amberText, opacity: busy ? 0.5 : 1 }}>
+        {busy ? t.signedDocSavingMsg : status === "saved" ? t.signedDocReplaceBtn : t.signedDocUploadBtn}
+        <input type="file" accept="image/*,application/pdf" style={{ display: "none" }} onChange={handleFile} disabled={busy} />
+      </label>
+    </span>
+  );
+}
+
 function JsEdit({ value, onChange, rows = 2, placeholder }) {
   return (
     <>
@@ -2056,6 +2162,75 @@ function JsEdit({ value, onChange, rows = 2, placeholder }) {
   );
 }
 
+const OVERSIZE_RULES = {
+  Schindler: [
+    { min: 3.25, max: 5.50, mult: 1.5 },
+    { min: 5.501, max: 7.50, mult: 2.0 },
+    { min: 7.501, max: Infinity, mult: 2.5 },
+  ],
+  Chevalier: [
+    { min: 4.0, max: 6.50, mult: 2.0 },
+    { min: 6.501, max: 8.00, mult: 2.5 },
+    { min: 8.001, max: Infinity, mult: 3.0 },
+  ],
+};
+function oversizeTierFor(client, cbm) {
+  const rules = OVERSIZE_RULES[client];
+  if (!rules || !(cbm > 0)) return null;
+  for (const r of rules) {
+    if (cbm >= r.min && cbm <= r.max) return r.mult;
+  }
+  return null;
+}
+function computeOversizeText(item) {
+  const rules = OVERSIZE_RULES[item.client];
+  if (!rules || !(item.packages || []).length) return "";
+  const byMult = new Map();
+  for (const p of item.packages) {
+    const cbm = Number(p.cbm);
+    const mult = oversizeTierFor(item.client, cbm);
+    if (!mult) continue;
+    if (!byMult.has(mult)) byMult.set(mult, []);
+    byMult.get(mult).push({ code: p.code, cbm });
+  }
+  if (byMult.size === 0) return "";
+  const lines = [];
+  const sortedMults = [...byMult.keys()].sort((a, b) => a - b);
+  for (const mult of sortedMults) {
+    const entries = byMult.get(mult);
+    const byCbm = new Map();
+    for (const e of entries) {
+      const key = String(e.cbm);
+      if (!byCbm.has(key)) byCbm.set(key, []);
+      byCbm.get(key).push(e.code);
+    }
+    for (const [cbmVal, codes] of byCbm) {
+      lines.push(`#${codes.join(",")} @${cbmVal}CBM`);
+    }
+    const subtotal = Math.round(entries.reduce((s, e) => s + e.cbm, 0) * 100) / 100;
+    lines.push(`(合共 Total: ${subtotal} CBM)  x${mult} 倍`);
+    lines.push("");
+  }
+  return lines.join("\n").trim();
+}
+
+function JsEditBig({ value, onChange, rows = 2, placeholder, size = 20, bold = false, mono = false }) {
+  const style = { fontSize: size, fontWeight: bold ? "bold" : "normal", fontFamily: mono ? "inherit" : "inherit" };
+  return (
+    <>
+      <textarea
+        className="no-print"
+        rows={rows}
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        style={{ width: "100%", border: "1px dashed #C4A860", padding: 3, ...style, background: "#FFFDF2", resize: "vertical", boxSizing: "border-box" }}
+      />
+      <span className="print-only-inline" style={{ whiteSpace: "pre-line", ...style }}>{value}</span>
+    </>
+  );
+}
+
 function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
   const { type, item, delivery } = sheet;
   const isDelivery = type === "Delivery";
@@ -2063,32 +2238,33 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
   const depotZh = DEPOT_LABELS_ZH[item.depot] || "";
   const dirMatch = (directory || []).find((s) => s.siteEn && (s.siteEn === item.constructionSite || s.siteEn === item.project));
   const siteZh = (dirMatch && dirMatch.siteZh) || "";
+  const siteContact = dirMatch ? [dirMatch.contactName, dirMatch.contactPhone].filter(Boolean).join(" ") : "";
 
-  function defaultFrom(tpl) {
-    if (tpl === "Devan") {
-      return [
-        `客人安排運輸送到${depotZh || depotEn}`,
-        depotEn ? `Customer arranges transport to ${depotEn}` : "",
-        "(共1櫃)",
-        "*由快達拆櫃 (Devan by Farspeed)",
-      ].filter(Boolean).join("\n");
-    }
+  function defaultFromTop(tpl) {
+    if (tpl === "Devan") return `客人安排運輸送到${depotZh || depotEn}\n(共1櫃)`;
     if (tpl === "CFS") return CFS_FROM_PRESETS[0].text;
-    if (["Delivery", "Pick-up", "Day Work"].includes(tpl)) {
-      return [depotEn, depotZh, item.depotLocation || ""].filter(Boolean).join("\n");
-    }
+    if (["Delivery", "Pick-up", "Day Work"].includes(tpl)) return [depotZh, depotEn].filter(Boolean).join("\n");
     return "";
   }
-  function defaultTo(tpl) {
+  function defaultFromBottom(tpl) {
+    if (tpl === "Devan") return "*由快達拆櫃";
+    if (tpl === "CFS") return "*由客戶自行CFS";
+    return "";
+  }
+  function defaultToTop(tpl) {
     const site = item.constructionSite || item.project || "";
     const out = [];
     if (site) out.push(/^site\s+at/i.test(site) ? site : `SITE AT ${site}`);
     if (siteZh) out.push(siteZh);
-    if (tpl === "Devan" || tpl === "CFS") out.push(`暫存${depotZh || depotEn}${depotEn ? ` (Temp. storage at ${depotEn})` : ""}`);
     return out.join("\n");
   }
+  function defaultToBottom(tpl) {
+    if (tpl === "Devan" || tpl === "CFS") return `暫存${depotZh || depotEn}`;
+    if (tpl === "Delivery") return siteContact || "";
+    return "";
+  }
   function defaultSs(tpl) {
-    if (tpl === "Devan" || tpl === "CFS") return "";
+    if (tpl === "Devan" || tpl === "CFS") return item.ssDoNo || "";
     return "";
   }
   function defaultRef(tpl) {
@@ -2109,20 +2285,29 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
     const seed = JOB_SHEET_BODY_SEEDS[tpl] || "";
     return [site, seed].filter(Boolean).join("\n\n");
   }
+  function defaultOversize() {
+    if (!OVERSIZE_RULES[item.client]) return "";
+    return computeOversizeText(item);
+  }
 
   const initialTemplate = isDelivery ? "Delivery" : (JOB_SHEET_TEMPLATES.includes(type) ? type : "Devan");
   const [template, setTemplate] = useState(initialTemplate);
   const [issuedBy, setIssuedBy] = useState((isDelivery ? delivery.recordedBy : item.recordedBy) || "");
-  const [fromText, setFromText] = useState(defaultFrom(initialTemplate));
-  const [toText, setToText] = useState(defaultTo(initialTemplate));
+  const [fromTop, setFromTop] = useState(defaultFromTop(initialTemplate));
+  const [fromBottom, setFromBottom] = useState(defaultFromBottom(initialTemplate));
+  const [toTop, setToTop] = useState(defaultToTop(initialTemplate));
+  const [toBottom, setToBottom] = useState(defaultToBottom(initialTemplate));
   const [ssText, setSsText] = useState(defaultSs(initialTemplate));
   const [refText, setRefText] = useState(defaultRef(initialTemplate));
   const [bodyText, setBodyText] = useState(defaultBody(initialTemplate));
+  const [oversizeText, setOversizeText] = useState(defaultOversize());
 
   function switchTemplate(tpl) {
     setTemplate(tpl);
-    setFromText(defaultFrom(tpl));
-    setToText(defaultTo(tpl));
+    setFromTop(defaultFromTop(tpl));
+    setFromBottom(defaultFromBottom(tpl));
+    setToTop(defaultToTop(tpl));
+    setToBottom(defaultToBottom(tpl));
     setSsText(defaultSs(tpl));
     setRefText(defaultRef(tpl));
     setBodyText(defaultBody(tpl));
@@ -2131,6 +2316,7 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
   const itemized = JOB_SHEET_ITEMIZED.includes(template);
   const dateText = isDelivery ? delivery.date : item.depotArrivalDate || effectiveDepotArrivalDate(item);
   const jobNo = isDelivery ? delivery.jobNumber : item.jobNumber;
+  const showOversize = ["Devan", "CFS"].includes(template) && !!OVERSIZE_RULES[item.client];
 
   const pkgs = isDelivery ? (delivery.codes ? delivery.codes.length : Number(delivery.packageCount) || 0) : totalUnits(item);
   let kgs = item.weightKg || "";
@@ -2158,12 +2344,15 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
     ? (delivery.codes ? delivery.codes.join(", ") : "")
     : (item.packages || []).map((p) => p.code).join(", ");
 
-  const cell = { border: "1px solid #999", padding: 6, verticalAlign: "top" };
-  const label = { ...cell, fontWeight: "bold", background: "#F5F5F5", width: "11%", whiteSpace: "nowrap" };
+  const lbl = { border: "1px solid #111", fontWeight: "bold", padding: "4px 6px", verticalAlign: "top", width: 64, fontSize: 13.5 };
+  const cel = { border: "1px solid #111", padding: 6, verticalAlign: "top" };
+  const cel0 = { border: "1px solid #111", padding: 0, verticalAlign: "top" };
+  const fromHasBottom = !!fromBottom;
+  const toHasBottom = !!toBottom;
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col" style={{ background: "rgba(0,0,0,0.5)" }}>
-      <div className="no-print flex items-center gap-2 p-3" style={{ background: colors.navy }}>
+      <div className="no-print flex flex-wrap items-center gap-2 p-3" style={{ background: colors.navy }}>
         <span className="text-sm font-semibold" style={{ color: colors.onDark, fontFamily: FONT_DISPLAY }}>{t.jsTemplateLabel}:</span>
         <select
           value={template}
@@ -2176,7 +2365,7 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
         {template === "CFS" && (
           <select
             defaultValue=""
-            onChange={(e) => { const p = CFS_FROM_PRESETS.find((x) => x.key === e.target.value); if (p) setFromText(p.text); e.target.value = ""; }}
+            onChange={(e) => { const p = CFS_FROM_PRESETS.find((x) => x.key === e.target.value); if (p) setFromTop(p.text); e.target.value = ""; }}
             className="px-2 py-1.5 rounded text-sm"
             style={{ background: colors.surface, color: colors.ink }}
           >
@@ -2195,106 +2384,147 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
         </div>
       </div>
       <div className="flex-1 overflow-y-auto p-6" style={{ background: colors.bg }}>
-        <div className="print-area mx-auto" style={{ background: "#fff", color: "#111", maxWidth: 800, padding: 28, fontFamily: "Arial, sans-serif", fontSize: 13 }}>
+        <div className="print-area mx-auto" style={{ background: "#fff", color: "#111", maxWidth: 700, padding: 24, fontFamily: "Arial, sans-serif", fontSize: 15 }}>
 
           {/* Letterhead */}
-          <div className="flex items-start justify-between" style={{ marginBottom: 10 }}>
+          <div className="flex items-start justify-between" style={{ marginBottom: 8 }}>
             <div className="flex items-center gap-3">
-              <img src={FARSPEED_LOGO_DATA_URI} alt="Farspeed" style={{ height: 52, width: "auto" }} />
+              <img src={FARSPEED_LOGO_DATA_URI} alt="Farspeed" style={{ height: 78, width: "auto" }} />
               <div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: "#00B000", lineHeight: 1.1 }}>FARSPEED Contractors Limited</div>
-                <div style={{ fontSize: 10, color: "#333" }}>P. O. Box No. 1985, Yuen Long Post Office, Yuen Long, N.T., Hong Kong</div>
-                <div style={{ fontSize: 10, color: "#333" }}>Tel: +852 5337-9500&nbsp;&nbsp;Fax: +852 2402-4450&nbsp;&nbsp;http://www.farspeed.hk</div>
+                <div style={{ fontSize: 24, fontWeight: 700, color: "#111", lineHeight: 1.1 }}>FARSPEED Contractors Limited</div>
+                <div style={{ fontSize: 11, color: "#111" }}>P. O. Box No. 1985, Yuen Long Post Office, Yuen Long, N.T., Hong Kong</div>
+                <div style={{ fontSize: 11, color: "#111" }}>Tel: +852 5337-9500&nbsp;&nbsp;Fax: +852 2402-4450&nbsp;&nbsp;http://www.farspeed.hk</div>
               </div>
             </div>
-            <div className="flex items-start" style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.4 }}>
-              <div style={{ writingMode: "vertical-rl", color: "#00B000", letterSpacing: 3 }}>有限公司</div>
-              <div style={{ writingMode: "vertical-rl", color: "#00B000", letterSpacing: 3, marginLeft: 4 }}>快達承判</div>
+            <div className="flex items-start" style={{ fontSize: 16, fontWeight: 700, lineHeight: 1.5 }}>
+              <div style={{ writingMode: "vertical-rl", color: "#111", letterSpacing: 3 }}>有限公司</div>
+              <div style={{ writingMode: "vertical-rl", color: "#111", letterSpacing: 3, marginLeft: 4 }}>快達承判</div>
             </div>
           </div>
-          <div style={{ borderTop: "2px solid #111", marginBottom: 10 }} />
+          <div style={{ borderTop: "2.5px solid #111", marginBottom: 10 }} />
 
-          <div className="text-center font-bold mb-3" style={{ fontSize: 20, letterSpacing: 3 }}>
+          <div className="text-center font-bold mb-3" style={{ fontSize: 22, letterSpacing: 6 }}>
             {t.jsTitleZh}&nbsp;&nbsp;{t.jsTitle}
           </div>
 
-          <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 0 }}>
+          {/* FROM / TO — one real 2-row table so Chinese text lines up on the same horizontal, no divider between the two rows */}
+          <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", fontSize: 18 }}>
             <tbody>
               <tr>
-                <td style={label}>{t.jsFromZh}<br />{t.jsFrom}</td>
-                <td style={{ ...cell, width: "37%" }} colSpan={2}><JsEdit value={fromText} onChange={setFromText} rows={5} /></td>
-                <td style={label}>{t.jsToZh}<br />{t.jsTo}</td>
-                <td style={{ ...cell, width: "37%" }} colSpan={2}><JsEdit value={toText} onChange={setToText} rows={5} /></td>
+                <td style={lbl} rowSpan={2}>{t.jsFromZh}<br />{t.jsFrom}</td>
+                <td style={{ ...cel0, borderLeft: "1px solid #111", borderRight: "1px solid #111", borderTop: "1px solid #111", borderBottom: fromHasBottom ? "none" : "1px solid #111" }} rowSpan={fromHasBottom ? 1 : 2}>
+                  <div style={{ padding: "6px 8px" }}><JsEditBig value={fromTop} onChange={setFromTop} rows={3} size={20} /></div>
+                </td>
+                <td style={lbl} rowSpan={2}>{t.jsToZh}<br />{t.jsTo}</td>
+                <td style={{ ...cel0, borderLeft: "1px solid #111", borderRight: "1px solid #111", borderTop: "1px solid #111", borderBottom: toHasBottom ? "none" : "1px solid #111" }} rowSpan={toHasBottom ? 1 : 2}>
+                  <div style={{ padding: "6px 8px" }}><JsEditBig value={toTop} onChange={setToTop} rows={2} size={20} bold /></div>
+                </td>
               </tr>
               <tr>
-                <td style={label}>{t.jsAccountZh}<br />{t.jsAccount}</td>
-                <td style={cell}>{item.client}</td>
-                <td style={label}>{t.jsJobNoZh}<br />{t.jsJobNo}</td>
-                <td style={{ ...cell, fontWeight: "bold" }}>{jobNo || "—"}</td>
-                <td style={label}>{t.jsDateZh}<br />{t.jsDate}</td>
-                <td style={cell}>{fmt(dateText)}</td>
+                {fromHasBottom && (
+                  <td style={{ ...cel0, borderLeft: "1px solid #111", borderRight: "1px solid #111", borderBottom: "1px solid #111", borderTop: "none" }}>
+                    <div style={{ padding: "6px 8px" }}><JsEditBig value={fromBottom} onChange={setFromBottom} rows={1} size={20} bold /></div>
+                  </td>
+                )}
+                {toHasBottom && (
+                  <td style={{ ...cel0, borderLeft: "1px solid #111", borderRight: "1px solid #111", borderBottom: "1px solid #111", borderTop: "none" }}>
+                    <div style={{ padding: "6px 8px" }}><JsEditBig value={toBottom} onChange={setToBottom} rows={1} size={20} bold /></div>
+                  </td>
+                )}
+              </tr>
+            </tbody>
+          </table>
+
+          <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", fontSize: 18, marginTop: -1 }}>
+            <tbody>
+              <tr>
+                <td style={lbl}>{t.jsAccountZh}<br />{t.jsAccount}</td>
+                <td style={cel}>{item.client}</td>
+                <td style={lbl}>{t.jsJobNoZh}<br />{t.jsJobNo}</td>
+                <td style={{ ...cel, fontWeight: "bold" }}>{jobNo || "—"}</td>
+                <td style={lbl}>{t.jsDateZh}<br />{t.jsDate}</td>
+                <td style={cel}>{fmt(dateText)}</td>
               </tr>
               <tr>
-                <td style={label}>{t.jsOrderedByZh}<br />{t.jsOrderedBy}</td>
-                <td style={cell}>{item.orderedBy || "—"}</td>
-                <td style={label}>{t.jsPoNoZh}<br />{t.jsPoNo}</td>
-                <td style={cell}>{item.poNumber || "—"}</td>
-                <td style={label}>{t.jsJobRefZh}<br />{t.jsJobRef}</td>
-                <td style={cell}>{item.jobRef || "—"}</td>
+                <td style={lbl}>{t.jsOrderedByZh}<br />{t.jsOrderedBy}</td>
+                <td style={cel}>{item.orderedBy || "—"}</td>
+                <td style={lbl}>{t.jsPoNoZh}<br />{t.jsPoNo}</td>
+                <td style={cel}>{item.poNumber || "—"}</td>
+                <td style={lbl}>{t.jsJobRefZh}<br />{t.jsJobRef}</td>
+                <td style={cel}>{item.jobRef || "—"}</td>
               </tr>
               <tr>
-                <td style={label}>提單資料<br />SS/D.O. NO.</td>
-                <td style={cell} colSpan={5}>
+                <td style={lbl}>提單資料<br />SS/D.O. NO.</td>
+                <td style={cel} colSpan={5}>
                   <JsEdit value={ssText} onChange={setSsText} rows={2} placeholder={'ex ss."船名 SHIP NAME" V.______; CONTAINERS NO. ______'} />
                 </td>
               </tr>
             </tbody>
           </table>
 
-          <div style={{ border: "1px solid #999", borderTop: "none", padding: "4px 8px", display: "flex", alignItems: "center" }}>
+          <div style={{ border: "1px solid #111", borderTop: "none", padding: "4px 6px", display: "flex", alignItems: "center", fontSize: 16 }}>
             <span style={{ flex: 1, textAlign: "center", fontWeight: "bold" }}>
               {t.jsDescriptionZh}<br /><span style={{ letterSpacing: 2 }}>{t.jsDescription}</span>
             </span>
-            <span style={{ fontSize: 11 }}>
+            <span style={{ fontSize: 12 }}>
               <span className="no-print">
-                {t.jsIssuedByZh}: <input style={{ border: "1px solid #999", padding: "1px 4px", fontSize: 11 }} value={issuedBy} onChange={(e) => setIssuedBy(e.target.value)} />
+                {t.jsIssuedByZh}: <input style={{ border: "1px solid #999", padding: "1px 4px", fontSize: 12 }} value={issuedBy} onChange={(e) => setIssuedBy(e.target.value)} />
               </span>
               <span className="print-only-inline">{t.jsIssuedByZh}: {issuedBy || "—"}</span>
             </span>
           </div>
 
-          <div style={{ border: "1px solid #999", borderTop: "none", padding: 8, minHeight: 150, marginBottom: 16 }}>
-            {itemized ? (
-              <>
-                {template === "Delivery" && <div style={{ marginBottom: 6, textDecoration: "underline" }}><JsEdit value={refText} onChange={setRefText} rows={2} /></div>}
-                {template === "Devan" && item.shkNumber && <div style={{ fontWeight: "bold" }}>{item.shkNumber}</div>}
-                {item.unitCode && <div style={{ fontWeight: "bold" }}>{item.unitCode}</div>}
-                {item.description && <div>{item.description}</div>}
-                {csLine && <div style={{ fontSize: 11, color: "#333" }}>C/S NO. {csLine}</div>}
-                <div style={{ borderTop: "1px solid #111", marginTop: 12, paddingTop: 6 }}>
-                  共:&nbsp;&nbsp;&nbsp;{pkgs} {t.jsPkgs} &nbsp;&nbsp;&nbsp; {kgs || "—"} {t.jsKgs} &nbsp;&nbsp;&nbsp; {cbm || "—"} {t.jsCbm}
-                </div>
-                {estimated && <div style={{ fontSize: 10, color: "#900", marginTop: 4 }}>{t.jsEstimatedNote}</div>}
-              </>
-            ) : (
-              <JsEdit value={bodyText} onChange={setBodyText} rows={10} />
-            )}
-          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #111", borderTop: "none", fontSize: 16 }}>
+            <tbody>
+              <tr>
+                <td style={{ padding: 8, verticalAlign: "top", height: 400 }}>
+                  {itemized ? (
+                    <>
+                      {template === "Delivery" && <div style={{ marginBottom: 6, textDecoration: "underline" }}><JsEdit value={refText} onChange={setRefText} rows={2} /></div>}
+                      {template === "Devan" && item.shkNumber && <div style={{ fontWeight: "bold" }}>{item.shkNumber}</div>}
+                      {item.unitCode && <div style={{ fontWeight: "bold" }}>{item.unitCode}</div>}
+                      {item.description && <div>{item.description}</div>}
+                      {csLine && <div style={{ fontSize: 12, color: "#111" }}>C/S NO. {csLine}</div>}
+                      <div style={{ borderTop: "1px solid #111", marginTop: 12, paddingTop: 6 }}>
+                        共:&nbsp;&nbsp;&nbsp;{pkgs} {t.jsPkgs} &nbsp;&nbsp;&nbsp; {kgs || "—"} {t.jsKgs} &nbsp;&nbsp;&nbsp; {cbm || "—"} {t.jsCbm}
+                      </div>
+                      {estimated && <div style={{ fontSize: 10, color: "#900", marginTop: 4 }}>{t.jsEstimatedNote}</div>}
+                      {showOversize && (
+                        <div style={{ borderTop: "1px solid #111", marginTop: 12, paddingTop: 8 }}>
+                          <div style={{ fontWeight: "bold", textDecoration: "underline" }}>{t.jsOversizeLabel}</div>
+                          <div style={{ marginTop: 4 }}>
+                            <JsEditBig value={oversizeText} onChange={setOversizeText} rows={6} size={13} placeholder={t.jsOversizePlaceholder} />
+                          </div>
+                          <div style={{ fontSize: 10, color: "#111", marginTop: 4 }}>{t.jsOversizeNote}</div>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <JsEdit value={bodyText} onChange={setBodyText} rows={10} />
+                  )}
+                </td>
+              </tr>
+              <tr>
+                <td style={{ padding: "0 8px", fontSize: 16 }}>
+                  {template === "Pick-up" ? (
+                    <>
+                      簽署確認收妥 / Signature:&nbsp;______________________________________&nbsp;(車輛號碼 Vehicle No.:____________ )
+                      <br /><br /><br />
+                    </>
+                  ) : (
+                    <>
+                      客戶簽署確認 / Customer signature:&nbsp;__________________________________________&nbsp;(工作妥當及完成)
+                      <br /><br /><br /><br />
+                    </>
+                  )}
+                </td>
+              </tr>
+            </tbody>
+          </table>
 
-          {template === "Pick-up" ? (
-            <div style={{ fontSize: 12, marginBottom: 24 }}>
-              <div>簽署確認收妥 / Signature confirming receipt:&nbsp;_________________________________</div>
-              <div style={{ marginTop: 10 }}>(車輛號碼 / Vehicle No.:&nbsp;___________________ )</div>
-            </div>
-          ) : (
-            <div style={{ fontSize: 12, marginBottom: 24 }}>
-              客戶簽署確認 / Customer signature confirming above work completed:&nbsp;_________________________________&nbsp;(工作妥當及完成)
-            </div>
-          )}
-
-          <div style={{ borderTop: "1px solid #ccc", paddingTop: 6, fontSize: 9, color: "#666", textAlign: "center" }}>
+          <div style={{ borderTop: "1px solid #ccc", paddingTop: 5, fontSize: 8, color: "#111", textAlign: "center", marginTop: 8 }}>
             Office and Depot: 21D Wang Toi Shan, Hung Mo Tam, Kam Tin. NT., HK
-            <div style={{ marginTop: 3 }}>N.B. Farspeed Contractors Ltd. is a private company. All transaction(s) taken into account are subject to the STANDARD BUSINESS CONDITIONS of the company, details as behind.</div>
+            <div style={{ marginTop: 2 }}>N.B. Farspeed Contractors Ltd. is a private company. All transaction(s) taken into account are subject to the STANDARD BUSINESS CONDITIONS of the company, details as behind.</div>
             <div style={{ marginTop: 2 }}>(a member of FARSPEED Group)</div>
           </div>
         </div>
@@ -2642,7 +2872,7 @@ function ImportPanel({ onImportRows, existingItems, directory, setDirectory, col
     return [...new Set([...fromDirectory, ...fromItems])];
   }, [directory, existingItems]);
 
-  function applyParsedResult({ groups, client, project }) {
+  function applyParsedResult({ groups, client, project, ssDoNo }) {
     if (!groups || groups.length === 0) { return false; }
     setPlPreview(groups);
     const guess = String(project || "").toLowerCase();
@@ -2659,6 +2889,7 @@ function ImportPanel({ onImportRows, existingItems, directory, setDirectory, col
       depotLocation: "",
       arrivingType: ARRIVING_TYPES[0],
       jobNumber: "",
+      ssDoNo: ssDoNo || "",
       directoryId: matchedSite ? matchedSite.id : "",
       jobRef: matchedSite ? matchedSite.jobRef : "",
       orderedBy: matchedSite ? matchedSite.orderedBy : "",
@@ -2692,10 +2923,11 @@ Follow these extraction rules exactly - they keep the output compact even for lo
    - "weightKg": use the GROSS weight (毛重 / GROSS column), not net weight - gross is what matters here.
    - "cbm": if a CBM/volume figure is already given directly for that case, use it as-is. Otherwise read that case's dimensions (often shown as "L*W*H", e.g. "500*20*20") and check the column header/label to see whether dimensions are in cm or mm. If in cm, compute cbm = (L*W*H) / 1,000,000. If in mm, compute cbm = (L*W*H) / 1,000,000,000.
 2. Group all cases by their lot/lift number into the "groups" array - one entry per distinct lot.
+2b. Also look for shipping/bill-of-lading details anywhere on the document: vessel/ship name (often after "ex ss." or 船名), voyage number, and container numbers. Combine them into one line for "ssDoNo" in roughly this style: ex ss."SHIP NAME" V.VOYAGE; CONTAINERS NO. XXXX/40GP. If none present, use ''.
 3. Keep everything as compact as possible: short descriptions, no commentary, no repeated sub-item lists.
 
 Respond with ONLY a raw JSON object in EXACTLY this shape and nothing else (no markdown fences, no commentary, no explanation before or after):
-{"client": "best-guess client name or ''", "project": "site/building/project name found in the document, or ''", "groups": [{"lot": "lift/lot/shop-order number identifying this batch", "containers": ["container numbers if any, else empty array"], "packages": [{"code": "case/package number", "description": "short category name, a few words only", "weightKg": number_or_empty_string, "cbm": number_or_empty_string}]}]}
+{"client": "best-guess client name or ''", "project": "site/building/project name found in the document, or ''", "ssDoNo": "vessel + voyage + container line or ''", "groups": [{"lot": "lift/lot/shop-order number identifying this batch", "containers": ["container numbers if any, else empty array"], "packages": [{"code": "case/package number", "description": "short category name, a few words only", "weightKg": number_or_empty_string, "cbm": number_or_empty_string}]}]}
 If the document only has one overall lot/shipment with no explicit lift/case breakdown, put everything under a single group with a sensible lot name.`;
       const response = await fetch("/api/scan-pdf", {
         method: "POST",
@@ -2731,7 +2963,7 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
           cbm: p.cbm !== "" && p.cbm != null ? String(p.cbm) : "",
         })),
       }));
-      const ok = applyParsedResult({ groups: normalizedGroups, client: parsed.client, project: parsed.project });
+      const ok = applyParsedResult({ groups: normalizedGroups, client: parsed.client, project: parsed.project, ssDoNo: parsed.ssDoNo || "" });
       if (!ok) setPdfError(t.packingListNoStructure);
       setPdfStatus("idle");
     } catch (err) {
@@ -2838,6 +3070,7 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
         depotLocation: plCommon.depotLocation,
         arrivingType: plCommon.arrivingType,
         jobNumber: sharedJobNumber,
+        ssDoNo: plCommon.ssDoNo || "",
         jobRef: plCommon.jobRef || "",
         orderedBy: plCommon.orderedBy || "",
         directoryId: effectiveDirectoryId,
@@ -2948,6 +3181,9 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                   </Field>
                   <Field label={t.fJobRef} hint={t.fJobRefHint} colors={colors}>
                     <input className={inputClass} style={inputStyle} value={plCommon.jobRef || ""} onChange={(e) => setPlCommon((c) => ({ ...c, jobRef: e.target.value }))} />
+                  </Field>
+                  <Field label={t.fSsDoNo} hint={t.fSsDoNoHint} colors={colors}>
+                    <input className={inputClass} style={inputStyle} value={plCommon.ssDoNo || ""} onChange={(e) => setPlCommon((c) => ({ ...c, ssDoNo: e.target.value }))} placeholder={'ex ss."SHIP" V.___; CONTAINERS NO. ___'} />
                   </Field>
                   <Field label={t.packingListApplyDepot} colors={colors}>
                     <select className={inputClass} style={inputStyle} value={plCommon.depot} onChange={(e) => setPlCommon((c) => ({ ...c, depot: e.target.value }))}>
@@ -3301,7 +3537,10 @@ export default function FarspeedInventory() {
           i.project?.toLowerCase().includes(q) || i.description?.toLowerCase().includes(q) ||
           i.client?.toLowerCase().includes(q) || i.id?.toLowerCase().includes(q) ||
           i.shkNumber?.toLowerCase().includes(q) || i.unitCode?.toLowerCase().includes(q) ||
-          i.constructionSite?.toLowerCase().includes(q) || i.invoiceNumber?.toLowerCase().includes(q)
+          i.constructionSite?.toLowerCase().includes(q) || i.invoiceNumber?.toLowerCase().includes(q) ||
+          i.jobNumber?.toLowerCase().includes(q) || i.ssDoNo?.toLowerCase().includes(q) ||
+          (i.packages || []).some((p) => (p.code || "").toLowerCase().includes(q)) ||
+          (i.deliveries || []).some((d) => (d.jobNumber || "").toLowerCase().includes(q))
         );
       })
       .sort((a, b) => b.numericId - a.numericId);
@@ -3792,6 +4031,27 @@ export default function FarspeedInventory() {
                                       <span className="text-xs" style={{ color: colors.inkFaint }}>{t.inventoryNoRemainingPkgsMsg}</span>
                                     )
                                   )}
+                                  {activeDeliveries(i).length > 0 && (
+                                    <div className="mt-1">
+                                      <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{t.deliveryHistoryLabel}</div>
+                                      <div className="flex flex-col gap-1.5">
+                                        {[...activeDeliveries(i)].sort((a, b) => (a.date || "").localeCompare(b.date || "")).map((d) => (
+                                          <div key={d.id} className="flex flex-wrap items-center gap-2 text-xs" style={{ color: colors.ink }}>
+                                            <span className="font-semibold" style={{ fontFamily: FONT_MONO }}>{d.jobNumber || "—"}</span>
+                                            <span>{fmt(d.date)}</span>
+                                            <span style={{ color: colors.inkFaint }}>
+                                              {d.codes && d.codes.length > 0 ? d.codes.join(", ") : `${d.packageCount || "?"} ${t.jsPkgs}`}
+                                            </span>
+                                            <SignedDocControl docKey={`signedDoc:${i.id}:${d.id}`} colors={colors} t={t} />
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                  <div className="flex items-center gap-2 text-xs mt-1" style={{ color: colors.inkFaint }}>
+                                    <span>{t.signedDocArrivalLabel}:</span>
+                                    <SignedDocControl docKey={`signedDoc:${i.id}:arrival`} colors={colors} t={t} />
+                                  </div>
                                 </div>
                               );
                             })()}
