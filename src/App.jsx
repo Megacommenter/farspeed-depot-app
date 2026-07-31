@@ -2291,9 +2291,9 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
     ? (delivery.codes ? delivery.codes.join(", ") : "")
     : (item.packages || []).map((p) => p.code).join(", ");
 
-  const lbl = { border: "1px solid #111", fontWeight: "bold", padding: "4px 6px", verticalAlign: "top", width: 64, fontSize: 13.5 };
-  const cel = { border: "1px solid #111", padding: 6, verticalAlign: "top" };
-  const cel0 = { border: "1px solid #111", padding: 0, verticalAlign: "top" };
+  const lbl = { border: "1px solid #111", fontWeight: "bold", padding: "4px 6px", verticalAlign: "top", width: 78, fontSize: 13, wordBreak: "break-word", overflowWrap: "break-word" };
+  const cel = { border: "1px solid #111", padding: 6, verticalAlign: "top", wordBreak: "break-word", overflowWrap: "break-word" };
+  const cel0 = { border: "1px solid #111", padding: 0, verticalAlign: "top", wordBreak: "break-word", overflowWrap: "break-word" };
   const fTop = fromTopText(template), fBottom = fromBottomText(template);
   const tTop = toTopText(), tBottom = toBottomText(template);
   const fromHasBottom = !!fBottom, toHasBottom = !!tBottom;
