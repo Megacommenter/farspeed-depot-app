@@ -798,6 +798,9 @@ const TEXT = {
     jsDevanType: "DEVAN",
     jsCfsType: "CFS",
     jsSignatureLine: "Customer signature confirming above work completed:",
+    jsTemplateLabel: "Template",
+    jsCfsFromPreset: "CFS location…",
+    jsEditableHint: "Dashed boxes can be edited before printing.",
     jsEstimatedNote: "~ Weight/CBM estimated as a proportional share of the full entry — not individually weighed per package.",
 
     navDirectory: "Directory",
@@ -1168,6 +1171,9 @@ const TEXT = {
     jsDevanType: "拆櫃 DEVAN",
     jsCfsType: "CFS",
     jsSignatureLine: "客戶簽署確認 (按以上工作完成):",
+    jsTemplateLabel: "工單類型",
+    jsCfsFromPreset: "CFS 起運地點…",
+    jsEditableHint: "虛線框可於列印前編輯。",
     jsEstimatedNote: "~ 重量／CBM為按比例估算，並非逐件過磅。",
 
     navDirectory: "目錄",
@@ -2015,22 +2021,118 @@ function DeliveryForm({ item, onAddDelivery, onDeleteDelivery, onCancel, onPrint
   );
 }
 
-function JobSheetPrint({ sheet, onClose, colors, t, lang }) {
+const JOB_SHEET_TEMPLATES = ["Devan", "CFS", "Delivery", "Shifting", "Hoisting", "Day Work", "Dismantle", "Dis & Removal of Lifting Tools", "Job Cancel", "Pick-up", "Position", "Re-position", "Retain of Safety Ropes"];
+const JOB_SHEET_ITEMIZED = ["Devan", "CFS", "Delivery"];
+const CFS_FROM_PRESETS = [
+  { key: "金田物流", text: "金田物流有限公司\n油麻地海輝道38號新油麻地貨物公眾貨物\n裝卸區7號 3-4口水位高鴻躉船\n(車入閘后轉右直行約350米)\nTEL: 27850666 (亞昌/ 珍珍)" },
+  { key: "悅昇物流", text: "悅昇物流有限公司\n香港新界葵涌昂船洲479號\nTEL: 24974884" },
+];
+const JOB_SHEET_BODY_SEEDS = {
+  "Day Work": "- 按客戶要求將扶梯配件(共: _______箱) 由暫存位置攝出供客人開箱檢查貨件、\n  完成後用回原有包裝包妥，並攝回存倉位置擺放。",
+  "Dismantle": "DISMANTLE WORK FOR ESCALATOR NO. ______\n\n1) 於下夜將所有吊重工具送交工地並移入所屬梯井。\n2) 將吊重工具掛上吊碼上。\n3) 將扶梯配件拆走。\n4) 將梯架吊離梯井。\n5) 用等鋰子切割機將扶梯切割至可移走呎吋。\n6) 機房內設置/搭建一套通架吊台供吊走摩打台。\n7) 出口外設置攝貨平台及圍封。\n8) 收走梯架及機房台。",
+  "Dis & Removal of Lifting Tools": "FOR ESCALATOR NO. ______\n\n1/ 將有關工作台通架料於下夜送交工地及搬入______梯圍板內。\n2/ 於梯面搭建工作台將所有吊梯工具拆下並搬出站外上貨位。\n3/ 收離工地。",
+  "Job Cancel": "- 因______，按______要求停止進行______工作。",
+  "Pick-up": "- 客人安排運輸到快達倉取走全部______。(共: ______ 箱)",
+  "Position": "POSITION WORK FOR ESCALATOR NO. ______\n\n1/ 設置吊重工具，以供吊嵌扶梯之用。\n2/ 吊臂車將扶梯及全部配件運到地盤。\n3/ 將扶梯攝入所屬梯井，並進行接駁、吊崁及安放到指定梯井位內。",
+  "Re-position": "於______提供______(共______名)吊運人員將以上扶梯重新吊回梯井座好。",
+  "Retain of Safety Ropes": "1) 於梯井設置羊眼圈及安全繩(共______組)供我司拆配件及吊走扶梯之用。\n2) 我司吊運工作完成後按客人要求保留梯井內(共______組)安全繩連羊眼圈供安裝工作之用。",
+  "Shifting": "- 提供人手及工具將______攝到______暫存位置擺放。\n(TOTAL: ______ PKG / ______ KGS / ______ CBM)",
+  "Hoisting": "HOISTING WORK FOR ______\n\n1/ ",
+};
+
+function JsEdit({ value, onChange, rows = 2, placeholder }) {
+  return (
+    <>
+      <textarea
+        className="no-print"
+        rows={rows}
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        style={{ width: "100%", border: "1px dashed #C4A860", padding: 3, fontSize: 12, fontFamily: "inherit", background: "#FFFDF2", resize: "vertical", boxSizing: "border-box" }}
+      />
+      <span className="print-only-inline" style={{ whiteSpace: "pre-line" }}>{value}</span>
+    </>
+  );
+}
+
+function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
   const { type, item, delivery } = sheet;
   const isDelivery = type === "Delivery";
-  const [issuedBy, setIssuedBy] = useState((isDelivery ? delivery.recordedBy : item.recordedBy) || "");
-  const typeLabel = type === "Devan" ? t.jsDevanType : type === "CFS" ? t.jsCfsType : t.jsDeliveryType;
+  const depotEn = item.depot || "";
+  const depotZh = DEPOT_LABELS_ZH[item.depot] || "";
+  const dirMatch = (directory || []).find((s) => s.siteEn && (s.siteEn === item.constructionSite || s.siteEn === item.project));
+  const siteZh = (dirMatch && dirMatch.siteZh) || "";
 
-  const fromText = isDelivery
-    ? `${depotDisplay(item.depot, lang)}${item.depotLocation ? " — " + item.depotLocation : ""}`
-    : type === "Devan"
-      ? t.jsDevanFrom(depotDisplay(item.depot, lang))
-      : t.jsCfsFrom;
-  const toText = item.constructionSite || item.project;
-  const dateText = isDelivery ? delivery.date : item.depotArrivalDate;
+  function defaultFrom(tpl) {
+    if (tpl === "Devan") {
+      return [
+        `客人安排運輸送到${depotZh || depotEn}`,
+        depotEn ? `Customer arranges transport to ${depotEn}` : "",
+        "(共1櫃)",
+        "*由快達拆櫃 (Devan by Farspeed)",
+      ].filter(Boolean).join("\n");
+    }
+    if (tpl === "CFS") return CFS_FROM_PRESETS[0].text;
+    if (["Delivery", "Pick-up", "Day Work"].includes(tpl)) {
+      return [depotEn, depotZh, item.depotLocation || ""].filter(Boolean).join("\n");
+    }
+    return "";
+  }
+  function defaultTo(tpl) {
+    const site = item.constructionSite || item.project || "";
+    const out = [];
+    if (site) out.push(/^site\s+at/i.test(site) ? site : `SITE AT ${site}`);
+    if (siteZh) out.push(siteZh);
+    if (tpl === "Devan" || tpl === "CFS") out.push(`暫存${depotZh || depotEn}${depotEn ? ` (Temp. storage at ${depotEn})` : ""}`);
+    return out.join("\n");
+  }
+  function defaultSs(tpl) {
+    if (tpl === "Devan" || tpl === "CFS") return "";
+    return "";
+  }
+  function defaultRef(tpl) {
+    if (tpl !== "Delivery") return "";
+    const jn = item.jobNumber || "______";
+    let dates = [];
+    if (usesArrivalBatches(item) && delivery && delivery.codes) {
+      const set = new Set(delivery.codes);
+      dates = [...new Set(activeArrivals(item).filter((a) => (a.codes || []).some((c) => set.has(c))).map((a) => a.date).filter(Boolean))];
+    }
+    if (dates.length === 0) dates = [effectiveDepotArrivalDate(item)].filter(Boolean);
+    if (dates.length === 0) return `Refer to job no. ${jn} on ______`;
+    return dates.map((d) => `Refer to job no. ${jn} on ${fmt(d)}`).join("\n");
+  }
+  function defaultBody(tpl) {
+    if (JOB_SHEET_ITEMIZED.includes(tpl)) return "";
+    const site = (item.constructionSite || item.project || "").trim();
+    const seed = JOB_SHEET_BODY_SEEDS[tpl] || "";
+    return [site, seed].filter(Boolean).join("\n\n");
+  }
+
+  const initialTemplate = isDelivery ? "Delivery" : (JOB_SHEET_TEMPLATES.includes(type) ? type : "Devan");
+  const [template, setTemplate] = useState(initialTemplate);
+  const [issuedBy, setIssuedBy] = useState((isDelivery ? delivery.recordedBy : item.recordedBy) || "");
+  const [fromText, setFromText] = useState(defaultFrom(initialTemplate));
+  const [toText, setToText] = useState(defaultTo(initialTemplate));
+  const [ssText, setSsText] = useState(defaultSs(initialTemplate));
+  const [refText, setRefText] = useState(defaultRef(initialTemplate));
+  const [bodyText, setBodyText] = useState(defaultBody(initialTemplate));
+
+  function switchTemplate(tpl) {
+    setTemplate(tpl);
+    setFromText(defaultFrom(tpl));
+    setToText(defaultTo(tpl));
+    setSsText(defaultSs(tpl));
+    setRefText(defaultRef(tpl));
+    setBodyText(defaultBody(tpl));
+  }
+
+  const itemized = JOB_SHEET_ITEMIZED.includes(template);
+  const dateText = isDelivery ? delivery.date : item.depotArrivalDate || effectiveDepotArrivalDate(item);
+  const jobNo = isDelivery ? delivery.jobNumber : item.jobNumber;
 
   const pkgs = isDelivery ? (delivery.codes ? delivery.codes.length : Number(delivery.packageCount) || 0) : totalUnits(item);
-
   let kgs = item.weightKg || "";
   let cbm = item.volumeCbm || "";
   let estimated = false;
@@ -2052,23 +2154,45 @@ function JobSheetPrint({ sheet, onClose, colors, t, lang }) {
       if (!cbm && item.volumeCbm) cbm = `~${Math.round(Number(item.volumeCbm) * share * 1000) / 1000}`;
     }
   }
-  const jobNo = isDelivery ? delivery.jobNumber : item.jobNumber;
-
   const csLine = isDelivery
     ? (delivery.codes ? delivery.codes.join(", ") : "")
     : (item.packages || []).map((p) => p.code).join(", ");
-  const cell = { border: "1px solid #999", padding: 6 };
-  const label = { ...cell, fontWeight: "bold", background: "#F5F5F5", width: "16%" };
+
+  const cell = { border: "1px solid #999", padding: 6, verticalAlign: "top" };
+  const label = { ...cell, fontWeight: "bold", background: "#F5F5F5", width: "11%", whiteSpace: "nowrap" };
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col" style={{ background: "rgba(0,0,0,0.5)" }}>
-      <div className="no-print flex justify-end gap-2 p-3" style={{ background: colors.navy }}>
-        <button className="px-4 py-2 rounded text-sm font-semibold" style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }} onClick={() => window.print()}>
-          {t.printBtn}
-        </button>
-        <button className="px-4 py-2 rounded text-sm font-semibold" style={{ border: `1px solid ${colors.onDark}`, color: colors.onDark, fontFamily: FONT_DISPLAY }} onClick={onClose}>
-          {t.closePreviewBtn}
-        </button>
+      <div className="no-print flex items-center gap-2 p-3" style={{ background: colors.navy }}>
+        <span className="text-sm font-semibold" style={{ color: colors.onDark, fontFamily: FONT_DISPLAY }}>{t.jsTemplateLabel}:</span>
+        <select
+          value={template}
+          onChange={(e) => switchTemplate(e.target.value)}
+          className="px-2 py-1.5 rounded text-sm"
+          style={{ background: colors.surface, color: colors.ink }}
+        >
+          {JOB_SHEET_TEMPLATES.map((tp) => <option key={tp} value={tp}>{tp}</option>)}
+        </select>
+        {template === "CFS" && (
+          <select
+            defaultValue=""
+            onChange={(e) => { const p = CFS_FROM_PRESETS.find((x) => x.key === e.target.value); if (p) setFromText(p.text); e.target.value = ""; }}
+            className="px-2 py-1.5 rounded text-sm"
+            style={{ background: colors.surface, color: colors.ink }}
+          >
+            <option value="" disabled>{t.jsCfsFromPreset}</option>
+            {CFS_FROM_PRESETS.map((p) => <option key={p.key} value={p.key}>{p.key}</option>)}
+          </select>
+        )}
+        <span className="text-xs" style={{ color: colors.onDark, opacity: 0.75 }}>{t.jsEditableHint}</span>
+        <div className="ml-auto flex gap-2">
+          <button className="px-4 py-2 rounded text-sm font-semibold" style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }} onClick={() => window.print()}>
+            {t.printBtn}
+          </button>
+          <button className="px-4 py-2 rounded text-sm font-semibold" style={{ border: `1px solid ${colors.onDark}`, color: colors.onDark, fontFamily: FONT_DISPLAY }} onClick={onClose}>
+            {t.closePreviewBtn}
+          </button>
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto p-6" style={{ background: colors.bg }}>
         <div className="print-area mx-auto" style={{ background: "#fff", color: "#111", maxWidth: 800, padding: 28, fontFamily: "Arial, sans-serif", fontSize: 13 }}>
@@ -2093,59 +2217,80 @@ function JobSheetPrint({ sheet, onClose, colors, t, lang }) {
           <div className="text-center font-bold mb-3" style={{ fontSize: 20, letterSpacing: 3 }}>
             {t.jsTitleZh}&nbsp;&nbsp;{t.jsTitle}
           </div>
-          <div className="mb-2 text-xs font-bold" style={{ color: "#900" }}>{typeLabel} &nbsp;—&nbsp; JOB NO. {jobNo}</div>
 
           <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 0 }}>
             <tbody>
               <tr>
                 <td style={label}>{t.jsFromZh}<br />{t.jsFrom}</td>
-                <td style={{ ...cell, width: "34%" }}>{fromText}</td>
+                <td style={{ ...cell, width: "37%" }} colSpan={2}><JsEdit value={fromText} onChange={setFromText} rows={5} /></td>
                 <td style={label}>{t.jsToZh}<br />{t.jsTo}</td>
-                <td style={{ ...cell, width: "34%" }}>{toText}</td>
+                <td style={{ ...cell, width: "37%" }} colSpan={2}><JsEdit value={toText} onChange={setToText} rows={5} /></td>
               </tr>
               <tr>
                 <td style={label}>{t.jsAccountZh}<br />{t.jsAccount}</td>
                 <td style={cell}>{item.client}</td>
                 <td style={label}>{t.jsJobNoZh}<br />{t.jsJobNo}</td>
-                <td style={{ ...cell, fontWeight: "bold" }}>{jobNo}</td>
-              </tr>
-              <tr>
-                <td style={label}>{t.jsOrderedByZh}<br />{t.jsOrderedBy}</td>
-                <td style={cell}>{item.orderedBy || "—"}</td>
+                <td style={{ ...cell, fontWeight: "bold" }}>{jobNo || "—"}</td>
                 <td style={label}>{t.jsDateZh}<br />{t.jsDate}</td>
                 <td style={cell}>{fmt(dateText)}</td>
               </tr>
               <tr>
+                <td style={label}>{t.jsOrderedByZh}<br />{t.jsOrderedBy}</td>
+                <td style={cell}>{item.orderedBy || "—"}</td>
                 <td style={label}>{t.jsPoNoZh}<br />{t.jsPoNo}</td>
                 <td style={cell}>{item.poNumber || "—"}</td>
                 <td style={label}>{t.jsJobRefZh}<br />{t.jsJobRef}</td>
                 <td style={cell}>{item.jobRef || "—"}</td>
               </tr>
+              <tr>
+                <td style={label}>提單資料<br />SS/D.O. NO.</td>
+                <td style={cell} colSpan={5}>
+                  <JsEdit value={ssText} onChange={setSsText} rows={2} placeholder={'ex ss."船名 SHIP NAME" V.______; CONTAINERS NO. ______'} />
+                </td>
+              </tr>
             </tbody>
           </table>
 
-          <div className="flex justify-between items-end" style={{ borderLeft: "1px solid #999", borderRight: "1px solid #999", borderTop: "1px solid #999", padding: "4px 6px" }}>
-            <div className="font-bold" style={{ fontSize: 12 }}>{t.jsDescriptionZh}／{t.jsDescription}</div>
-            <div style={{ fontSize: 11 }}>
+          <div style={{ border: "1px solid #999", borderTop: "none", padding: "4px 8px", display: "flex", alignItems: "center" }}>
+            <span style={{ flex: 1, textAlign: "center", fontWeight: "bold" }}>
+              {t.jsDescriptionZh}<br /><span style={{ letterSpacing: 2 }}>{t.jsDescription}</span>
+            </span>
+            <span style={{ fontSize: 11 }}>
               <span className="no-print">
                 {t.jsIssuedByZh}: <input style={{ border: "1px solid #999", padding: "1px 4px", fontSize: 11 }} value={issuedBy} onChange={(e) => setIssuedBy(e.target.value)} />
               </span>
               <span className="print-only-inline">{t.jsIssuedByZh}: {issuedBy || "—"}</span>
-            </div>
-          </div>
-          <div style={{ border: "1px solid #999", borderTop: "none", padding: 8, minHeight: 130, marginBottom: 16 }}>
-            {item.unitCode && <div style={{ fontWeight: "bold" }}>{item.unitCode}</div>}
-            {item.description && <div>{item.description}</div>}
-            {csLine && <div style={{ fontSize: 11, color: "#333" }}>C/S NO. {csLine}</div>}
-            <div style={{ borderTop: "1px solid #111", marginTop: 12, paddingTop: 6 }}>
-              共:&nbsp;&nbsp;&nbsp;{pkgs} {t.jsPkgs} &nbsp;&nbsp;&nbsp; {kgs || "—"} {t.jsKgs} &nbsp;&nbsp;&nbsp; {cbm || "—"} {t.jsCbm}
-            </div>
-            {estimated && <div style={{ fontSize: 10, color: "#900", marginTop: 4 }}>{t.jsEstimatedNote}</div>}
+            </span>
           </div>
 
-          <div style={{ fontSize: 12, marginBottom: 24 }}>
-            客戶簽署確認 / Customer signature confirming above work completed:&nbsp;_________________________________&nbsp;(工作妥當及完成)
+          <div style={{ border: "1px solid #999", borderTop: "none", padding: 8, minHeight: 150, marginBottom: 16 }}>
+            {itemized ? (
+              <>
+                {template === "Delivery" && <div style={{ marginBottom: 6, textDecoration: "underline" }}><JsEdit value={refText} onChange={setRefText} rows={2} /></div>}
+                {template === "Devan" && item.shkNumber && <div style={{ fontWeight: "bold" }}>{item.shkNumber}</div>}
+                {item.unitCode && <div style={{ fontWeight: "bold" }}>{item.unitCode}</div>}
+                {item.description && <div>{item.description}</div>}
+                {csLine && <div style={{ fontSize: 11, color: "#333" }}>C/S NO. {csLine}</div>}
+                <div style={{ borderTop: "1px solid #111", marginTop: 12, paddingTop: 6 }}>
+                  共:&nbsp;&nbsp;&nbsp;{pkgs} {t.jsPkgs} &nbsp;&nbsp;&nbsp; {kgs || "—"} {t.jsKgs} &nbsp;&nbsp;&nbsp; {cbm || "—"} {t.jsCbm}
+                </div>
+                {estimated && <div style={{ fontSize: 10, color: "#900", marginTop: 4 }}>{t.jsEstimatedNote}</div>}
+              </>
+            ) : (
+              <JsEdit value={bodyText} onChange={setBodyText} rows={10} />
+            )}
           </div>
+
+          {template === "Pick-up" ? (
+            <div style={{ fontSize: 12, marginBottom: 24 }}>
+              <div>簽署確認收妥 / Signature confirming receipt:&nbsp;_________________________________</div>
+              <div style={{ marginTop: 10 }}>(車輛號碼 / Vehicle No.:&nbsp;___________________ )</div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, marginBottom: 24 }}>
+              客戶簽署確認 / Customer signature confirming above work completed:&nbsp;_________________________________&nbsp;(工作妥當及完成)
+            </div>
+          )}
 
           <div style={{ borderTop: "1px solid #ccc", paddingTop: 6, fontSize: 9, color: "#666", textAlign: "center" }}>
             Office and Depot: 21D Wang Toi Shan, Hung Mo Tam, Kam Tin. NT., HK
@@ -3873,7 +4018,7 @@ export default function FarspeedInventory() {
       </div>
 
       {printJobSheet && (
-        <JobSheetPrint sheet={printJobSheet} onClose={() => setPrintJobSheet(null)} colors={colors} t={t} lang={lang} />
+        <JobSheetPrint sheet={printJobSheet} onClose={() => setPrintJobSheet(null)} directory={directory} colors={colors} t={t} lang={lang} />
       )}
     </div>
   );
