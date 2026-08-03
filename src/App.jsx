@@ -91,19 +91,19 @@ function computeStorageCharge(arrivalDateStr, endDateStr, freeDays, ratePerCbmMo
   if (end <= firstMonthEnd) {
     const daysUsed = Math.round((end - billStart) / 86400000) + 1;
     const amt = ratePerCbmMonth * cbm * (daysUsed / daysInFirstMonth);
-    breakdown.push({ label: `${fmt(billStart.toISOString().slice(0, 10))} \u2013 ${fmt(end.toISOString().slice(0, 10))}`, detail: `pro-rata, ${daysUsed}/${daysInFirstMonth} days`, amount: amt });
+    breakdown.push({ label: `${fmt(billStart.toISOString().slice(0, 10))} \u2013 ${fmt(end.toISOString().slice(0, 10))}`, detail: `pro-rata, ${daysUsed}/${daysInFirstMonth} days`, amount: amt, year: billStart.getFullYear(), month: billStart.getMonth() });
     total = amt;
   } else {
     const daysUsed = Math.round((firstMonthEnd - billStart) / 86400000) + 1;
     const amt1 = ratePerCbmMonth * cbm * (daysUsed / daysInFirstMonth);
-    breakdown.push({ label: `${fmt(billStart.toISOString().slice(0, 10))} \u2013 ${fmt(firstMonthEnd.toISOString().slice(0, 10))}`, detail: `pro-rata, ${daysUsed}/${daysInFirstMonth} days`, amount: amt1 });
+    breakdown.push({ label: `${fmt(billStart.toISOString().slice(0, 10))} \u2013 ${fmt(firstMonthEnd.toISOString().slice(0, 10))}`, detail: `pro-rata, ${daysUsed}/${daysInFirstMonth} days`, amount: amt1, year: billStart.getFullYear(), month: billStart.getMonth() });
     total += amt1;
     const numFullMonths = monthIndexOf(end) - monthIndexOf(billStart);
     for (let i = 1; i <= numFullMonths; i++) {
       const mDate = new Date(billStart.getFullYear(), billStart.getMonth() + i, 1);
       const isLast = i === numFullMonths;
       const label = mDate.toLocaleString("en-US", { month: "short", year: "numeric" });
-      breakdown.push({ label, detail: isLast && end < lastDayOfMonth(mDate) ? `full month \u2014 left ${fmt(end.toISOString().slice(0, 10))}` : "full month", amount: ratePerCbmMonth * cbm });
+      breakdown.push({ label, detail: isLast && end < lastDayOfMonth(mDate) ? `full month \u2014 left ${fmt(end.toISOString().slice(0, 10))}` : "full month", amount: ratePerCbmMonth * cbm, year: mDate.getFullYear(), month: mDate.getMonth() });
       total += ratePerCbmMonth * cbm;
     }
   }
@@ -179,6 +179,37 @@ function computeItemBillingRows(item) {
     }
   }
   return rows;
+}
+// Aggregates every row's breakdown lines into the given calendar month/year (month is
+// 0-indexed, JS Date convention), grouped by client - this is what should match what
+// MYOB invoices for that month, for cross-checking.
+function computeMonthlyBillingSummary(items, year, month) {
+  const byClient = new Map();
+  let grandTotal = 0;
+  for (const item of items) {
+    for (const row of computeItemBillingRows(item)) {
+      for (const line of row.breakdown) {
+        if (line.year !== year || line.month !== month) continue;
+        const amt = Math.round(line.amount * 100) / 100;
+        if (!byClient.has(item.client)) byClient.set(item.client, { client: item.client, total: 0, lines: [] });
+        const g = byClient.get(item.client);
+        g.total += amt;
+        g.lines.push({
+          project: item.constructionSite || item.project || "",
+          jobNumber: item.jobNumber || "",
+          batchDate: row.batchDate,
+          cbm: row.cbm,
+          detail: line.detail,
+          label: line.label,
+          amount: amt,
+          estimated: !!row.estimated,
+        });
+        grandTotal += amt;
+      }
+    }
+  }
+  const clients = [...byClient.values()].map((g) => ({ ...g, total: Math.round(g.total * 100) / 100 })).sort((a, b) => b.total - a.total);
+  return { clients, grandTotal: Math.round(grandTotal * 100) / 100 };
 }
 const ITEM_TYPES = ["Container", "Separate Items"];
 const DEPOTS = ["Farspeed Depot 1", "Farspeed Depot 3"];
@@ -1026,6 +1057,12 @@ const TEXT = {
     billingEstimatedNote: "* CBM split estimated from package count share (no per-case CBM available for the delivered/remaining split).",
     billingGrandTotal: "Grand Total",
     billingFootnote: "Ongoing rows are calculated up to today and will keep growing until the goods are marked delivered. Rates are set in Directory → CBM Pricing.",
+    billingModeSearch: "Search",
+    billingModeMonthly: "Monthly Summary",
+    billingMonthLabel: "Month",
+    billingYearLabel: "Year",
+    billingMonthNoneMsg: "No storage charges fall in this month.",
+    billingMonthFootnote: "Each client's total is what should match their MYOB invoice for this month — use this to double-check before billing. Click a client to see every line item behind their total.",
     jobLogTitle: "All Job Numbers Used",
     jobLogDesc: "Every Devan, CFS, and Delivery job number ever created, most recent first. Click any row to view and reprint that job sheet.",
     jobLogColJobNo: "Job No.",
@@ -1441,6 +1478,12 @@ const TEXT = {
     billingEstimatedNote: "＊按件數比例估算已送/餘下CBM分配（此記錄沒有逐件CBM資料）。",
     billingGrandTotal: "總計",
     billingFootnote: "計算中的項目按至今日計算，直至貨物標記為已送出才會停止累加。收費可於 目錄 → CBM 收費 設定。",
+    billingModeSearch: "搜尋",
+    billingModeMonthly: "每月總覽",
+    billingMonthLabel: "月份",
+    billingYearLabel: "年份",
+    billingMonthNoneMsg: "此月份沒有存倉收費。",
+    billingMonthFootnote: "各客戶總額應與其MYOB該月發票金額相符，可用作出單前核對。點擊客戶可查看組成總額的每一項明細。",
     jobLogTitle: "所有已使用的工作單號",
     jobLogDesc: "所有曾建立的Devan、CFS及送貨單號，最新在前。點擊任何一行可查看及重印該工單。",
     jobLogColJobNo: "單號",
@@ -2674,11 +2717,16 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
 }
 
 function BillingPanel({ items, colors, t, lang }) {
+  const now = new Date();
+  const [mode, setMode] = useState("search");
   const [search, setSearch] = useState("");
   const [filterClient, setFilterClient] = useState("All");
   const [filterProject, setFilterProject] = useState("All");
   const [filterJobNo, setFilterJobNo] = useState("All");
   const [expanded, setExpanded] = useState(null);
+  const [summaryYear, setSummaryYear] = useState(now.getFullYear());
+  const [summaryMonth, setSummaryMonth] = useState(now.getMonth());
+  const [expandedClient, setExpandedClient] = useState(null);
 
   const allRows = useMemo(() => {
     const rows = [];
@@ -2691,6 +2739,19 @@ function BillingPanel({ items, colors, t, lang }) {
   const clientOptions = useMemo(() => [...new Set(allRows.map((r) => r.item.client).filter(Boolean))].sort(), [allRows]);
   const projectOptions = useMemo(() => [...new Set(allRows.map((r) => r.item.constructionSite || r.item.project).filter(Boolean))].sort(), [allRows]);
   const jobNoOptions = useMemo(() => [...new Set(allRows.map((r) => r.item.jobNumber).filter(Boolean))].sort(), [allRows]);
+
+  const monthlySummary = useMemo(() => computeMonthlyBillingSummary(items, summaryYear, summaryMonth), [items, summaryYear, summaryMonth]);
+  const yearOptions = useMemo(() => {
+    const ys = new Set([now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1]);
+    for (const item of items) {
+      const d = item.depotArrivalDate || effectiveDepotArrivalDate(item);
+      if (d) ys.add(toDateOnly(d).getFullYear());
+    }
+    return [...ys].sort();
+  }, [items]);
+  const monthNames = lang === "zh"
+    ? ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"]
+    : ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
   const filtered = useMemo(() => {
     return allRows.filter((r) => {
@@ -2717,6 +2778,15 @@ function BillingPanel({ items, colors, t, lang }) {
       <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
         <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.billingTitle}</h3>
         <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.billingDesc}</p>
+        <div className="flex gap-1 rounded-lg p-1 mb-3" style={{ background: colors.surfaceDim, width: "fit-content" }}>
+          {[["search", t.billingModeSearch], ["monthly", t.billingModeMonthly]].map(([k, label]) => (
+            <button key={k} onClick={() => setMode(k)} className="px-3 py-1.5 rounded text-sm font-semibold"
+              style={{ fontFamily: FONT_DISPLAY, background: mode === k ? colors.surface : "transparent", color: colors.ink }}>
+              {label}
+            </button>
+          ))}
+        </div>
+        {mode === "search" && (
         <div className="flex flex-wrap gap-3 items-end">
           <Field label={t.searchLabel} colors={colors}>
             <input
@@ -2746,9 +2816,96 @@ function BillingPanel({ items, colors, t, lang }) {
             </select>
           </Field>
         </div>
+        )}
+        {mode === "monthly" && (
+        <div className="flex flex-wrap gap-3 items-end">
+          <Field label={t.billingMonthLabel} colors={colors}>
+            <select className={inputClass} style={inputStyleFor(colors)} value={summaryMonth} onChange={(e) => setSummaryMonth(Number(e.target.value))}>
+              {monthNames.map((m, idx) => <option key={idx} value={idx}>{m}</option>)}
+            </select>
+          </Field>
+          <Field label={t.billingYearLabel} colors={colors}>
+            <select className={inputClass} style={inputStyleFor(colors)} value={summaryYear} onChange={(e) => setSummaryYear(Number(e.target.value))}>
+              {yearOptions.map((y) => <option key={y} value={y}>{y}</option>)}
+            </select>
+          </Field>
+        </div>
+        )}
       </div>
 
-      <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+      {mode === "monthly" && (
+        <>
+          <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+            <table className="w-full text-sm" style={{ background: colors.surface }}>
+              <thead>
+                <tr style={{ background: colors.surfaceDim }}>
+                  {[t.billingColClient, t.billingColTotal, ""].map((h) => (
+                    <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {monthlySummary.clients.length === 0 && (
+                  <tr><td colSpan={3} className="px-3 py-6 text-center text-sm" style={{ color: colors.inkFaint }}>{t.billingMonthNoneMsg}</td></tr>
+                )}
+                {monthlySummary.clients.map((g) => {
+                  const isOpen = expandedClient === g.client;
+                  return (
+                    <React.Fragment key={g.client}>
+                      <tr style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink, cursor: "pointer" }} onClick={() => setExpandedClient(isOpen ? null : g.client)}>
+                        <td className="px-3 py-2 font-semibold">{g.client}</td>
+                        <td className="px-3 py-2 font-semibold">{money(g.total)}</td>
+                        <td className="px-3 py-2 text-right text-xs" style={{ color: colors.amberText }}>{isOpen ? t.billingHideBtn : t.billingShowBtn}</td>
+                      </tr>
+                      {isOpen && (
+                        <tr style={{ background: colors.surfaceDim }}>
+                          <td colSpan={3} className="px-4 py-3">
+                            <table className="w-full text-xs" style={{ color: colors.ink }}>
+                              <thead>
+                                <tr>
+                                  {[t.billingColProject, t.billingColJobNo, t.billingColCbm, t.billingColBatchDate, "", ""].map((h) => (
+                                    <th key={h} className="text-left pr-4 pb-1 font-semibold" style={{ color: colors.inkFaint }}>{h}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {g.lines.map((l, i) => (
+                                  <tr key={i} style={{ borderTop: `1px solid ${colors.line}` }}>
+                                    <td className="pr-4 py-1">{l.project}</td>
+                                    <td className="pr-4 py-1" style={{ fontFamily: FONT_MONO }}>{l.jobNumber || "—"}</td>
+                                    <td className="pr-4 py-1">{l.cbm.toFixed(3)}{l.estimated ? " *" : ""}</td>
+                                    <td className="pr-4 py-1">{fmt(l.batchDate)}</td>
+                                    <td className="pr-4 py-1" style={{ color: colors.inkFaint }}>{l.detail}</td>
+                                    <td className="py-1 text-right font-semibold">{money(l.amount)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+              {monthlySummary.clients.length > 0 && (
+                <tfoot>
+                  <tr style={{ borderTop: `2px solid ${colors.line}` }}>
+                    <td className="px-3 py-2 text-right font-semibold" style={{ color: colors.ink, fontFamily: FONT_DISPLAY }}>{t.billingGrandTotal}</td>
+                    <td className="px-3 py-2 font-bold" style={{ color: colors.ink }}>{money(monthlySummary.grandTotal)}</td>
+                    <td></td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+          <div className="text-xs" style={{ color: colors.inkFaint }}>{t.billingMonthFootnote}</div>
+        </>
+      )}
+
+      {mode === "search" && (
+      <>
+        <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
         <table className="w-full text-sm" style={{ background: colors.surface }}>
           <thead>
             <tr style={{ background: colors.surfaceDim }}>
@@ -2814,8 +2971,10 @@ function BillingPanel({ items, colors, t, lang }) {
             </tfoot>
           )}
         </table>
-      </div>
-      <div className="text-xs" style={{ color: colors.inkFaint }}>{t.billingFootnote}</div>
+        </div>
+        <div className="text-xs" style={{ color: colors.inkFaint }}>{t.billingFootnote}</div>
+      </>
+      )}
     </div>
   );
 }
