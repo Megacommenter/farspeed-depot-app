@@ -810,8 +810,9 @@ const TEXT = {
     addCombinedDeliveryBtn: "Record Combined Delivery",
     combinedPrintLabel: "Combined Delivery Job Sheet",
     addMoreBatchesBtn: "+ Add more batches to this delivery",
-    addMoreBatchesSearchPlaceholder: "Search by client, project, unit no., or job no.",
-    addMoreBatchesNoneMsg: "No other entries available to add \u2014 nothing else is at the depot or partially delivered.",
+    addMoreBatchesSearchPlaceholder: "Search by unit no. or job no.",
+    addMoreBatchesScopeNote: (site) => `Showing other entries at ${site} only.`,
+    addMoreBatchesNoneMsg: "No other entries at this same construction site are available to add.",
     plannedWasText: (date) => ` · planned delivery was ${date}`,
     progressOf: "of",
     progressDeliveredSoFar: "unit(s) delivered so far",
@@ -1244,8 +1245,9 @@ const TEXT = {
     addCombinedDeliveryBtn: "記錄合併送貨",
     combinedPrintLabel: "合併送貨工單",
     addMoreBatchesBtn: "+ 加入更多批次到此送貨記錄",
-    addMoreBatchesSearchPlaceholder: "按客戶、項目、單位編號或工單號搜尋",
-    addMoreBatchesNoneMsg: "沒有其他可加入的記錄 — 沒有其他項目在倉或部分送出。",
+    addMoreBatchesSearchPlaceholder: "按單位編號或工單號搜尋",
+    addMoreBatchesScopeNote: (site) => `只顯示同屬 ${site} 的其他記錄。`,
+    addMoreBatchesNoneMsg: "沒有其他屬於同一地盤的記錄可供加入。",
     plannedWasText: (date) => ` · 預計送貨日期為 ${date}`,
     progressOf: "／",
     progressDeliveredSoFar: "件已送出",
@@ -2110,14 +2112,14 @@ function DeliveryForm({ deliveryItems, onAddDelivery, onAddCombinedDelivery, onD
   const isCombined = allDeliveryItems.length > 1;
   const addCandidates = useMemo(() => {
     const excluded = new Set(allDeliveryItems.map((i) => i.id));
-    return items.filter((i) => !excluded.has(i.id) && ["at_depot", "partial"].includes(deriveStatus(i)));
-  }, [items, allDeliveryItems]);
+    const siteKey = (i) => (i.constructionSite || i.project || "").trim().toLowerCase();
+    const targetSite = siteKey(firstItem);
+    return items.filter((i) => !excluded.has(i.id) && ["at_depot", "partial"].includes(deriveStatus(i)) && (!targetSite || siteKey(i) === targetSite));
+  }, [items, allDeliveryItems, firstItem]);
   const addFiltered = addSearch.trim()
     ? addCandidates.filter((i) => {
         const q = addSearch.toLowerCase();
-        return i.client?.toLowerCase().includes(q) || i.project?.toLowerCase().includes(q) ||
-          i.constructionSite?.toLowerCase().includes(q) || i.unitCode?.toLowerCase().includes(q) ||
-          i.jobNumber?.toLowerCase().includes(q) || i.id?.toLowerCase().includes(q);
+        return i.unitCode?.toLowerCase().includes(q) || i.jobNumber?.toLowerCase().includes(q) || i.id?.toLowerCase().includes(q);
       })
     : addCandidates;
 
@@ -2444,6 +2446,9 @@ function DeliveryForm({ deliveryItems, onAddDelivery, onAddCombinedDelivery, onD
           </button>
         ) : (
           <div className="rounded p-3" style={{ border: `1px solid ${colors.line}`, background: colors.surfaceDim }}>
+            <div className="text-xs mb-2" style={{ color: colors.inkFaint }}>
+              {t.addMoreBatchesScopeNote(firstItem.constructionSite || firstItem.project || "")}
+            </div>
             <div className="flex items-center gap-2 mb-2">
               <input
                 autoFocus
