@@ -705,14 +705,14 @@ const TEXT = {
     excelNoRowsMsg: "No rows found in that file.",
 
     badgePendingCollection: "PENDING COLLECTION",
-    badgeLfdOverdue: (d) => `LFD OVERDUE ${d}D`,
-    badgeLfdSoon: (d) => `LFD IN ${d}D`,
-    badgeBillable: (d) => `BILLABLE · ${d}D`,
-    badgeFree: (d) => `FREE · ${d}D LEFT`,
+    badgeLfdOverdue: (d) => `LFD OVERDUE ${d} DAYS`,
+    badgeLfdSoon: (d) => `LFD IN ${d} DAYS`,
+    badgeBillable: (d) => `BILLABLE · ${d} DAYS`,
+    badgeFree: (d) => `FREE · ${d} DAYS LEFT`,
     badgePartial: (del, tot, extra) => `PARTIAL ${del}/${tot}${extra}`,
     badgeDelivered: (extra) => `DELIVERED${extra}`,
-    badgeBilledSuffix: (d) => ` · BILLED ${d}D`,
-    badgeBillableSuffix: (d) => ` · ${d}D`,
+    badgeBilledSuffix: (d) => ` · BILLED ${d} DAYS`,
+    badgeBillableSuffix: (d) => ` · ${d} DAYS`,
     badgeDupOf: (id) => `DUP OF ${id}`,
     badgeNew: "NEW",
 
@@ -2456,12 +2456,12 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
                 <td style={{ padding: "0 8px", fontSize: 16 }}>
                   {template === "Pick-up" ? (
                     <>
-                      簽署確認收妥 / Signature:&nbsp;______________________________________&nbsp;(車輛號碼 Vehicle No.:____________ )
+                      簽署確認收妥 / Signature:&nbsp;______________________________&nbsp;(車輛號碼 Vehicle&nbsp;No.:________ )
                       <br /><br /><br />
                     </>
                   ) : (
                     <>
-                      客戶簽署確認 / Customer signature:&nbsp;__________________________________________&nbsp;(工作妥當及完成)
+                      客戶簽署確認 / Customer&nbsp;signature:&nbsp;______________________________&nbsp;(工作妥當及完成)
                       <br /><br /><br /><br />
                     </>
                   )}
