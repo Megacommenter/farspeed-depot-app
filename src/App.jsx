@@ -744,6 +744,7 @@ const TEXT = {
     colClient: "Client",
     colProjectSite: "Project / Site",
     colUnit: "Unit",
+    deliverySearchPlaceholder: "Client, project, unit no., job no., or case no.",
     colDepot: "Depot",
     colDepotArrival: "Depot Arrival",
     colStatus: "Status",
@@ -1165,6 +1166,7 @@ const TEXT = {
     colClient: "客戶",
     colProjectSite: "項目/地盤",
     colUnit: "單位編號",
+    deliverySearchPlaceholder: "客戶、項目、單位編號、工單號或件號",
     colDepot: "貨倉",
     colDepotArrival: "抵倉日期",
     colStatus: "狀態",
@@ -3856,6 +3858,10 @@ export default function FarspeedInventory() {
   const [view, setView] = useState("dashboard");
   const [editing, setEditing] = useState(null);
   const [exitingItem, setExitingItem] = useState(null);
+  const [deliverySearch, setDeliverySearch] = useState("");
+  const [deliveryFilterClient, setDeliveryFilterClient] = useState("All");
+  const [deliveryFilterDepot, setDeliveryFilterDepot] = useState("All");
+  const [deliveryFilterStatus, setDeliveryFilterStatus] = useState("All");
   const [printJobSheet, setPrintJobSheet] = useState(null);
   const [expandedRowId, setExpandedRowId] = useState(null);
   const [siteTotalsOpen, setSiteTotalsOpen] = useState(true);
@@ -4075,6 +4081,20 @@ export default function FarspeedInventory() {
   const atDepot = activeItemsList.filter((i) => deriveStatus(i) === "at_depot");
   const partial = activeItemsList.filter((i) => deriveStatus(i) === "partial");
   const openForDelivery = [...atDepot, ...partial];
+  const filteredForDelivery = openForDelivery.filter((i) => {
+    if (deliveryFilterClient !== "All" && i.client !== deliveryFilterClient) return false;
+    if (deliveryFilterDepot !== "All" && i.depot !== deliveryFilterDepot) return false;
+    if (deliveryFilterStatus !== "All" && deriveStatus(i) !== deliveryFilterStatus) return false;
+    if (!deliverySearch.trim()) return true;
+    const q = deliverySearch.toLowerCase();
+    return (
+      i.client?.toLowerCase().includes(q) || i.project?.toLowerCase().includes(q) ||
+      i.constructionSite?.toLowerCase().includes(q) || i.unitCode?.toLowerCase().includes(q) ||
+      i.jobNumber?.toLowerCase().includes(q) || i.id?.toLowerCase().includes(q) ||
+      i.shkNumber?.toLowerCase().includes(q) ||
+      (i.packages || []).some((p) => (p.code || "").toLowerCase().includes(q))
+    );
+  });
   const pending = activeItemsList.filter((i) => deriveStatus(i) === "pending_collection");
   const billable = openForDelivery.filter((i) => storageInfo(i)?.billable);
   const lfdWarnings = activeItemsList.filter((i) => { const a = lfdAlert(i); return a && (a.level === "soon" || a.level === "overdue"); });
@@ -4602,25 +4622,48 @@ export default function FarspeedInventory() {
                 employees={employees} currentUser={currentUser} items={items} colors={colors} t={t} lang={lang} />
             ) : (
               <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
-                <div className="px-4 py-3 text-sm" style={{ background: colors.surfaceDim, color: colors.inkFaint }}>{t.selectItemMsg}</div>
+                <div className="px-4 py-3 flex flex-wrap gap-3 items-end" style={{ background: colors.surfaceDim }}>
+                  <Field label={t.searchLabel} colors={colors}>
+                    <input className={inputClass} style={{ ...inputStyleFor(colors), minWidth: 220 }} placeholder={t.deliverySearchPlaceholder} value={deliverySearch} onChange={(e) => setDeliverySearch(e.target.value)} />
+                  </Field>
+                  <Field label={t.clientLabel} colors={colors}>
+                    <select className={inputClass} style={inputStyleFor(colors)} value={deliveryFilterClient} onChange={(e) => setDeliveryFilterClient(e.target.value)}>
+                      <option>All</option>
+                      {CLIENTS.map((c) => <option key={c}>{c}</option>)}
+                    </select>
+                  </Field>
+                  <Field label={t.depotLabel} colors={colors}>
+                    <select className={inputClass} style={inputStyleFor(colors)} value={deliveryFilterDepot} onChange={(e) => setDeliveryFilterDepot(e.target.value)}>
+                      <option>All</option>
+                      {DEPOTS.map((d) => <option key={d} value={d}>{depotLabel(d, lang)}</option>)}
+                    </select>
+                  </Field>
+                  <Field label={t.statusLabel} colors={colors}>
+                    <select className={inputClass} style={inputStyleFor(colors)} value={deliveryFilterStatus} onChange={(e) => setDeliveryFilterStatus(e.target.value)}>
+                      <option value="All">{t.statusAll}</option>
+                      <option value="at_depot">{t.statusAtDepot}</option>
+                      <option value="partial">{t.statusPartial}</option>
+                    </select>
+                  </Field>
+                </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm" style={{ background: colors.surface }}>
                     <thead>
                       <tr style={{ background: colors.surfaceDim }}>
-                        {[t.colId, t.colClient, t.colProjectSite, t.colDepot, t.colDepotArrival, t.colStatus, ""].map((h) => (
+                        {[t.colClient, t.colProjectSite, t.colUnit, t.colDepot, t.colDepotArrival, t.colStatus, ""].map((h) => (
                           <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {openForDelivery.length === 0 && (
+                      {filteredForDelivery.length === 0 && (
                         <tr><td colSpan={7} className="px-3 py-6 text-center text-sm" style={{ color: colors.inkFaint }}>{t.nothingAtDepotMsg}</td></tr>
                       )}
-                      {openForDelivery.map((i) => (
+                      {filteredForDelivery.map((i) => (
                         <tr key={i.id} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
-                          <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{i.id}</td>
                           <td className="px-3 py-2">{i.client}</td>
                           <td className="px-3 py-2 max-w-[220px] truncate">{i.project}</td>
+                          <td className="px-3 py-2">{i.unitCode || "—"}</td>
                           <td className="px-3 py-2 whitespace-nowrap">{depotDisplay(i.depot, lang)}</td>
                           <td className="px-3 py-2">{fmt(i.depotArrivalDate)}</td>
                           <td className="px-3 py-2"><StatusBadge item={i} colors={colors} t={t} /></td>
