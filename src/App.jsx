@@ -1137,6 +1137,28 @@ const TEXT = {
     pricingColRate: "Rate",
     pricingPerCbm: "/ CBM",
     pricingResetBtn: "Reset to default",
+    tabLegacy: "Legacy Uploads",
+    legacyUploadTitle: "Legacy Upload",
+    legacyUploadDesc: "Bulk-upload old Devan, CFS, Delivery, Shifting, Hoisting and other job sheet files. Devan/CFS files can create a real inventory entry (optionally already marked delivered, for closed historical jobs); every file type is archived and kept searchable below regardless.",
+    legacyChooseFilesBtn: "Choose Files\u2026",
+    legacyDocType: "Doc Type",
+    legacyProjectSite: "Project / Site",
+    legacyUnitCode: "Unit / Lift No.",
+    legacyPkgs: "Packages",
+    legacyWeightKg: "Weight (kg)",
+    legacyCbm: "CBM",
+    legacyAlreadyDelivered: "Already delivered \u2014 close this job immediately instead of leaving it at the depot",
+    legacyProcessBtn: (n) => `Process ${n} File${n === 1 ? "" : "s"}`,
+    legacyProcessingMsg: "Processing\u2026",
+    legacyResultsMsg: (archived, created) => `Archived ${archived} file${archived === 1 ? "" : "s"}${created > 0 ? ` \u2014 created ${created} inventory ${created === 1 ? "entry" : "entries"}` : ""}.`,
+    legacyImportedNote: (name) => `Imported from legacy file: ${name}`,
+    legacyAutoClosedNote: "Auto-closed on legacy import (marked already delivered).",
+    legacyBacklogTitle: "Backlog",
+    legacyBacklogDesc: "Every file uploaded through Legacy Upload, whether it created an inventory entry or was archived only.",
+    legacyBacklogNoneMsg: "No legacy files uploaded yet.",
+    legacyColFile: "File",
+    legacyColLinked: "Linked Entry",
+    legacyArchivedOnly: "Archived only",
   },
   zh: {
     appSubtitle: "倉庫及貨物存倉表",
@@ -1572,6 +1594,28 @@ const TEXT = {
     pricingColRate: "收費",
     pricingPerCbm: "／ CBM",
     pricingResetBtn: "回復預設",
+    tabLegacy: "舊資料上載",
+    legacyUploadTitle: "舊資料上載",
+    legacyUploadDesc: "批量上載舊有的拆櫃、CFS、送貨、調位、吊運等工單檔案。拆櫃/CFS檔案可建立真實存倉記錄（可選擇直接標記為已送出，適合已完結的舊工作）；不論類型，所有檔案均會存檔並可於下方搜尋。",
+    legacyChooseFilesBtn: "選擇檔案…",
+    legacyDocType: "工單類型",
+    legacyProjectSite: "項目／地盤",
+    legacyUnitCode: "單位／升降機編號",
+    legacyPkgs: "件數",
+    legacyWeightKg: "重量 (kg)",
+    legacyCbm: "CBM",
+    legacyAlreadyDelivered: "已送出 — 直接完結此工作，不留在倉內",
+    legacyProcessBtn: (n) => `處理 ${n} 個檔案`,
+    legacyProcessingMsg: "處理中…",
+    legacyResultsMsg: (archived, created) => `已存檔 ${archived} 個檔案${created > 0 ? `，並建立 ${created} 項存倉記錄` : ""}。`,
+    legacyImportedNote: (name) => `由舊資料檔案匯入：${name}`,
+    legacyAutoClosedNote: "舊資料匯入時自動完結（標記為已送出）。",
+    legacyBacklogTitle: "待處理記錄",
+    legacyBacklogDesc: "所有透過舊資料上載的檔案，不論是否建立了存倉記錄。",
+    legacyBacklogNoneMsg: "尚未上載任何舊資料檔案。",
+    legacyColFile: "檔案",
+    legacyColLinked: "連結記錄",
+    legacyArchivedOnly: "僅存檔",
   },
 };
 
@@ -3411,7 +3455,291 @@ function BillingPanel({ items, colors, t, lang }) {
   );
 }
 
-function DirectoryPanel({ directory, setDirectory, employees, setEmployees, freeRules, setFreeRules, cbmRates, setCbmRates, colors, t }) {
+const LEGACY_DOC_TYPES = JOB_SHEET_TEMPLATES;
+function guessDocTypeFromName(name) {
+  const n = (name || "").toLowerCase();
+  const map = [
+    ["devan", "Devan"], ["cfs", "CFS"], ["delivery", "Delivery"],
+    ["shifting", "Shifting"], ["hoisting", "Hoisting"], ["day_work", "Day Work"], ["day work", "Day Work"],
+    ["dismantle", "Dismantle"], ["dis_n_removal", "Dis & Removal of Lifting Tools"], ["removal", "Dis & Removal of Lifting Tools"],
+    ["job_cancel", "Job Cancel"], ["cancel", "Job Cancel"], ["pick-up", "Pick-up"], ["pickup", "Pick-up"],
+    ["re-position", "Re-position"], ["reposition", "Re-position"], ["position", "Position"],
+    ["retain", "Retain of Safety Ropes"],
+  ];
+  for (const [needle, type] of map) if (n.includes(needle)) return type;
+  return "Devan";
+}
+function guessJobNumberFromName(name) {
+  const m = (name || "").match(/\b(\d{6,8})\b/);
+  return m ? m[1] : "";
+}
+
+function LegacyUploadRow({ row, onChange, onRemove, colors, t }) {
+  const inputStyle = inputStyleFor(colors);
+  const set = (k) => (e) => onChange({ ...row, [k]: e.target.value });
+  const itemized = JOB_SHEET_ITEMIZED.includes(row.docType);
+  return (
+    <div className="rounded p-3 flex flex-col gap-3" style={{ border: `1px solid ${colors.line}`, background: colors.surface }}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="text-sm font-semibold" style={{ color: colors.ink, wordBreak: "break-all" }}>{row.file.name}</div>
+        <button type="button" className="text-xs font-semibold whitespace-nowrap" style={{ color: colors.red }} onClick={onRemove}>{t.deleteBtn}</button>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Field label={t.legacyDocType} colors={colors}>
+          <select className={inputClass} style={inputStyle} value={row.docType} onChange={set("docType")}>
+            {LEGACY_DOC_TYPES.map((tp) => <option key={tp} value={tp}>{tp}</option>)}
+          </select>
+        </Field>
+        <Field label={t.clientLabel} colors={colors}>
+          <select className={inputClass} style={inputStyle} value={row.client} onChange={set("client")}>
+            {CLIENTS.map((c) => <option key={c}>{c}</option>)}
+          </select>
+        </Field>
+        <Field label={t.legacyProjectSite} colors={colors}>
+          <input className={inputClass} style={inputStyle} value={row.project} onChange={set("project")} />
+        </Field>
+        <Field label={t.fJobNumber} colors={colors}>
+          <input className={inputClass} style={inputStyle} value={row.jobNumber} onChange={set("jobNumber")} />
+        </Field>
+        <Field label={t.colDate} colors={colors}>
+          <input type="date" className={inputClass} style={inputStyle} value={row.date} onChange={set("date")} />
+        </Field>
+        {itemized && (
+          <>
+            <Field label={t.legacyUnitCode} colors={colors}>
+              <input className={inputClass} style={inputStyle} value={row.unitCode} onChange={set("unitCode")} />
+            </Field>
+            <Field label={t.legacyPkgs} colors={colors}>
+              <input type="number" min="0" className={inputClass} style={inputStyle} value={row.packageCount} onChange={set("packageCount")} />
+            </Field>
+            <Field label={t.legacyWeightKg} colors={colors}>
+              <input type="number" min="0" className={inputClass} style={inputStyle} value={row.weightKg} onChange={set("weightKg")} />
+            </Field>
+            <Field label={t.legacyCbm} colors={colors}>
+              <input type="number" min="0" step="0.001" className={inputClass} style={inputStyle} value={row.volumeCbm} onChange={set("volumeCbm")} />
+            </Field>
+          </>
+        )}
+      </div>
+      {(row.docType === "Devan" || row.docType === "CFS") && (
+        <label className="flex items-center gap-2 text-xs" style={{ color: colors.inkFaint }}>
+          <input type="checkbox" checked={row.alreadyDelivered} onChange={(e) => onChange({ ...row, alreadyDelivered: e.target.checked })} />
+          {t.legacyAlreadyDelivered}
+        </label>
+      )}
+    </div>
+  );
+}
+
+function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory, onLegacyImport, colors, t, lang }) {
+  const [rows, setRows] = useState([]);
+  const [processing, setProcessing] = useState(false);
+  const [results, setResults] = useState(null);
+  const [backlogSearch, setBacklogSearch] = useState("");
+  const [backlogTypeFilter, setBacklogTypeFilter] = useState("All");
+  const fileInputRef = React.useRef(null);
+
+  function handleFilesSelected(e) {
+    const files = Array.from(e.target.files || []);
+    const newRows = files.map((file) => ({
+      file,
+      docType: guessDocTypeFromName(file.name),
+      client: CLIENTS[0],
+      project: "",
+      jobNumber: guessJobNumberFromName(file.name),
+      date: "",
+      unitCode: "",
+      packageCount: "",
+      weightKg: "",
+      volumeCbm: "",
+      alreadyDelivered: true,
+    }));
+    setRows((prev) => [...prev, ...newRows]);
+    setResults(null);
+    e.target.value = "";
+  }
+
+  function updateRow(idx, next) {
+    setRows((prev) => prev.map((r, i) => (i === idx ? next : r)));
+  }
+  function removeRow(idx) {
+    setRows((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  async function processAll() {
+    setProcessing(true);
+    const archiveEntries = [];
+    const importRows = [];
+    const rowToImportIdx = [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const id = `LEG${Date.now()}${Math.floor(Math.random() * 1000)}-${i}`;
+      let fileUri = null;
+      try {
+        fileUri = await compressFileToDataUri(row.file);
+      } catch (e) { /* archive without file if compression fails */ }
+      if (fileUri) {
+        try { await storageSet(`legacyDoc:${id}`, JSON.stringify({ uri: fileUri, name: row.file.name, at: todayStr() })); } catch (e) {}
+      }
+      const itemized = JOB_SHEET_ITEMIZED.includes(row.docType);
+      let linkedItemIndex = null;
+      if (itemized && row.docType !== "Delivery" && (row.client && (row.project || row.jobNumber))) {
+        const dirMatch = (directory || []).find((s) => s.siteEn && s.siteEn.toLowerCase() === row.project.toLowerCase());
+        const newItem = {
+          ...emptyForm(),
+          client: row.client,
+          project: row.project,
+          constructionSite: dirMatch ? dirMatch.siteZh : "",
+          jobNumber: row.jobNumber,
+          depotArrivalDate: row.date,
+          unitCode: row.unitCode,
+          packageCount: row.packageCount || "",
+          weightKg: row.weightKg || "",
+          volumeCbm: row.volumeCbm || "",
+          arrivingType: row.docType === "CFS" ? "CFS" : "Devan",
+          notes: t.legacyImportedNote(row.file.name),
+          deliveries: row.alreadyDelivered && row.date
+            ? [{ id: `D${Date.now()}${i}`, date: row.date, deliveredTo: row.project, receivedBy: "", jobNumber: row.jobNumber, recordedBy: "", notes: t.legacyAutoClosedNote, packageCount: row.packageCount || 1 }]
+            : [],
+        };
+        linkedItemIndex = importRows.length;
+        importRows.push(newItem);
+        rowToImportIdx.push(i);
+      }
+      archiveEntries.push({
+        id, fileName: row.file.name, docType: row.docType, client: row.client, project: row.project,
+        jobNumber: row.jobNumber, date: row.date, uploadedAt: todayStr(), hasFile: !!fileUri,
+        linkedItemId: null, __linkedItemIndex: linkedItemIndex,
+      });
+    }
+    const createdItems = importRows.length > 0 ? onLegacyImport(importRows) : [];
+    let ci = 0;
+    for (const entry of archiveEntries) {
+      if (entry.__linkedItemIndex != null) {
+        entry.linkedItemId = createdItems[ci] ? createdItems[ci].id : null;
+        ci++;
+      }
+      delete entry.__linkedItemIndex;
+    }
+    setLegacyArchive((prev) => [...archiveEntries, ...prev]);
+    setResults({ archived: archiveEntries.length, created: createdItems.length });
+    setRows([]);
+    setProcessing(false);
+  }
+
+  const backlogFiltered = (legacyArchive || []).filter((r) => {
+    if (backlogTypeFilter !== "All" && r.docType !== backlogTypeFilter) return false;
+    if (!backlogSearch.trim()) return true;
+    const q = backlogSearch.toLowerCase();
+    return r.fileName?.toLowerCase().includes(q) || r.client?.toLowerCase().includes(q) ||
+      r.project?.toLowerCase().includes(q) || r.jobNumber?.toLowerCase().includes(q) ||
+      r.linkedItemId?.toLowerCase().includes(q);
+  });
+
+  async function viewArchivedFile(id) {
+    try {
+      const res = await storageGet(`legacyDoc:${id}`);
+      if (!res) return;
+      const { uri, name } = JSON.parse(res.value);
+      const w = window.open("", "_blank");
+      if (!w) return;
+      if (uri.startsWith("data:application/pdf")) {
+        w.document.write(`<title>${name}</title><embed src="${uri}" type="application/pdf" style="width:100%;height:100vh;">`);
+      } else {
+        w.document.write(`<title>${name}</title><body style="margin:0;background:#333;display:flex;justify-content:center;"><img src="${uri}" style="max-width:100%;height:auto;"></body>`);
+      }
+    } catch (e) { /* noop */ }
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+        <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.legacyUploadTitle}</h3>
+        <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.legacyUploadDesc}</p>
+        <input ref={fileInputRef} type="file" multiple accept=".xlsx,.xls,.pdf,image/*" className="hidden" onChange={handleFilesSelected} />
+        <button
+          className="px-3 py-1.5 rounded text-sm font-semibold"
+          style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}
+          onClick={() => fileInputRef.current && fileInputRef.current.click()}
+        >
+          {t.legacyChooseFilesBtn}
+        </button>
+      </div>
+
+      {rows.length > 0 && (
+        <div className="flex flex-col gap-3">
+          {rows.map((row, idx) => (
+            <LegacyUploadRow key={idx} row={row} onChange={(next) => updateRow(idx, next)} onRemove={() => removeRow(idx)} colors={colors} t={t} />
+          ))}
+          <div className="flex gap-2">
+            <button
+              className="px-4 py-2 rounded text-sm font-semibold"
+              style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY, opacity: processing ? 0.6 : 1 }}
+              disabled={processing}
+              onClick={processAll}
+            >
+              {processing ? t.legacyProcessingMsg : t.legacyProcessBtn(rows.length)}
+            </button>
+          </div>
+        </div>
+      )}
+      {results && (
+        <div className="px-3 py-2 rounded text-sm" style={{ background: colors.greenSoft, color: colors.green }}>
+          {t.legacyResultsMsg(results.archived, results.created)}
+        </div>
+      )}
+
+      <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+        <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.legacyBacklogTitle}</h3>
+        <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.legacyBacklogDesc}</p>
+        <div className="flex flex-wrap gap-3 items-end">
+          <Field label={t.searchLabel} colors={colors}>
+            <input className={inputClass} style={{ ...inputStyleFor(colors), minWidth: 220 }} value={backlogSearch} onChange={(e) => setBacklogSearch(e.target.value)} />
+          </Field>
+          <Field label={t.legacyDocType} colors={colors}>
+            <select className={inputClass} style={inputStyleFor(colors)} value={backlogTypeFilter} onChange={(e) => setBacklogTypeFilter(e.target.value)}>
+              <option>All</option>
+              {LEGACY_DOC_TYPES.map((tp) => <option key={tp}>{tp}</option>)}
+            </select>
+          </Field>
+        </div>
+      </div>
+
+      <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+        <table className="w-full text-sm" style={{ background: colors.surface }}>
+          <thead>
+            <tr style={{ background: colors.surfaceDim }}>
+              {[t.legacyColFile, t.legacyDocType, t.clientLabel, t.legacyProjectSite, t.fJobNumber, t.colDate, t.legacyColLinked, ""].map((h) => (
+                <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {backlogFiltered.length === 0 && (
+              <tr><td colSpan={8} className="px-3 py-6 text-center text-sm" style={{ color: colors.inkFaint }}>{t.legacyBacklogNoneMsg}</td></tr>
+            )}
+            {backlogFiltered.map((r) => (
+              <tr key={r.id} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
+                <td className="px-3 py-2 max-w-[200px] truncate">{r.fileName}</td>
+                <td className="px-3 py-2">{r.docType}</td>
+                <td className="px-3 py-2">{r.client}</td>
+                <td className="px-3 py-2 max-w-[180px] truncate">{r.project}</td>
+                <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{r.jobNumber || "—"}</td>
+                <td className="px-3 py-2">{r.date ? fmt(r.date) : "—"}</td>
+                <td className="px-3 py-2">{r.linkedItemId ? <span style={{ color: colors.green, fontWeight: 600 }}>{r.linkedItemId}</span> : <span style={{ color: colors.inkFaint }}>{t.legacyArchivedOnly}</span>}</td>
+                <td className="px-3 py-2 text-right">
+                  {r.hasFile && <button className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => viewArchivedFile(r.id)}>{t.signedDocViewBtn}</button>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function DirectoryPanel({ directory, setDirectory, employees, setEmployees, freeRules, setFreeRules, cbmRates, setCbmRates, legacyArchive, setLegacyArchive, items, onLegacyImport, colors, t, lang }) {
   const [mode, setMode] = useState("sites");
   const [editingSite, setEditingSite] = useState(null);
   const [siteForm, setSiteForm] = useState(null);
@@ -3478,7 +3806,7 @@ function DirectoryPanel({ directory, setDirectory, employees, setEmployees, free
   return (
     <div className="flex flex-col gap-4">
       <div className="flex gap-1 rounded-lg p-1 w-fit" style={{ background: colors.surfaceDim }}>
-        {[["sites", t.tabSitesAccounts], ["employees", t.tabEmployees], ["freedays", t.tabFreeStorage], ["pricing", t.tabPricing]].map(([k, label]) => (
+        {[["sites", t.tabSitesAccounts], ["employees", t.tabEmployees], ["freedays", t.tabFreeStorage], ["pricing", t.tabPricing], ["legacy", t.tabLegacy]].map(([k, label]) => (
           <button key={k} onClick={() => setMode(k)} className="px-3 py-1.5 rounded text-sm font-semibold"
             style={{ fontFamily: FONT_DISPLAY, background: mode === k ? colors.surface : "transparent", color: colors.ink }}>
             {label}
@@ -3585,6 +3913,10 @@ function DirectoryPanel({ directory, setDirectory, employees, setEmployees, free
             </table>
           </div>
         </div>
+      )}
+
+      {mode === "legacy" && (
+        <LegacyUploadsPanel legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} directory={directory} onLegacyImport={onLegacyImport} colors={colors} t={t} lang={lang} />
       )}
 
       {mode === "sites" && (
@@ -4302,6 +4634,7 @@ export default function FarspeedInventory() {
   const [employees, setEmployeesState] = useState([]);
   const [freeRules, setFreeRulesState] = useState([]);
   const [cbmRates, setCbmRatesState] = useState({});
+  const [legacyArchive, setLegacyArchiveState] = useState([]);
   const [currentUser, setCurrentUserState] = useState("");
   const [filterClient, setFilterClient] = useState("All");
   const [filterStatus, setFilterStatus] = useState("All");
@@ -4355,6 +4688,12 @@ export default function FarspeedInventory() {
         setCbmRateOverridesGlobal({});
       }
       try {
+        const res = await storageGet("legacyArchive");
+        setLegacyArchiveState(res ? JSON.parse(res.value) : []);
+      } catch (e) {
+        setLegacyArchiveState([]);
+      }
+      try {
         setCurrentUserState(window.localStorage.getItem("farspeed_current_user") || "");
       } catch (e) {}
       setLoaded(true);
@@ -4388,6 +4727,13 @@ export default function FarspeedInventory() {
       const next = typeof updater === "function" ? updater(prev) : updater;
       storageSet("cbmRates", JSON.stringify(next), true);
       setCbmRateOverridesGlobal(next);
+      return next;
+    });
+  }
+  function setLegacyArchive(updater) {
+    setLegacyArchiveState((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      storageSet("legacyArchive", JSON.stringify(next));
       return next;
     });
   }
@@ -4488,6 +4834,18 @@ export default function FarspeedInventory() {
     });
     persist([...items, ...newItems]);
     setView("inventory");
+  }
+
+  // Same as handleImportRows but stays on the current screen and returns the created
+  // items (with their assigned FS ids) - used by the Legacy Uploads bulk importer.
+  function handleLegacyImport(rows) {
+    let counter = items.reduce((m, i) => Math.max(m, i.numericId || 0), 0);
+    const newItems = rows.map((r) => {
+      counter += 1;
+      return { ...r, numericId: counter, id: `FS-${String(counter).padStart(4, "0")}`, createdAt: todayStr() };
+    });
+    persist([...items, ...newItems]);
+    return newItems;
   }
 
   function handleKeepOne(groupIds, keepId) {
@@ -5208,7 +5566,7 @@ export default function FarspeedInventory() {
         )}
 
         {view === "directory" && (
-          <DirectoryPanel directory={directory} setDirectory={setDirectory} employees={employees} setEmployees={setEmployees} freeRules={freeRules} setFreeRules={setFreeRules} cbmRates={cbmRates} setCbmRates={setCbmRates} colors={colors} t={t} />
+          <DirectoryPanel directory={directory} setDirectory={setDirectory} employees={employees} setEmployees={setEmployees} freeRules={freeRules} setFreeRules={setFreeRules} cbmRates={cbmRates} setCbmRates={setCbmRates} legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} onLegacyImport={handleLegacyImport} colors={colors} t={t} lang={lang} />
         )}
 
         {view === "joblog" && (
