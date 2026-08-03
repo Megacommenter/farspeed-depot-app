@@ -48,6 +48,27 @@ const DARK_COLORS = {
 };
 
 const CLIENTS = ["OTIS", "Schindler", "Kone", "TK Elevator", "Mitsubishi", "Fujitec", "Chevalier", "Sigma", "Lecturn", "Hitachi", "Other"];
+const DEFAULT_CBM_RATES = {
+  Chevalier: 110,
+  Fujitec: 165,
+  Kone: 162,
+  Mitsubishi: 147,
+  Schindler: 145,
+  Sigma: 160,
+  "TK Elevator": 145,
+  OTIS: 160,
+};
+let cbmRateOverrides = {};
+function setCbmRateOverridesGlobal(rates) {
+  cbmRateOverrides = rates && typeof rates === "object" ? rates : {};
+}
+function cbmRateFor(client) {
+  if (cbmRateOverrides && cbmRateOverrides[client] != null && cbmRateOverrides[client] !== "") {
+    const v = Number(cbmRateOverrides[client]);
+    if (v >= 0) return v;
+  }
+  return DEFAULT_CBM_RATES[client] != null ? DEFAULT_CBM_RATES[client] : null;
+}
 const ITEM_TYPES = ["Container", "Separate Items"];
 const DEPOTS = ["Farspeed Depot 1", "Farspeed Depot 3"];
 const DEPOT_LABELS_ZH = {
@@ -924,6 +945,13 @@ const TEXT = {
     freeColProject: "Project match",
     freeColDays: "Free days",
     freeStorageNoneMsg: "No project rules yet — standard 14 days applies (Schindler: 21 days).",
+    tabPricing: "CBM Pricing",
+    pricingTitle: "CBM Rate per Client",
+    pricingDesc: "Storage in the Warehouse and Open Yard is billed by CBM. These rates apply per CBM of storage; KG is only used when calculating Delivery and CFS charges. Leave a field blank to use the default rate shown as its placeholder.",
+    pricingColClient: "Client",
+    pricingColRate: "Rate",
+    pricingPerCbm: "/ CBM",
+    pricingResetBtn: "Reset to default",
   },
   zh: {
     appSubtitle: "倉庫及貨物存倉表",
@@ -1309,6 +1337,13 @@ const TEXT = {
     freeColProject: "項目條件",
     freeColDays: "免費日數",
     freeStorageNoneMsg: "未有項目規則 — 採用標準14日（Schindler 21日）。",
+    tabPricing: "CBM 收費",
+    pricingTitle: "各客戶 CBM 收費",
+    pricingDesc: "貨倉及露天場地存倉均以CBM計算收費，此處設定每CBM的收費；KG只用於計算送貨及CFS費用。留空即採用預設收費（顯示於欄位提示中）。",
+    pricingColClient: "客戶",
+    pricingColRate: "收費",
+    pricingPerCbm: "／ CBM",
+    pricingResetBtn: "回復預設",
   },
 };
 
@@ -2481,7 +2516,7 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
   );
 }
 
-function DirectoryPanel({ directory, setDirectory, employees, setEmployees, freeRules, setFreeRules, colors, t }) {
+function DirectoryPanel({ directory, setDirectory, employees, setEmployees, freeRules, setFreeRules, cbmRates, setCbmRates, colors, t }) {
   const [mode, setMode] = useState("sites");
   const [editingSite, setEditingSite] = useState(null);
   const [siteForm, setSiteForm] = useState(null);
@@ -2498,6 +2533,17 @@ function DirectoryPanel({ directory, setDirectory, employees, setEmployees, free
   }
   function deleteFreeRule(id) {
     setFreeRules((rs) => (rs || []).filter((r) => r.id !== id));
+  }
+
+  function setRate(client, value) {
+    setCbmRates((r) => ({ ...(r || {}), [client]: value }));
+  }
+  function resetRate(client) {
+    setCbmRates((r) => {
+      const next = { ...(r || {}) };
+      delete next[client];
+      return next;
+    });
   }
 
   function newSiteForm() {
@@ -2537,7 +2583,7 @@ function DirectoryPanel({ directory, setDirectory, employees, setEmployees, free
   return (
     <div className="flex flex-col gap-4">
       <div className="flex gap-1 rounded-lg p-1 w-fit" style={{ background: colors.surfaceDim }}>
-        {[["sites", t.tabSitesAccounts], ["employees", t.tabEmployees], ["freedays", t.tabFreeStorage]].map(([k, label]) => (
+        {[["sites", t.tabSitesAccounts], ["employees", t.tabEmployees], ["freedays", t.tabFreeStorage], ["pricing", t.tabPricing]].map(([k, label]) => (
           <button key={k} onClick={() => setMode(k)} className="px-3 py-1.5 rounded text-sm font-semibold"
             style={{ fontFamily: FONT_DISPLAY, background: mode === k ? colors.surface : "transparent", color: colors.ink }}>
             {label}
@@ -2595,7 +2641,56 @@ function DirectoryPanel({ directory, setDirectory, employees, setEmployees, free
         </div>
       )}
 
-      {mode === "sites" && (
+      {mode === "pricing" && (
+        <div className="flex flex-col gap-4">
+          <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+            <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.pricingTitle}</h3>
+            <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.pricingDesc}</p>
+          </div>
+
+          <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+            <table className="w-full text-sm" style={{ background: colors.surface }}>
+              <thead>
+                <tr style={{ background: colors.surfaceDim }}>
+                  {[t.pricingColClient, t.pricingColRate, ""].map((h, idx) => (
+                    <th key={idx} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {Object.keys(DEFAULT_CBM_RATES).map((client) => {
+                  const override = (cbmRates || {})[client];
+                  const hasOverride = override != null && override !== "";
+                  return (
+                    <tr key={client} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
+                      <td className="px-3 py-2 font-semibold">{client}</td>
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <span style={{ color: colors.inkFaint }}>$</span>
+                          <input
+                            type="number" min="0" step="0.01"
+                            className={inputClass}
+                            style={{ ...inputStyle, width: "110px" }}
+                            placeholder={String(DEFAULT_CBM_RATES[client])}
+                            value={hasOverride ? override : ""}
+                            onChange={(e) => setRate(client, e.target.value)}
+                          />
+                          <span style={{ color: colors.inkFaint }}>{t.pricingPerCbm}</span>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        {hasOverride && (
+                          <button className="text-xs font-semibold" style={{ color: colors.inkFaint }} onClick={() => resetRate(client)}>{t.pricingResetBtn}</button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
         <div className="flex flex-col gap-4">
           <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
             <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.dirTitle}</h3>
@@ -3304,6 +3399,7 @@ export default function FarspeedInventory() {
   const [directory, setDirectoryState] = useState([]);
   const [employees, setEmployeesState] = useState([]);
   const [freeRules, setFreeRulesState] = useState([]);
+  const [cbmRates, setCbmRatesState] = useState({});
   const [currentUser, setCurrentUserState] = useState("");
   const [filterClient, setFilterClient] = useState("All");
   const [filterStatus, setFilterStatus] = useState("All");
@@ -3348,6 +3444,15 @@ export default function FarspeedInventory() {
         setFreeStorageRulesGlobal([]);
       }
       try {
+        const res = await storageGet("cbmRates", true);
+        const rates = res ? JSON.parse(res.value) : {};
+        setCbmRatesState(rates);
+        setCbmRateOverridesGlobal(rates);
+      } catch (e) {
+        setCbmRatesState({});
+        setCbmRateOverridesGlobal({});
+      }
+      try {
         setCurrentUserState(window.localStorage.getItem("farspeed_current_user") || "");
       } catch (e) {}
       setLoaded(true);
@@ -3373,6 +3478,14 @@ export default function FarspeedInventory() {
       const next = typeof updater === "function" ? updater(prev) : updater;
       storageSet("freeStorageRules", JSON.stringify(next));
       setFreeStorageRulesGlobal(next);
+      return next;
+    });
+  }
+  function setCbmRates(updater) {
+    setCbmRatesState((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      storageSet("cbmRates", JSON.stringify(next), true);
+      setCbmRateOverridesGlobal(next);
       return next;
     });
   }
@@ -4117,7 +4230,7 @@ export default function FarspeedInventory() {
         )}
 
         {view === "directory" && (
-          <DirectoryPanel directory={directory} setDirectory={setDirectory} employees={employees} setEmployees={setEmployees} freeRules={freeRules} setFreeRules={setFreeRules} colors={colors} t={t} />
+          <DirectoryPanel directory={directory} setDirectory={setDirectory} employees={employees} setEmployees={setEmployees} freeRules={freeRules} setFreeRules={setFreeRules} cbmRates={cbmRates} setCbmRates={setCbmRates} colors={colors} t={t} />
         )}
 
         {view === "joblog" && (
