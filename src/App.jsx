@@ -150,17 +150,28 @@ function computeItemBillingRows(item) {
       const calc = computeStorageCharge(arrivalDate, end, freeDays, rate, cbmTotal);
       if (calc) rows.push({ item, rate, freeDays, batchDate: arrivalDate, cbm: cbmTotal, endDate: end, ongoing: false, ...calc });
     } else if (status === "partial") {
-      const deliveredShare = deliveredUnits(item) / (totalUnits(item) || 1);
-      const deliveredCbm = cbmTotal * deliveredShare;
-      const remainingCbm = cbmTotal - deliveredCbm;
+      const delivered = new Set(deliveredCodes(item));
+      const pkgs = item.packages || [];
+      const haveCbmData = pkgs.length > 0 && pkgs.every((p) => p.cbm !== "" && p.cbm != null && !isNaN(Number(p.cbm)));
+      let deliveredCbm, remainingCbm, exact;
+      if (haveCbmData) {
+        deliveredCbm = pkgs.filter((p) => delivered.has(p.code)).reduce((s, p) => s + Number(p.cbm), 0);
+        remainingCbm = cbmTotal - deliveredCbm;
+        exact = true;
+      } else {
+        const deliveredShare = deliveredUnits(item) / (totalUnits(item) || 1);
+        deliveredCbm = cbmTotal * deliveredShare;
+        remainingCbm = cbmTotal - deliveredCbm;
+        exact = false;
+      }
       const lastDelEnd = lastDeliveryDate(item);
       if (deliveredCbm > 0) {
         const c = computeStorageCharge(arrivalDate, lastDelEnd, freeDays, rate, deliveredCbm);
-        if (c) rows.push({ item, rate, freeDays, batchDate: arrivalDate, cbm: deliveredCbm, endDate: lastDelEnd, ongoing: false, estimated: true, ...c });
+        if (c) rows.push({ item, rate, freeDays, batchDate: arrivalDate, cbm: deliveredCbm, endDate: lastDelEnd, ongoing: false, estimated: !exact, ...c });
       }
       if (remainingCbm > 0) {
         const c = computeStorageCharge(arrivalDate, null, freeDays, rate, remainingCbm);
-        if (c) rows.push({ item, rate, freeDays, batchDate: arrivalDate, cbm: remainingCbm, endDate: null, ongoing: true, estimated: true, ...c });
+        if (c) rows.push({ item, rate, freeDays, batchDate: arrivalDate, cbm: remainingCbm, endDate: null, ongoing: true, estimated: !exact, ...c });
       }
     } else if (status === "at_depot") {
       const c = computeStorageCharge(arrivalDate, null, freeDays, rate, cbmTotal);
@@ -2664,6 +2675,9 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
 
 function BillingPanel({ items, colors, t, lang }) {
   const [search, setSearch] = useState("");
+  const [filterClient, setFilterClient] = useState("All");
+  const [filterProject, setFilterProject] = useState("All");
+  const [filterJobNo, setFilterJobNo] = useState("All");
   const [expanded, setExpanded] = useState(null);
 
   const allRows = useMemo(() => {
@@ -2674,11 +2688,18 @@ function BillingPanel({ items, colors, t, lang }) {
     return rows;
   }, [items]);
 
+  const clientOptions = useMemo(() => [...new Set(allRows.map((r) => r.item.client).filter(Boolean))].sort(), [allRows]);
+  const projectOptions = useMemo(() => [...new Set(allRows.map((r) => r.item.constructionSite || r.item.project).filter(Boolean))].sort(), [allRows]);
+  const jobNoOptions = useMemo(() => [...new Set(allRows.map((r) => r.item.jobNumber).filter(Boolean))].sort(), [allRows]);
+
   const filtered = useMemo(() => {
-    if (!search.trim()) return allRows;
-    const q = search.toLowerCase();
     return allRows.filter((r) => {
       const i = r.item;
+      if (filterClient !== "All" && i.client !== filterClient) return false;
+      if (filterProject !== "All" && (i.constructionSite || i.project) !== filterProject) return false;
+      if (filterJobNo !== "All" && i.jobNumber !== filterJobNo) return false;
+      if (!search.trim()) return true;
+      const q = search.toLowerCase();
       return (
         i.client?.toLowerCase().includes(q) || i.project?.toLowerCase().includes(q) ||
         i.constructionSite?.toLowerCase().includes(q) || i.jobNumber?.toLowerCase().includes(q) ||
@@ -2686,7 +2707,7 @@ function BillingPanel({ items, colors, t, lang }) {
         (r.codes || []).some((c) => (c || "").toLowerCase().includes(q))
       );
     });
-  }, [allRows, search]);
+  }, [allRows, search, filterClient, filterProject, filterJobNo]);
 
   const grandTotal = Math.round(filtered.reduce((s, r) => s + r.total, 0) * 100) / 100;
   const money = (n) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -2696,13 +2717,35 @@ function BillingPanel({ items, colors, t, lang }) {
       <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
         <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.billingTitle}</h3>
         <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.billingDesc}</p>
-        <input
-          className={inputClass}
-          style={{ ...inputStyleFor(colors), minWidth: 280 }}
-          placeholder={t.billingSearchPlaceholder}
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
+        <div className="flex flex-wrap gap-3 items-end">
+          <Field label={t.searchLabel} colors={colors}>
+            <input
+              className={inputClass}
+              style={{ ...inputStyleFor(colors), minWidth: 240 }}
+              placeholder={t.billingSearchPlaceholder}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </Field>
+          <Field label={t.clientLabel} colors={colors}>
+            <select className={inputClass} style={inputStyleFor(colors)} value={filterClient} onChange={(e) => setFilterClient(e.target.value)}>
+              <option>All</option>
+              {clientOptions.map((c) => <option key={c}>{c}</option>)}
+            </select>
+          </Field>
+          <Field label={t.billingColProject} colors={colors}>
+            <select className={inputClass} style={inputStyleFor(colors)} value={filterProject} onChange={(e) => setFilterProject(e.target.value)}>
+              <option>All</option>
+              {projectOptions.map((p) => <option key={p}>{p}</option>)}
+            </select>
+          </Field>
+          <Field label={t.billingColJobNo} colors={colors}>
+            <select className={inputClass} style={inputStyleFor(colors)} value={filterJobNo} onChange={(e) => setFilterJobNo(e.target.value)}>
+              <option>All</option>
+              {jobNoOptions.map((j) => <option key={j}>{j}</option>)}
+            </select>
+          </Field>
+        </div>
       </div>
 
       <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
@@ -2728,7 +2771,7 @@ function BillingPanel({ items, colors, t, lang }) {
                     <td className="px-3 py-2">{r.item.constructionSite || r.item.project}</td>
                     <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{r.item.jobNumber || "—"}</td>
                     <td className="px-3 py-2">{fmt(r.batchDate)}</td>
-                    <td className="px-3 py-2">{r.cbm.toFixed(3)}{r.estimated ? " *" : ""}</td>
+                    <td className="px-3 py-2">{r.cbm.toFixed(3)}{r.estimated ? <span title={t.billingEstimatedNote} style={{ color: colors.amberText, cursor: "help" }}> *</span> : ""}</td>
                     <td className="px-3 py-2">${r.rate}/{t.billingPerCbmMonth}</td>
                     <td className="px-3 py-2">
                       {r.ongoing ? <Badge tone="amber" colors={colors}>{t.billingOngoing}</Badge> : <Badge tone="grey" colors={colors}>{t.billingClosed}</Badge>}
