@@ -809,6 +809,9 @@ const TEXT = {
     includeInDeliveryBtn: "Include in this delivery",
     addCombinedDeliveryBtn: "Record Combined Delivery",
     combinedPrintLabel: "Combined Delivery Job Sheet",
+    addMoreBatchesBtn: "+ Add more batches to this delivery",
+    addMoreBatchesSearchPlaceholder: "Search by client, project, unit no., or job no.",
+    addMoreBatchesNoneMsg: "No other entries available to add \u2014 nothing else is at the depot or partially delivered.",
     plannedWasText: (date) => ` · planned delivery was ${date}`,
     progressOf: "of",
     progressDeliveredSoFar: "unit(s) delivered so far",
@@ -1240,6 +1243,9 @@ const TEXT = {
     includeInDeliveryBtn: "加入此次送貨",
     addCombinedDeliveryBtn: "記錄合併送貨",
     combinedPrintLabel: "合併送貨工單",
+    addMoreBatchesBtn: "+ 加入更多批次到此送貨記錄",
+    addMoreBatchesSearchPlaceholder: "按客戶、項目、單位編號或工單號搜尋",
+    addMoreBatchesNoneMsg: "沒有其他可加入的記錄 — 沒有其他項目在倉或部分送出。",
     plannedWasText: (date) => ` · 預計送貨日期為 ${date}`,
     progressOf: "／",
     progressDeliveredSoFar: "件已送出",
@@ -2095,8 +2101,26 @@ function ArrivalBatchesEditor({ form, setForm, colors, t, lang }) {
 }
 
 function DeliveryForm({ deliveryItems, onAddDelivery, onAddCombinedDelivery, onDeleteDelivery, onCancel, onPrintJobSheet, employees, currentUser, items, colors, t, lang }) {
-  const isCombined = deliveryItems.length > 1;
   const firstItem = deliveryItems[0];
+  const [extraItemIds, setExtraItemIds] = useState([]);
+  const [addPickerOpen, setAddPickerOpen] = useState(false);
+  const [addSearch, setAddSearch] = useState("");
+  const baseIds = new Set(deliveryItems.map((i) => i.id));
+  const allDeliveryItems = [...deliveryItems, ...items.filter((i) => extraItemIds.includes(i.id) && !baseIds.has(i.id))];
+  const isCombined = allDeliveryItems.length > 1;
+  const addCandidates = useMemo(() => {
+    const excluded = new Set(allDeliveryItems.map((i) => i.id));
+    return items.filter((i) => !excluded.has(i.id) && ["at_depot", "partial"].includes(deriveStatus(i)));
+  }, [items, allDeliveryItems]);
+  const addFiltered = addSearch.trim()
+    ? addCandidates.filter((i) => {
+        const q = addSearch.toLowerCase();
+        return i.client?.toLowerCase().includes(q) || i.project?.toLowerCase().includes(q) ||
+          i.constructionSite?.toLowerCase().includes(q) || i.unitCode?.toLowerCase().includes(q) ||
+          i.jobNumber?.toLowerCase().includes(q) || i.id?.toLowerCase().includes(q);
+      })
+    : addCandidates;
+
   const [form, setForm] = useState({
     date: todayStr(),
     deliveredTo: firstItem.constructionSite || firstItem.project || "",
@@ -2132,13 +2156,22 @@ function DeliveryForm({ deliveryItems, onAddDelivery, onAddCombinedDelivery, onD
       return [...new Set([...prev, ...batch.remainingCodes])];
     });
   }
+  function addBatchToDelivery(itemId) {
+    setExtraItemIds((prev) => (prev.includes(itemId) ? prev : [...prev, itemId]));
+    setAddSearch("");
+    setAddPickerOpen(false);
+  }
+  function removeExtraBatch(itemId) {
+    setExtraItemIds((prev) => prev.filter((id) => id !== itemId));
+    setPerItem((prev) => { const next = { ...prev }; delete next[itemId]; return next; });
+  }
 
-  const anySelected = deliveryItems.some((it) => {
+  const anySelected = allDeliveryItems.some((it) => {
     const itemized = (it.packages || []).length > 0;
     const sel = getSel(it.id);
     return itemized ? sel.codes.length > 0 : Number(sel.qty) > 0;
   });
-  const anyOvershoot = deliveryItems.some((it) => {
+  const anyOvershoot = allDeliveryItems.some((it) => {
     const itemized = (it.packages || []).length > 0;
     if (itemized) return false;
     const sel = getSel(it.id);
@@ -2150,7 +2183,7 @@ function DeliveryForm({ deliveryItems, onAddDelivery, onAddCombinedDelivery, onD
     const deliveredTo = form.deliveredTo || firstItem.constructionSite || firstItem.project || "";
     const receivedBy = form.receivedBy || firstItem.orderedBy || "";
     const entries = [];
-    for (const it of deliveryItems) {
+    for (const it of allDeliveryItems) {
       const itemized = (it.packages || []).length > 0;
       const sel = getSel(it.id);
       if (itemized) {
@@ -2164,13 +2197,14 @@ function DeliveryForm({ deliveryItems, onAddDelivery, onAddCombinedDelivery, onD
     }
     if (entries.length === 0) return;
     setPerItem({});
+    setExtraItemIds([]);
     setForm({ date: todayStr(), deliveredTo: firstItem.constructionSite || firstItem.project || "", receivedBy: "", notes: "", jobNumber: "", recordedBy: currentUser || "" });
     if (entries.length === 1 && !isCombined) {
       const record = onAddDelivery(entries[0].delivery, entries[0].itemId);
       onPrintJobSheet({ type: "Delivery", item: firstItem, delivery: record || entries[0].delivery });
     } else {
       const recorded = onAddCombinedDelivery(entries);
-      const groups = recorded.map(({ itemId, record }) => ({ item: deliveryItems.find((i) => i.id === itemId), delivery: record }));
+      const groups = recorded.map(({ itemId, record }) => ({ item: allDeliveryItems.find((i) => i.id === itemId), delivery: record }));
       onPrintJobSheet({ type: "Delivery", combined: true, groups, jobNumber, date: form.date, deliveredTo, receivedBy });
     }
   }
@@ -2178,11 +2212,11 @@ function DeliveryForm({ deliveryItems, onAddDelivery, onAddCombinedDelivery, onD
   return (
     <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
       <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>
-        {isCombined ? t.combinedDeliveryTitle(deliveryItems.length) : `${t.deliveryTitlePrefix} ${firstItem.id}`}
+        {isCombined ? t.combinedDeliveryTitle(allDeliveryItems.length) : `${t.deliveryTitlePrefix} ${firstItem.id}`}
       </h3>
       <p className="text-sm mb-4" style={{ color: colors.inkFaint }}>
         {isCombined
-          ? deliveryItems.map((it) => `${it.unitCode || it.id}`).join(" · ")
+          ? allDeliveryItems.map((it) => `${it.unitCode || it.id}`).join(" · ")
           : <>{firstItem.client} · {firstItem.project}{firstItem.plannedDeliveryDate ? t.plannedWasText(fmt(firstItem.plannedDeliveryDate)) : ""}</>}
       </p>
 
@@ -2258,7 +2292,7 @@ function DeliveryForm({ deliveryItems, onAddDelivery, onAddCombinedDelivery, onD
         </div>
       </div>
 
-      {deliveryItems.map((it) => {
+      {allDeliveryItems.map((it) => {
         const remaining = remainingUnits(it);
         const multiUnit = totalUnits(it) > 1;
         const itemized = (it.packages || []).length > 0;
@@ -2387,6 +2421,59 @@ function DeliveryForm({ deliveryItems, onAddDelivery, onAddCombinedDelivery, onD
           </div>
         );
       })}
+
+      <div className="mt-5 pt-4" style={{ borderTop: `1px solid ${colors.line}` }}>
+        {extraItemIds.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-3">
+            {items.filter((i) => extraItemIds.includes(i.id)).map((i) => (
+              <span key={i.id} className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded text-xs font-semibold" style={{ background: colors.amberSoft, color: colors.amberText, border: `1px solid ${colors.amber}` }}>
+                {i.unitCode || i.id} · {i.client}
+                <button type="button" onClick={() => removeExtraBatch(i.id)} style={{ color: colors.amberText, fontWeight: "bold" }}>&times;</button>
+              </span>
+            ))}
+          </div>
+        )}
+        {!addPickerOpen ? (
+          <button
+            type="button"
+            className="px-3 py-2 rounded text-sm font-semibold"
+            style={{ border: `1px dashed ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY }}
+            onClick={() => setAddPickerOpen(true)}
+          >
+            {t.addMoreBatchesBtn}
+          </button>
+        ) : (
+          <div className="rounded p-3" style={{ border: `1px solid ${colors.line}`, background: colors.surfaceDim }}>
+            <div className="flex items-center gap-2 mb-2">
+              <input
+                autoFocus
+                className={inputClass}
+                style={{ ...inputStyle, flex: 1 }}
+                placeholder={t.addMoreBatchesSearchPlaceholder}
+                value={addSearch}
+                onChange={(e) => setAddSearch(e.target.value)}
+              />
+              <button type="button" className="text-xs font-semibold" style={{ color: colors.inkFaint }} onClick={() => { setAddPickerOpen(false); setAddSearch(""); }}>{t.closeBtn}</button>
+            </div>
+            <div className="flex flex-col gap-1 max-h-56 overflow-y-auto">
+              {addFiltered.length === 0 && (
+                <div className="text-xs px-2 py-2" style={{ color: colors.inkFaint }}>{t.addMoreBatchesNoneMsg}</div>
+              )}
+              {addFiltered.slice(0, 30).map((i) => (
+                <button
+                  key={i.id}
+                  type="button"
+                  onClick={() => addBatchToDelivery(i.id)}
+                  className="text-left px-2.5 py-1.5 rounded text-xs"
+                  style={{ background: colors.surface, color: colors.ink, border: `1px solid ${colors.line}` }}
+                >
+                  <span className="font-semibold">{i.unitCode || i.id}</span> · {i.client} · {i.constructionSite || i.project}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
 
       {!form.recordedBy && (
         <div className="mt-4 px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>
