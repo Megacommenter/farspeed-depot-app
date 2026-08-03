@@ -235,7 +235,18 @@ const DEFAULT_EMPLOYEES = [
   { id: "E4", name: "Cheng Wai Kee", role: "CEO / Business Manager" },
   { id: "E5", name: "Bhatt Wai Lee", role: "Warehouse Depot Head" },
   { id: "E6", name: "Mega Chan", role: "Admin" },
+  { id: "E7", name: "Simon Chan", role: "Staff" },
 ];
+// Login accounts - names match the Employees directory so "Recorded By" and the logged-in
+// identity stay consistent. Default password for every account is "Farspeed"; each person
+// can change their own password after logging in.
+const LOGIN_ACCOUNTS = ["Irene Lee", "Nana Chan", "Cheng Wai Kee", "Mega Chan", "Polly Lee", "Simon Chan", "Bhatt Wai Lee"];
+const DEFAULT_PASSWORD = "Farspeed";
+async function hashPassword(pw) {
+  const enc = new TextEncoder().encode(`farspeed-depot-app:${pw}`);
+  const buf = await crypto.subtle.digest("SHA-256", enc);
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 const DEFAULT_DIRECTORY = [
   {
     id: "SITE1",
@@ -1037,6 +1048,25 @@ const TEXT = {
     empNoneMsg: "No employees added yet.",
 
     signedInAs: "Signed in as",
+    loginNameLabel: "Name",
+    loginNamePlaceholder: "Select your name",
+    loginPasswordLabel: "Password",
+    loginErrorMissing: "Enter your name and password.",
+    loginErrorWrong: "Wrong name or password.",
+    loginBtn: "Log In",
+    loginBusyMsg: "Checking\u2026",
+    loginDefaultPwHint: "First time? The default password is \"Farspeed\" \u2014 you can change it after logging in.",
+    changePasswordLink: "Change Password",
+    changePasswordTitle: "Change Password",
+    logoutBtn: "Log Out",
+    pwCurrentLabel: "Current Password",
+    pwNewLabel: "New Password",
+    pwConfirmLabel: "Confirm New Password",
+    pwTooShortMsg: "New password must be at least 4 characters.",
+    pwMismatchMsg: "New password and confirmation don't match.",
+    pwCurrentWrongMsg: "Current password is incorrect.",
+    pwChangedMsg: "Password changed. Use your new password next time you log in.",
+    pwSaveBtn: "Save New Password",
     signedInNone: "Not signed in",
 
     fRecordedBy: "Recorded By",
@@ -1494,6 +1524,25 @@ const TEXT = {
     empNoneMsg: "尚未新增任何員工。",
 
     signedInAs: "登入身份",
+    loginNameLabel: "姓名",
+    loginNamePlaceholder: "請選擇你的姓名",
+    loginPasswordLabel: "密碼",
+    loginErrorMissing: "請輸入姓名及密碼。",
+    loginErrorWrong: "姓名或密碼錯誤。",
+    loginBtn: "登入",
+    loginBusyMsg: "驗證中…",
+    loginDefaultPwHint: "第一次使用？預設密碼為「Farspeed」，登入後可自行更改。",
+    changePasswordLink: "更改密碼",
+    changePasswordTitle: "更改密碼",
+    logoutBtn: "登出",
+    pwCurrentLabel: "目前密碼",
+    pwNewLabel: "新密碼",
+    pwConfirmLabel: "確認新密碼",
+    pwTooShortMsg: "新密碼須至少4個字元。",
+    pwMismatchMsg: "新密碼與確認密碼不相符。",
+    pwCurrentWrongMsg: "目前密碼不正確。",
+    pwChangedMsg: "密碼已更改，下次登入請使用新密碼。",
+    pwSaveBtn: "儲存新密碼",
     signedInNone: "未登入",
 
     fRecordedBy: "記錄人",
@@ -4614,7 +4663,167 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
   );
 }
 
+async function ensureUserAccountsSeeded() {
+  try {
+    const res = await storageGet("userAccounts");
+    if (res) return JSON.parse(res.value);
+  } catch (e) { /* not seeded yet */ }
+  const defaultHash = await hashPassword(DEFAULT_PASSWORD);
+  const seeded = LOGIN_ACCOUNTS.map((name) => ({ name, passwordHash: defaultHash }));
+  try { await storageSet("userAccounts", JSON.stringify(seeded)); } catch (e) {}
+  return seeded;
+}
+
+function LoginScreen({ onLoggedIn, colors, t, lang }) {
+  const [accounts, setAccounts] = useState(null);
+  const [name, setName] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let on = true;
+    ensureUserAccountsSeeded().then((accts) => { if (on) setAccounts(accts); });
+    return () => { on = false; };
+  }, []);
+
+  async function handleLogin(e) {
+    e.preventDefault();
+    if (!name || !password) { setError(t.loginErrorMissing); return; }
+    setBusy(true);
+    setError("");
+    try {
+      const accts = accounts || (await ensureUserAccountsSeeded());
+      const acct = accts.find((a) => a.name === name);
+      const hash = await hashPassword(password);
+      if (!acct || acct.passwordHash !== hash) {
+        setError(t.loginErrorWrong);
+        setBusy(false);
+        return;
+      }
+      try {
+        window.localStorage.setItem("farspeed_session", JSON.stringify({ name, at: Date.now() }));
+      } catch (e2) {}
+      onLoggedIn(name);
+    } catch (e3) {
+      setError(t.loginErrorWrong);
+    }
+    setBusy(false);
+  }
+
+  const inputStyle = inputStyleFor(colors);
+  return (
+    <div className="fixed inset-0 flex items-center justify-center p-6" style={{ background: colors.bg }}>
+      <form onSubmit={handleLogin} className="w-full max-w-sm rounded-lg p-6" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+        <div className="text-center mb-5">
+          <div className="text-xl font-bold" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>FARSPEED CONTRACTORS LTD</div>
+          <div className="text-xs mt-1" style={{ color: colors.amberText, fontFamily: FONT_DISPLAY }}>{t.appSubtitle}</div>
+        </div>
+        <Field label={t.loginNameLabel} colors={colors}>
+          <select className={inputClass} style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} required>
+            <option value="">{t.loginNamePlaceholder}</option>
+            {LOGIN_ACCOUNTS.map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </Field>
+        <div className="mt-3">
+          <Field label={t.loginPasswordLabel} colors={colors}>
+            <input type="password" className={inputClass} style={inputStyle} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
+          </Field>
+        </div>
+        {error && (
+          <div className="mt-3 px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>{error}</div>
+        )}
+        <button
+          type="submit"
+          className="w-full mt-4 px-4 py-2.5 rounded text-sm font-semibold"
+          style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY, opacity: busy ? 0.6 : 1 }}
+          disabled={busy}
+        >
+          {busy ? t.loginBusyMsg : t.loginBtn}
+        </button>
+        <div className="text-xs mt-4 text-center" style={{ color: colors.inkFaint }}>{t.loginDefaultPwHint}</div>
+      </form>
+    </div>
+  );
+}
+
+function ChangePasswordModal({ name, onClose, colors, t }) {
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const inputStyle = inputStyleFor(colors);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError("");
+    if (next.length < 4) { setError(t.pwTooShortMsg); return; }
+    if (next !== confirm) { setError(t.pwMismatchMsg); return; }
+    setBusy(true);
+    try {
+      const accts = await ensureUserAccountsSeeded();
+      const idx = accts.findIndex((a) => a.name === name);
+      const currentHash = await hashPassword(current);
+      if (idx === -1 || accts[idx].passwordHash !== currentHash) {
+        setError(t.pwCurrentWrongMsg);
+        setBusy(false);
+        return;
+      }
+      const newHash = await hashPassword(next);
+      const updated = accts.map((a, i) => (i === idx ? { ...a, passwordHash: newHash } : a));
+      await storageSet("userAccounts", JSON.stringify(updated));
+      setSuccess(true);
+    } catch (e2) {
+      setError(t.pwCurrentWrongMsg);
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-6" style={{ background: "rgba(0,0,0,0.5)" }}>
+      <div className="w-full max-w-sm rounded-lg p-6" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+        <h3 className="text-lg font-bold mb-4" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.changePasswordTitle}</h3>
+        {success ? (
+          <>
+            <div className="px-3 py-2 rounded text-sm" style={{ background: colors.greenSoft, color: colors.green }}>{t.pwChangedMsg}</div>
+            <button className="w-full mt-4 px-4 py-2 rounded text-sm font-semibold" style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY }} onClick={onClose}>{t.closeBtn}</button>
+          </>
+        ) : (
+          <form onSubmit={handleSubmit}>
+            <Field label={t.pwCurrentLabel} colors={colors}>
+              <input type="password" className={inputClass} style={inputStyle} value={current} onChange={(e) => setCurrent(e.target.value)} required />
+            </Field>
+            <div className="mt-3">
+              <Field label={t.pwNewLabel} colors={colors}>
+                <input type="password" className={inputClass} style={inputStyle} value={next} onChange={(e) => setNext(e.target.value)} required />
+              </Field>
+            </div>
+            <div className="mt-3">
+              <Field label={t.pwConfirmLabel} colors={colors}>
+                <input type="password" className={inputClass} style={inputStyle} value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
+              </Field>
+            </div>
+            {error && <div className="mt-3 px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>{error}</div>}
+            <div className="flex gap-2 mt-4">
+              <button type="submit" className="px-4 py-2 rounded text-sm font-semibold" style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY, opacity: busy ? 0.6 : 1 }} disabled={busy}>
+                {busy ? t.loginBusyMsg : t.pwSaveBtn}
+              </button>
+              <button type="button" className="px-4 py-2 rounded text-sm font-semibold" style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY }} onClick={onClose}>
+                {t.closeBtn}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function FarspeedInventory() {
+  const [authUser, setAuthUser] = useState(undefined); // undefined = checking session, null = logged out, string = logged in
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [items, setItems] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [view, setView] = useState("dashboard");
@@ -4646,6 +4855,29 @@ export default function FarspeedInventory() {
 
   const t = TEXT[lang];
   const colors = theme === "dark" ? DARK_COLORS : LIGHT_COLORS;
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("farspeed_session");
+      if (raw) {
+        const session = JSON.parse(raw);
+        if (session && session.name && LOGIN_ACCOUNTS.includes(session.name)) {
+          setAuthUser(session.name);
+          return;
+        }
+      }
+    } catch (e) {}
+    setAuthUser(null);
+  }, []);
+
+  function handleLoggedIn(name) {
+    setAuthUser(name);
+    setCurrentUser(name);
+  }
+  function handleLogout() {
+    try { window.localStorage.removeItem("farspeed_session"); } catch (e) {}
+    setAuthUser(null);
+  }
 
   useEffect(() => {
     (async () => {
@@ -4991,6 +5223,13 @@ export default function FarspeedInventory() {
     return rows.sort((a, b) => b.jobNumber.localeCompare(a.jobNumber));
   }, [items]);
 
+  if (authUser === undefined) {
+    return <div className="p-8 text-sm" style={{ color: colors.inkFaint }}>{t.loadingMsg}</div>;
+  }
+  if (authUser === null) {
+    return <LoginScreen onLoggedIn={handleLoggedIn} colors={colors} t={t} lang={lang} />;
+  }
+
   if (!loaded) {
     return <div className="p-8 text-sm" style={{ color: colors.inkFaint }}>{t.loadingMsg}</div>;
   }
@@ -5087,17 +5326,11 @@ export default function FarspeedInventory() {
               )}
             </div>
           </div>
-          <div className="flex items-center gap-1 rounded-lg px-2 py-1" style={{ background: colors.navySoft }}>
+          <div className="flex items-center gap-2 rounded-lg px-2 py-1" style={{ background: colors.navySoft }}>
             <span className="text-xs" style={{ color: colors.onDark, opacity: 0.7, fontFamily: FONT_DISPLAY }}>{t.signedInAs}:</span>
-            <select
-              className="text-sm font-semibold bg-transparent"
-              style={{ color: colors.amber, fontFamily: FONT_DISPLAY }}
-              value={currentUser}
-              onChange={(e) => setCurrentUser(e.target.value)}
-            >
-              <option value="" style={{ color: "#000" }}>{t.signedInNone}</option>
-              {employees.map((e) => <option key={e.id} value={e.name} style={{ color: "#000" }}>{e.name}</option>)}
-            </select>
+            <span className="text-sm font-semibold" style={{ color: colors.amber, fontFamily: FONT_DISPLAY }}>{authUser}</span>
+            <button className="text-xs font-semibold underline" style={{ color: colors.onDark, opacity: 0.8 }} onClick={() => setChangePasswordOpen(true)}>{t.changePasswordLink}</button>
+            <button className="text-xs font-semibold underline" style={{ color: colors.onDark, opacity: 0.8 }} onClick={handleLogout}>{t.logoutBtn}</button>
           </div>
           <div className="flex gap-1 rounded-lg p-1" style={{ background: colors.navySoft }}>
             <button
@@ -5676,6 +5909,9 @@ export default function FarspeedInventory() {
 
       {printJobSheet && (
         <JobSheetPrint sheet={printJobSheet} onClose={() => setPrintJobSheet(null)} directory={directory} colors={colors} t={t} lang={lang} />
+      )}
+      {changePasswordOpen && (
+        <ChangePasswordModal name={authUser} onClose={() => setChangePasswordOpen(false)} colors={colors} t={t} />
       )}
     </div>
   );
