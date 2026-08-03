@@ -69,6 +69,106 @@ function cbmRateFor(client) {
   }
   return DEFAULT_CBM_RATES[client] != null ? DEFAULT_CBM_RATES[client] : null;
 }
+
+// --- Storage billing: monthly $/CBM rate. First partial month is pro-rated by day;
+// every calendar month after that is billed in full regardless of when mid-month
+// the goods leave. Billing starts the day after the free-storage period ends. ---
+function monthIndexOf(d) { return d.getFullYear() * 12 + d.getMonth(); }
+function lastDayOfMonth(d) { return new Date(d.getFullYear(), d.getMonth() + 1, 0); }
+function daysInMonthOf(d) { return lastDayOfMonth(d).getDate(); }
+function toDateOnly(s) { return new Date(`${s}T00:00:00`); }
+function computeStorageCharge(arrivalDateStr, endDateStr, freeDays, ratePerCbmMonth, cbm) {
+  if (!arrivalDateStr || !(ratePerCbmMonth > 0) || !(cbm > 0)) return null;
+  const arrival = toDateOnly(arrivalDateStr);
+  const billStart = new Date(arrival);
+  billStart.setDate(billStart.getDate() + (freeDays || 0));
+  const end = toDateOnly(endDateStr || todayStr());
+  const breakdown = [];
+  if (end < billStart) return { billStart: billStart.toISOString().slice(0, 10), total: 0, breakdown };
+  const firstMonthEnd = lastDayOfMonth(billStart);
+  const daysInFirstMonth = daysInMonthOf(billStart);
+  let total = 0;
+  if (end <= firstMonthEnd) {
+    const daysUsed = Math.round((end - billStart) / 86400000) + 1;
+    const amt = ratePerCbmMonth * cbm * (daysUsed / daysInFirstMonth);
+    breakdown.push({ label: `${fmt(billStart.toISOString().slice(0, 10))} \u2013 ${fmt(end.toISOString().slice(0, 10))}`, detail: `pro-rata, ${daysUsed}/${daysInFirstMonth} days`, amount: amt });
+    total = amt;
+  } else {
+    const daysUsed = Math.round((firstMonthEnd - billStart) / 86400000) + 1;
+    const amt1 = ratePerCbmMonth * cbm * (daysUsed / daysInFirstMonth);
+    breakdown.push({ label: `${fmt(billStart.toISOString().slice(0, 10))} \u2013 ${fmt(firstMonthEnd.toISOString().slice(0, 10))}`, detail: `pro-rata, ${daysUsed}/${daysInFirstMonth} days`, amount: amt1 });
+    total += amt1;
+    const numFullMonths = monthIndexOf(end) - monthIndexOf(billStart);
+    for (let i = 1; i <= numFullMonths; i++) {
+      const mDate = new Date(billStart.getFullYear(), billStart.getMonth() + i, 1);
+      const isLast = i === numFullMonths;
+      const label = mDate.toLocaleString("en-US", { month: "short", year: "numeric" });
+      breakdown.push({ label, detail: isLast && end < lastDayOfMonth(mDate) ? `full month \u2014 left ${fmt(end.toISOString().slice(0, 10))}` : "full month", amount: ratePerCbmMonth * cbm });
+      total += ratePerCbmMonth * cbm;
+    }
+  }
+  return { billStart: billStart.toISOString().slice(0, 10), total: Math.round(total * 100) / 100, breakdown };
+}
+// Builds one billing row per arrival batch (or per whole item if no split arrivals were
+// used), further split by delivery date where a batch's cases left storage on different
+// dates. Rows are not grouped or separated by construction site.
+function computeItemBillingRows(item) {
+  const rate = cbmRateFor(item.client);
+  if (!rate) return [];
+  const freeDays = freeDaysFor(item);
+  const rows = [];
+  if (usesArrivalBatches(item)) {
+    const deliveredAt = {};
+    activeDeliveries(item).forEach((d) => (d.codes || []).forEach((c) => { deliveredAt[c] = d.date; }));
+    activeArrivals(item).forEach((batch) => {
+      if (!batch.date) return;
+      const byEnd = new Map();
+      (batch.codes || []).forEach((code) => {
+        const pkg = (item.packages || []).find((p) => p.code === code);
+        const cbm = pkg ? Number(pkg.cbm) || 0 : 0;
+        const end = deliveredAt[code] || null;
+        const key = end || "__ongoing__";
+        if (!byEnd.has(key)) byEnd.set(key, { end, cbm: 0, codes: [] });
+        const g = byEnd.get(key);
+        g.cbm += cbm;
+        g.codes.push(code);
+      });
+      for (const g of byEnd.values()) {
+        if (!(g.cbm > 0)) continue;
+        const calc = computeStorageCharge(batch.date, g.end, freeDays, rate, g.cbm);
+        if (calc) rows.push({ item, rate, freeDays, batchDate: batch.date, batchType: batch.type, codes: g.codes, cbm: g.cbm, endDate: g.end, ongoing: !g.end, ...calc });
+      }
+    });
+  } else {
+    const arrivalDate = effectiveDepotArrivalDate(item);
+    if (!arrivalDate) return [];
+    const cbmTotal = (item.packages && item.packages.length) ? item.packages.reduce((s, p) => s + (Number(p.cbm) || 0), 0) : Number(item.volumeCbm) || 0;
+    if (!(cbmTotal > 0)) return [];
+    const status = deriveStatus(item);
+    if (status === "delivered") {
+      const end = lastDeliveryDate(item);
+      const calc = computeStorageCharge(arrivalDate, end, freeDays, rate, cbmTotal);
+      if (calc) rows.push({ item, rate, freeDays, batchDate: arrivalDate, cbm: cbmTotal, endDate: end, ongoing: false, ...calc });
+    } else if (status === "partial") {
+      const deliveredShare = deliveredUnits(item) / (totalUnits(item) || 1);
+      const deliveredCbm = cbmTotal * deliveredShare;
+      const remainingCbm = cbmTotal - deliveredCbm;
+      const lastDelEnd = lastDeliveryDate(item);
+      if (deliveredCbm > 0) {
+        const c = computeStorageCharge(arrivalDate, lastDelEnd, freeDays, rate, deliveredCbm);
+        if (c) rows.push({ item, rate, freeDays, batchDate: arrivalDate, cbm: deliveredCbm, endDate: lastDelEnd, ongoing: false, estimated: true, ...c });
+      }
+      if (remainingCbm > 0) {
+        const c = computeStorageCharge(arrivalDate, null, freeDays, rate, remainingCbm);
+        if (c) rows.push({ item, rate, freeDays, batchDate: arrivalDate, cbm: remainingCbm, endDate: null, ongoing: true, estimated: true, ...c });
+      }
+    } else if (status === "at_depot") {
+      const c = computeStorageCharge(arrivalDate, null, freeDays, rate, cbmTotal);
+      if (c) rows.push({ item, rate, freeDays, batchDate: arrivalDate, cbm: cbmTotal, endDate: null, ongoing: true, ...c });
+    }
+  }
+  return rows;
+}
 const ITEM_TYPES = ["Container", "Separate Items"];
 const DEPOTS = ["Farspeed Depot 1", "Farspeed Depot 3"];
 const DEPOT_LABELS_ZH = {
@@ -892,6 +992,29 @@ const TEXT = {
     resetDoneMsg: "All delivery records cleared.",
 
     navJobLog: "Job Log",
+    navBilling: "Billing",
+    billingTitle: "Storage Billing",
+    billingDesc: "Search by client, project, job number, or case to see storage charges. Billed per arrival batch (not split by construction site) at the client's $/CBM monthly rate: free days first, the remainder of that month pro-rated by day, then every following month in full — even if the goods leave partway through it.",
+    billingSearchPlaceholder: "Client, project, job no., or case no.",
+    billingColClient: "Client",
+    billingColProject: "Project / Site",
+    billingColJobNo: "Job No.",
+    billingColBatchDate: "Arrival",
+    billingColCbm: "CBM",
+    billingColRate: "Rate",
+    billingColStatus: "Status",
+    billingColTotal: "Total",
+    billingNoneMsg: "No billable storage found for this search.",
+    billingPerCbmMonth: "CBM/mo",
+    billingOngoing: "ONGOING",
+    billingClosed: "DELIVERED",
+    billingShowBtn: "Show breakdown",
+    billingHideBtn: "Hide",
+    billingCasesLabel: "Cases",
+    billingFreeDaysNote: (d) => `${d} free days applied before billing starts.`,
+    billingEstimatedNote: "* CBM split estimated from package count share (no per-case CBM available for the delivered/remaining split).",
+    billingGrandTotal: "Grand Total",
+    billingFootnote: "Ongoing rows are calculated up to today and will keep growing until the goods are marked delivered. Rates are set in Directory → CBM Pricing.",
     jobLogTitle: "All Job Numbers Used",
     jobLogDesc: "Every Devan, CFS, and Delivery job number ever created, most recent first. Click any row to view and reprint that job sheet.",
     jobLogColJobNo: "Job No.",
@@ -1284,6 +1407,29 @@ const TEXT = {
     resetDoneMsg: "所有送貨記錄已清除。",
 
     navJobLog: "單號記錄",
+    navBilling: "帳單",
+    billingTitle: "存倉收費",
+    billingDesc: "可按客戶、項目、工單號或件號搜尋存倉收費。收費以到倉批次計算（不按地盤分開），按客戶的每CBM月費計：先扣免費日數，該月餘下日數按日比例計算，其後每個月則全額收取——即使貨物於月中送出亦然。",
+    billingSearchPlaceholder: "客戶、項目、工單號或件號",
+    billingColClient: "客戶",
+    billingColProject: "項目／地盤",
+    billingColJobNo: "工單號",
+    billingColBatchDate: "到倉日期",
+    billingColCbm: "CBM",
+    billingColRate: "收費",
+    billingColStatus: "狀態",
+    billingColTotal: "總額",
+    billingNoneMsg: "此搜尋未有可收費的存倉記錄。",
+    billingPerCbmMonth: "CBM/月",
+    billingOngoing: "計算中",
+    billingClosed: "已送出",
+    billingShowBtn: "顯示明細",
+    billingHideBtn: "收起",
+    billingCasesLabel: "件號",
+    billingFreeDaysNote: (d) => `已扣除${d}日免費存倉。`,
+    billingEstimatedNote: "＊按件數比例估算已送/餘下CBM分配（此記錄沒有逐件CBM資料）。",
+    billingGrandTotal: "總計",
+    billingFootnote: "計算中的項目按至今日計算，直至貨物標記為已送出才會停止累加。收費可於 目錄 → CBM 收費 設定。",
     jobLogTitle: "所有已使用的工作單號",
     jobLogDesc: "所有曾建立的Devan、CFS及送貨單號，最新在前。點擊任何一行可查看及重印該工單。",
     jobLogColJobNo: "單號",
@@ -2516,6 +2662,121 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
   );
 }
 
+function BillingPanel({ items, colors, t, lang }) {
+  const [search, setSearch] = useState("");
+  const [expanded, setExpanded] = useState(null);
+
+  const allRows = useMemo(() => {
+    const rows = [];
+    for (const item of items) {
+      for (const r of computeItemBillingRows(item)) rows.push(r);
+    }
+    return rows;
+  }, [items]);
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return allRows;
+    const q = search.toLowerCase();
+    return allRows.filter((r) => {
+      const i = r.item;
+      return (
+        i.client?.toLowerCase().includes(q) || i.project?.toLowerCase().includes(q) ||
+        i.constructionSite?.toLowerCase().includes(q) || i.jobNumber?.toLowerCase().includes(q) ||
+        i.id?.toLowerCase().includes(q) || i.shkNumber?.toLowerCase().includes(q) ||
+        (r.codes || []).some((c) => (c || "").toLowerCase().includes(q))
+      );
+    });
+  }, [allRows, search]);
+
+  const grandTotal = Math.round(filtered.reduce((s, r) => s + r.total, 0) * 100) / 100;
+  const money = (n) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+        <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.billingTitle}</h3>
+        <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.billingDesc}</p>
+        <input
+          className={inputClass}
+          style={{ ...inputStyleFor(colors), minWidth: 280 }}
+          placeholder={t.billingSearchPlaceholder}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      </div>
+
+      <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+        <table className="w-full text-sm" style={{ background: colors.surface }}>
+          <thead>
+            <tr style={{ background: colors.surfaceDim }}>
+              {[t.billingColClient, t.billingColProject, t.billingColJobNo, t.billingColBatchDate, t.billingColCbm, t.billingColRate, t.billingColStatus, t.billingColTotal, ""].map((h) => (
+                <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.length === 0 && (
+              <tr><td colSpan={9} className="px-3 py-6 text-center text-sm" style={{ color: colors.inkFaint }}>{t.billingNoneMsg}</td></tr>
+            )}
+            {filtered.map((r, idx) => {
+              const key = `${r.item.id}-${idx}`;
+              const isOpen = expanded === key;
+              return (
+                <React.Fragment key={key}>
+                  <tr style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink, cursor: "pointer" }} onClick={() => setExpanded(isOpen ? null : key)}>
+                    <td className="px-3 py-2">{r.item.client}</td>
+                    <td className="px-3 py-2">{r.item.constructionSite || r.item.project}</td>
+                    <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{r.item.jobNumber || "—"}</td>
+                    <td className="px-3 py-2">{fmt(r.batchDate)}</td>
+                    <td className="px-3 py-2">{r.cbm.toFixed(3)}{r.estimated ? " *" : ""}</td>
+                    <td className="px-3 py-2">${r.rate}/{t.billingPerCbmMonth}</td>
+                    <td className="px-3 py-2">
+                      {r.ongoing ? <Badge tone="amber" colors={colors}>{t.billingOngoing}</Badge> : <Badge tone="grey" colors={colors}>{t.billingClosed}</Badge>}
+                    </td>
+                    <td className="px-3 py-2 font-semibold">{money(r.total)}</td>
+                    <td className="px-3 py-2 text-right text-xs" style={{ color: colors.amberText }}>{isOpen ? t.billingHideBtn : t.billingShowBtn}</td>
+                  </tr>
+                  {isOpen && (
+                    <tr style={{ background: colors.surfaceDim }}>
+                      <td colSpan={9} className="px-4 py-3">
+                        <div className="text-xs mb-2" style={{ color: colors.inkFaint }}>
+                          {t.billingFreeDaysNote(r.freeDays)}{r.codes && r.codes.length > 0 ? ` · ${t.billingCasesLabel}: ${r.codes.join(", ")}` : ""}
+                        </div>
+                        <table className="text-xs" style={{ color: colors.ink }}>
+                          <tbody>
+                            {r.breakdown.map((b, i) => (
+                              <tr key={i}>
+                                <td className="pr-4 py-0.5 font-semibold">{b.label}</td>
+                                <td className="pr-4 py-0.5" style={{ color: colors.inkFaint }}>{b.detail}</td>
+                                <td className="py-0.5 text-right">{money(b.amount)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {r.estimated && <div className="text-xs mt-2" style={{ color: colors.amberText }}>{t.billingEstimatedNote}</div>}
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+          {filtered.length > 0 && (
+            <tfoot>
+              <tr style={{ borderTop: `2px solid ${colors.line}` }}>
+                <td colSpan={7} className="px-3 py-2 text-right font-semibold" style={{ color: colors.ink, fontFamily: FONT_DISPLAY }}>{t.billingGrandTotal}</td>
+                <td className="px-3 py-2 font-bold" style={{ color: colors.ink }}>{money(grandTotal)}</td>
+                <td></td>
+              </tr>
+            </tfoot>
+          )}
+        </table>
+      </div>
+      <div className="text-xs" style={{ color: colors.inkFaint }}>{t.billingFootnote}</div>
+    </div>
+  );
+}
+
 function DirectoryPanel({ directory, setDirectory, employees, setEmployees, freeRules, setFreeRules, cbmRates, setCbmRates, colors, t }) {
   const [mode, setMode] = useState("sites");
   const [editingSite, setEditingSite] = useState(null);
@@ -2691,6 +2952,8 @@ function DirectoryPanel({ directory, setDirectory, employees, setEmployees, free
           </div>
         </div>
       )}
+
+      {mode === "sites" && (
         <div className="flex flex-col gap-4">
           <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
             <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.dirTitle}</h3>
@@ -3761,6 +4024,7 @@ export default function FarspeedInventory() {
 
             {[
               ["exit", t.navDeliveries],
+              ["billing", t.navBilling],
               ["directory", t.navDirectory],
               ["joblog", t.navJobLog],
             ].map(([k, label]) => (
@@ -4227,6 +4491,10 @@ export default function FarspeedInventory() {
 
         {view === "import" && (
           <ImportPanel onImportRows={handleImportRows} existingItems={items} directory={directory} setDirectory={setDirectory} colors={colors} t={t} lang={lang} />
+        )}
+
+        {view === "billing" && (
+          <BillingPanel items={items} colors={colors} t={t} lang={lang} />
         )}
 
         {view === "directory" && (
