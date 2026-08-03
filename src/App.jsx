@@ -910,6 +910,7 @@ const TEXT = {
     colPackages: "Packages",
     colContainers: "Container(s)",
     colWeight: "Weight (kg)",
+    selectByBatchLabel: "Select by batch (this delivery can pull from more than one arrival batch)",
     selectCodesLabel: "Select which package codes are going out",
     noCodesRemainingMsg: "All itemized packages for this entry have been delivered.",
 
@@ -1332,6 +1333,7 @@ const TEXT = {
     colPackages: "件數",
     colContainers: "貨櫃",
     colWeight: "重量（公斤）",
+    selectByBatchLabel: "按到倉批次選取（此送貨可同時包含多於一個到倉批次）",
     selectCodesLabel: "選擇要送出的件號",
     noCodesRemainingMsg: "此記錄之個別件號已全部送出。",
 
@@ -2088,6 +2090,20 @@ function DeliveryForm({ item, onAddDelivery, onDeleteDelivery, onCancel, onPrint
   const overshoot = qty > remaining;
   const remainingPkgs = remainingPackages(item);
   const pendingArrival = new Set(notYetArrivedPackages(item).map((p) => p.code));
+  const remainingCodesSet = new Set(remainingPkgs.map((p) => p.code));
+  const selectableBatches = usesArrivalBatches(item)
+    ? activeArrivals(item)
+        .map((b) => ({ ...b, remainingCodes: (b.codes || []).filter((c) => remainingCodesSet.has(c)) }))
+        .filter((b) => b.remainingCodes.length > 0)
+    : [];
+
+  function toggleBatch(batch) {
+    const allSelected = batch.remainingCodes.every((c) => selectedCodes.includes(c));
+    setSelectedCodes((prev) => {
+      if (allSelected) return prev.filter((c) => !batch.remainingCodes.includes(c));
+      return [...new Set([...prev, ...batch.remainingCodes])];
+    });
+  }
 
   function toggleCode(code) {
     setSelectedCodes((prev) => (prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]));
@@ -2195,6 +2211,34 @@ function DeliveryForm({ item, onAddDelivery, onDeleteDelivery, onCancel, onPrint
 
           {itemized && (
             <div className="mt-4">
+              {selectableBatches.length > 1 && (
+                <div className="mb-3">
+                  <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
+                    {t.selectByBatchLabel}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {selectableBatches.map((b) => {
+                      const allSelected = b.remainingCodes.every((c) => selectedCodes.includes(c));
+                      const someSelected = !allSelected && b.remainingCodes.some((c) => selectedCodes.includes(c));
+                      return (
+                        <button
+                          key={b.id}
+                          type="button"
+                          onClick={() => toggleBatch(b)}
+                          className="px-3 py-1.5 rounded text-xs font-semibold text-left"
+                          style={{
+                            border: `1px solid ${allSelected || someSelected ? colors.amber : colors.line}`,
+                            background: allSelected ? colors.amberSoft : someSelected ? colors.surfaceDim : colors.surface,
+                            color: allSelected || someSelected ? colors.amberText : colors.ink,
+                          }}
+                        >
+                          {fmt(b.date)}{b.type ? ` · ${b.type}` : ""} · {b.remainingCodes.length} {t.jsPkgs}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
                 {t.selectCodesLabel}
               </div>
