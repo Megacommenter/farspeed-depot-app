@@ -801,6 +801,14 @@ const TEXT = {
     cancelBtn: "Cancel",
 
     deliveryTitlePrefix: "Record Delivery —",
+    combinedDeliveryTitle: (n) => `Record Combined Delivery — ${n} entries`,
+    combinedHistoryHiddenNote: "Past deliveries for these entries aren't shown here — open each entry individually (from Inventory) to view or cancel its delivery history.",
+    recordCombinedBtn: (n) => n > 0 ? `Record Delivery for Selected (${n})` : "Record Delivery for Selected",
+    combinedSelectionHint: "Tick every entry going out together on the same job \u2014 e.g. two different batches heading to the same site on the same day \u2014 then record them as one combined delivery with a single job sheet.",
+    selectedTag: "Included \u2713",
+    includeInDeliveryBtn: "Include in this delivery",
+    addCombinedDeliveryBtn: "Record Combined Delivery",
+    combinedPrintLabel: "Combined Delivery Job Sheet",
     plannedWasText: (date) => ` · planned delivery was ${date}`,
     progressOf: "of",
     progressDeliveredSoFar: "unit(s) delivered so far",
@@ -1224,6 +1232,14 @@ const TEXT = {
     cancelBtn: "取消",
 
     deliveryTitlePrefix: "記錄送貨 —",
+    combinedDeliveryTitle: (n) => `記錄合併送貨 — 共${n}項記錄`,
+    combinedHistoryHiddenNote: "此處不會顯示這些記錄各自的送貨歷史 — 如需查看或取消個別記錄的送貨，請從存倉記錄個別打開。",
+    recordCombinedBtn: (n) => n > 0 ? `為已選項目記錄送貨 (${n})` : "為已選項目記錄送貨",
+    combinedSelectionHint: "勾選所有要一同送出的記錄（例如兩個不同批次但同日送往同一地盤），然後合併記錄為一張工單。",
+    selectedTag: "已包含 ✓",
+    includeInDeliveryBtn: "加入此次送貨",
+    addCombinedDeliveryBtn: "記錄合併送貨",
+    combinedPrintLabel: "合併送貨工單",
     plannedWasText: (date) => ` · 預計送貨日期為 ${date}`,
     progressOf: "／",
     progressDeliveredSoFar: "件已送出",
@@ -2078,65 +2094,99 @@ function ArrivalBatchesEditor({ form, setForm, colors, t, lang }) {
   );
 }
 
-function DeliveryForm({ item, onAddDelivery, onDeleteDelivery, onCancel, onPrintJobSheet, employees, currentUser, items, colors, t, lang }) {
-  const remaining = remainingUnits(item);
-  const multiUnit = totalUnits(item) > 1;
-  const itemized = (item.packages || []).length > 0;
-  const [form, setForm] = useState({ date: todayStr(), packageCount: multiUnit ? "" : "1", deliveredTo: item.constructionSite || item.project || "", receivedBy: "", notes: "", jobNumber: "", recordedBy: currentUser || "" });
-  const [selectedCodes, setSelectedCodes] = useState([]);
+function DeliveryForm({ deliveryItems, onAddDelivery, onAddCombinedDelivery, onDeleteDelivery, onCancel, onPrintJobSheet, employees, currentUser, items, colors, t, lang }) {
+  const isCombined = deliveryItems.length > 1;
+  const firstItem = deliveryItems[0];
+  const [form, setForm] = useState({
+    date: todayStr(),
+    deliveredTo: firstItem.constructionSite || firstItem.project || "",
+    receivedBy: "",
+    notes: "",
+    jobNumber: "",
+    recordedBy: currentUser || "",
+  });
+  const [perItem, setPerItem] = useState({});
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const inputStyle = inputStyleFor(colors);
-  const qty = Number(form.packageCount) || 0;
-  const overshoot = qty > remaining;
-  const remainingPkgs = remainingPackages(item);
-  const pendingArrival = new Set(notYetArrivedPackages(item).map((p) => p.code));
-  const remainingCodesSet = new Set(remainingPkgs.map((p) => p.code));
-  const selectableBatches = usesArrivalBatches(item)
-    ? activeArrivals(item)
-        .map((b) => ({ ...b, remainingCodes: (b.codes || []).filter((c) => remainingCodesSet.has(c)) }))
-        .filter((b) => b.remainingCodes.length > 0)
-    : [];
 
-  function toggleBatch(batch) {
-    const allSelected = batch.remainingCodes.every((c) => selectedCodes.includes(c));
-    setSelectedCodes((prev) => {
+  function getSel(itemId) {
+    return perItem[itemId] || { codes: [], qty: "" };
+  }
+  function setCodes(itemId, updater) {
+    setPerItem((prev) => {
+      const cur = prev[itemId] || { codes: [], qty: "" };
+      const nextCodes = typeof updater === "function" ? updater(cur.codes) : updater;
+      return { ...prev, [itemId]: { ...cur, codes: nextCodes } };
+    });
+  }
+  function setQty(itemId, qty) {
+    setPerItem((prev) => ({ ...prev, [itemId]: { ...(prev[itemId] || { codes: [] }), qty } }));
+  }
+  function toggleCode(itemId, code) {
+    setCodes(itemId, (prev) => (prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]));
+  }
+  function toggleBatch(itemId, batch) {
+    setCodes(itemId, (prev) => {
+      const allSelected = batch.remainingCodes.every((c) => prev.includes(c));
       if (allSelected) return prev.filter((c) => !batch.remainingCodes.includes(c));
       return [...new Set([...prev, ...batch.remainingCodes])];
     });
   }
 
-  function toggleCode(code) {
-    setSelectedCodes((prev) => (prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]));
-  }
+  const anySelected = deliveryItems.some((it) => {
+    const itemized = (it.packages || []).length > 0;
+    const sel = getSel(it.id);
+    return itemized ? sel.codes.length > 0 : Number(sel.qty) > 0;
+  });
+  const anyOvershoot = deliveryItems.some((it) => {
+    const itemized = (it.packages || []).length > 0;
+    if (itemized) return false;
+    const sel = getSel(it.id);
+    return Number(sel.qty) > remainingUnits(it);
+  });
 
   function handleAddClick() {
     const jobNumber = form.jobNumber || nextJobNumber(items);
-    const deliveredTo = form.deliveredTo || item.constructionSite || item.project || "";
-    const receivedBy = form.receivedBy || item.orderedBy || "";
-    const record = itemized
-      ? { ...form, jobNumber, deliveredTo, receivedBy, codes: selectedCodes }
-      : { ...form, jobNumber, deliveredTo, receivedBy, packageCount: multiUnit ? qty : 1 };
-    onAddDelivery(record);
-    setSelectedCodes([]);
-    setForm({ date: todayStr(), packageCount: multiUnit ? "" : "1", deliveredTo: item.constructionSite || item.project || "", receivedBy: "", notes: "", jobNumber: "", recordedBy: currentUser || "" });
-    onPrintJobSheet({ type: "Delivery", item, delivery: record });
+    const deliveredTo = form.deliveredTo || firstItem.constructionSite || firstItem.project || "";
+    const receivedBy = form.receivedBy || firstItem.orderedBy || "";
+    const entries = [];
+    for (const it of deliveryItems) {
+      const itemized = (it.packages || []).length > 0;
+      const sel = getSel(it.id);
+      if (itemized) {
+        if (sel.codes.length === 0) continue;
+        entries.push({ itemId: it.id, delivery: { date: form.date, deliveredTo, receivedBy, jobNumber, recordedBy: form.recordedBy, notes: form.notes, codes: sel.codes } });
+      } else {
+        const qty = Number(sel.qty) || 0;
+        if (qty <= 0) continue;
+        entries.push({ itemId: it.id, delivery: { date: form.date, deliveredTo, receivedBy, jobNumber, recordedBy: form.recordedBy, notes: form.notes, packageCount: qty } });
+      }
+    }
+    if (entries.length === 0) return;
+    setPerItem({});
+    setForm({ date: todayStr(), deliveredTo: firstItem.constructionSite || firstItem.project || "", receivedBy: "", notes: "", jobNumber: "", recordedBy: currentUser || "" });
+    if (entries.length === 1 && !isCombined) {
+      const record = onAddDelivery(entries[0].delivery, entries[0].itemId);
+      onPrintJobSheet({ type: "Delivery", item: firstItem, delivery: record || entries[0].delivery });
+    } else {
+      const recorded = onAddCombinedDelivery(entries);
+      const groups = recorded.map(({ itemId, record }) => ({ item: deliveryItems.find((i) => i.id === itemId), delivery: record }));
+      onPrintJobSheet({ type: "Delivery", combined: true, groups, jobNumber, date: form.date, deliveredTo, receivedBy });
+    }
   }
 
   return (
     <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
       <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>
-        {t.deliveryTitlePrefix} {item.id}
+        {isCombined ? t.combinedDeliveryTitle(deliveryItems.length) : `${t.deliveryTitlePrefix} ${firstItem.id}`}
       </h3>
       <p className="text-sm mb-4" style={{ color: colors.inkFaint }}>
-        {item.client} · {item.project}{item.plannedDeliveryDate ? t.plannedWasText(fmt(item.plannedDeliveryDate)) : ""}
+        {isCombined
+          ? deliveryItems.map((it) => `${it.unitCode || it.id}`).join(" · ")
+          : <>{firstItem.client} · {firstItem.project}{firstItem.plannedDeliveryDate ? t.plannedWasText(fmt(firstItem.plannedDeliveryDate)) : ""}</>}
       </p>
 
-      <div className="px-3 py-2 rounded text-sm mb-4" style={{ background: colors.surfaceDim, color: colors.ink }}>
-        <strong>{deliveredUnits(item)}</strong> {t.progressOf} <strong>{totalUnits(item)}</strong> {t.progressDeliveredSoFar} ·{" "}
-        <strong>{remaining}</strong> {t.progressRemaining}
-      </div>
-
-      {activeDeliveries(item).length > 0 && (
+      {!isCombined && activeDeliveries(firstItem).length > 0 && (
         <div className="mb-4 rounded overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
           <table className="w-full text-xs" style={{ background: colors.surface }}>
             <thead>
@@ -2147,7 +2197,7 @@ function DeliveryForm({ item, onAddDelivery, onDeleteDelivery, onCancel, onPrint
               </tr>
             </thead>
             <tbody>
-              {[...activeDeliveries(item)].sort((a, b) => (a.date || "").localeCompare(b.date || "")).map((d) => (
+              {[...activeDeliveries(firstItem)].sort((a, b) => (a.date || "").localeCompare(b.date || "")).map((d) => (
                 <tr key={d.id} style={{ borderTop: `1px solid ${colors.surfaceDim}` }}>
                   <td className="px-2 py-1.5" style={{ color: colors.ink }}>{fmt(d.date)}</td>
                   <td className="px-2 py-1.5" style={{ color: colors.ink }}>{d.codes ? d.codes.join(", ") : d.packageCount}</td>
@@ -2155,8 +2205,8 @@ function DeliveryForm({ item, onAddDelivery, onDeleteDelivery, onCancel, onPrint
                   <td className="px-2 py-1.5" style={{ color: colors.ink }}>{d.receivedBy || "—"}</td>
                   <td className="px-2 py-1.5" style={{ fontFamily: FONT_MONO, color: colors.ink }}>{d.jobNumber || "—"}</td>
                   <td className="px-2 py-1.5 text-right whitespace-nowrap">
-                    <button className="text-xs font-semibold mr-2" style={{ color: colors.amberText }} onClick={() => onPrintJobSheet({ type: "Delivery", item, delivery: d })}>{t.printBtn}</button>
-                    <button className="text-xs font-semibold" style={{ color: colors.red }} onClick={() => onDeleteDelivery(d.id)}>{t.cancelJobBtn}</button>
+                    <button className="text-xs font-semibold mr-2" style={{ color: colors.amberText }} onClick={() => onPrintJobSheet({ type: "Delivery", item: firstItem, delivery: d })}>{t.printBtn}</button>
+                    <button className="text-xs font-semibold" style={{ color: colors.red }} onClick={() => onDeleteDelivery(d.id, firstItem.id)}>{t.cancelJobBtn}</button>
                   </td>
                 </tr>
               ))}
@@ -2164,167 +2214,203 @@ function DeliveryForm({ item, onAddDelivery, onDeleteDelivery, onCancel, onPrint
           </table>
         </div>
       )}
-
-      {remaining > 0 ? (
-        <>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-            <Field label={t.fDeliveryDate} hint={t.fDeliveryDateHint} colors={colors}>
-              <input type="date" className={inputClass} style={inputStyle} value={form.date} onChange={set("date")} />
-            </Field>
-            {itemized ? <div /> : multiUnit ? (
-              <Field label={t.fQty} hint={t.fQtyHint(remaining)} colors={colors}>
-                <input type="number" min="1" max={remaining} className={inputClass} style={inputStyle} value={form.packageCount} onChange={set("packageCount")} />
-              </Field>
-            ) : <div />}
-            <div />
-            <Field label={t.fDeliveredTo} hint={t.fDeliveredToHint} colors={colors}>
-              <input className={inputClass} style={inputStyle} value={form.deliveredTo} onChange={set("deliveredTo")} />
-            </Field>
-            <Field label={t.fReceivedBy} hint={t.fReceivedByHint} colors={colors}>
-              <input className={inputClass} style={inputStyle} value={form.receivedBy} onChange={set("receivedBy")} />
-            </Field>
-            <Field label={t.fJobNumber} hint={t.fJobNumberHint} colors={colors}>
-              <div className="flex gap-2">
-                <input className={inputClass + " flex-1"} style={inputStyle} value={form.jobNumber} onChange={set("jobNumber")} />
-                <button
-                  type="button"
-                  className="px-2.5 py-1.5 rounded text-xs font-semibold whitespace-nowrap"
-                  style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}
-                  onClick={() => setForm((f) => ({ ...f, jobNumber: nextJobNumber(items) }))}
-                >
-                  {t.generateJobNoBtn}
-                </button>
-              </div>
-            </Field>
-            <Field label={t.fRecordedBy} hint={t.fRecordedByHint} colors={colors}>
-              <select className={inputClass} style={inputStyle} value={form.recordedBy} onChange={set("recordedBy")}>
-                <option value=""></option>
-                {(employees || []).map((e) => <option key={e.id} value={e.name}>{e.name}</option>)}
-              </select>
-            </Field>
-            <div className="col-span-2 md:col-span-3">
-              <Field label={t.fNotes} colors={colors}>
-                <textarea className={inputClass} style={inputStyle} rows={2} value={form.notes} onChange={set("notes")} />
-              </Field>
-            </div>
-          </div>
-
-          {itemized && (
-            <div className="mt-4">
-              {selectableBatches.length > 1 && (
-                <div className="mb-3">
-                  <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
-                    {t.selectByBatchLabel}
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {selectableBatches.map((b) => {
-                      const allSelected = b.remainingCodes.every((c) => selectedCodes.includes(c));
-                      const someSelected = !allSelected && b.remainingCodes.some((c) => selectedCodes.includes(c));
-                      return (
-                        <button
-                          key={b.id}
-                          type="button"
-                          onClick={() => toggleBatch(b)}
-                          className="px-3 py-1.5 rounded text-xs font-semibold text-left"
-                          style={{
-                            border: `1px solid ${allSelected || someSelected ? colors.amber : colors.line}`,
-                            background: allSelected ? colors.amberSoft : someSelected ? colors.surfaceDim : colors.surface,
-                            color: allSelected || someSelected ? colors.amberText : colors.ink,
-                          }}
-                        >
-                          {fmt(b.date)}{b.type ? ` · ${b.type}` : ""} · {b.remainingCodes.length} {t.jsPkgs}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-              <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
-                {t.selectCodesLabel}
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {remainingPkgs.map((p) => {
-                  const notHere = pendingArrival.has(p.code);
-                  if (notHere) {
-                    return (
-                      <span
-                        key={p.code}
-                        className="px-2.5 py-1.5 rounded text-xs font-semibold text-left"
-                        style={{ border: `1px dashed ${colors.line}`, background: colors.surfaceDim, color: colors.inkFaint, cursor: "not-allowed" }}
-                        title={t.notYetArrivedHint}
-                      >
-                        {p.code} · {t.notYetArrivedTag}
-                      </span>
-                    );
-                  }
-                  return (
-                  <button
-                    key={p.code}
-                    type="button"
-                    onClick={() => toggleCode(p.code)}
-                    className="px-2.5 py-1.5 rounded text-xs font-semibold text-left"
-                    style={{
-                      border: `1px solid ${selectedCodes.includes(p.code) ? colors.amber : colors.line}`,
-                      background: selectedCodes.includes(p.code) ? colors.amberSoft : colors.surface,
-                      color: selectedCodes.includes(p.code) ? colors.amberText : colors.ink,
-                    }}
-                    title={p.description}
-                  >
-                    {p.code}{p.description ? ` — ${p.description}` : ""}
-                  </button>
-                  );
-                })}
-              </div>
-              {pendingArrival.size > 0 && (
-                <div className="mt-2 px-3 py-2 rounded text-xs" style={{ background: colors.amberSoft, color: colors.amberText }}>
-                  {t.pendingArrivalNotice(pendingArrival.size)}
-                </div>
-              )}
-            </div>
-          )}
-
-          {!itemized && overshoot && (
-            <div className="mt-3 px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>
-              {t.overshootMsg(remaining)}
-            </div>
-          )}
-
-          {!form.recordedBy && (
-            <div className="mt-3 px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>
-              {t.recordedByRequiredMsg}
-            </div>
-          )}
-
-          <div className="flex gap-2 mt-5">
-            <button
-              className="px-4 py-2 rounded text-sm font-semibold"
-              style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY }}
-              disabled={(itemized ? (selectedCodes.length === 0 || !form.date) : (qty <= 0 || overshoot || !form.date)) || !form.recordedBy}
-              onClick={handleAddClick}
-            >
-              {t.addDeliveryBtn}
-            </button>
-            <button
-              className="px-4 py-2 rounded text-sm font-semibold"
-              style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY }}
-              onClick={onCancel}
-            >
-              {t.closeBtn}
-            </button>
-          </div>
-        </>
-      ) : (
-        <div className="flex flex-col gap-3">
-          <div className="px-3 py-2 rounded text-sm" style={{ background: colors.greenSoft, color: colors.green }}>{itemized ? t.noCodesRemainingMsg : t.allDeliveredMsg}</div>
-          <button
-            className="px-4 py-2 rounded text-sm font-semibold w-fit"
-            style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY }}
-            onClick={onCancel}
-          >
-            {t.closeBtn}
-          </button>
+      {isCombined && (
+        <div className="mb-4 px-3 py-2 rounded text-xs" style={{ background: colors.surfaceDim, color: colors.inkFaint }}>
+          {t.combinedHistoryHiddenNote}
         </div>
       )}
+
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+        <Field label={t.fDeliveryDate} hint={t.fDeliveryDateHint} colors={colors}>
+          <input type="date" className={inputClass} style={inputStyle} value={form.date} onChange={set("date")} />
+        </Field>
+        <div />
+        <div />
+        <Field label={t.fDeliveredTo} hint={t.fDeliveredToHint} colors={colors}>
+          <input className={inputClass} style={inputStyle} value={form.deliveredTo} onChange={set("deliveredTo")} />
+        </Field>
+        <Field label={t.fReceivedBy} hint={t.fReceivedByHint} colors={colors}>
+          <input className={inputClass} style={inputStyle} value={form.receivedBy} onChange={set("receivedBy")} />
+        </Field>
+        <Field label={t.fJobNumber} hint={t.fJobNumberHint} colors={colors}>
+          <div className="flex gap-2">
+            <input className={inputClass + " flex-1"} style={inputStyle} value={form.jobNumber} onChange={set("jobNumber")} />
+            <button
+              type="button"
+              className="px-2.5 py-1.5 rounded text-xs font-semibold whitespace-nowrap"
+              style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}
+              onClick={() => setForm((f) => ({ ...f, jobNumber: nextJobNumber(items) }))}
+            >
+              {t.generateJobNoBtn}
+            </button>
+          </div>
+        </Field>
+        <Field label={t.fRecordedBy} hint={t.fRecordedByHint} colors={colors}>
+          <select className={inputClass} style={inputStyle} value={form.recordedBy} onChange={set("recordedBy")}>
+            <option value=""></option>
+            {(employees || []).map((e) => <option key={e.id} value={e.name}>{e.name}</option>)}
+          </select>
+        </Field>
+        <div className="col-span-2 md:col-span-3">
+          <Field label={t.fNotes} colors={colors}>
+            <textarea className={inputClass} style={inputStyle} rows={2} value={form.notes} onChange={set("notes")} />
+          </Field>
+        </div>
+      </div>
+
+      {deliveryItems.map((it) => {
+        const remaining = remainingUnits(it);
+        const multiUnit = totalUnits(it) > 1;
+        const itemized = (it.packages || []).length > 0;
+        const remainingPkgs = remainingPackages(it);
+        const pendingArrival = new Set(notYetArrivedPackages(it).map((p) => p.code));
+        const remainingCodesSet = new Set(remainingPkgs.map((p) => p.code));
+        const selectableBatches = usesArrivalBatches(it)
+          ? activeArrivals(it).map((b) => ({ ...b, remainingCodes: (b.codes || []).filter((c) => remainingCodesSet.has(c)) })).filter((b) => b.remainingCodes.length > 0)
+          : [];
+        const sel = getSel(it.id);
+
+        if (remaining <= 0) {
+          return (
+            <div key={it.id} className="mt-4 px-3 py-2 rounded text-sm" style={{ background: colors.greenSoft, color: colors.green }}>
+              {(it.unitCode || it.id)}: {itemized ? t.noCodesRemainingMsg : t.allDeliveredMsg}
+            </div>
+          );
+        }
+
+        return (
+          <div key={it.id} className="mt-5 pt-4" style={{ borderTop: `1px solid ${colors.line}` }}>
+            {isCombined && (
+              <div className="text-sm font-bold mb-2" style={{ color: colors.ink, fontFamily: FONT_DISPLAY }}>
+                {it.unitCode || it.id} · {it.client} · {it.project}{it.jobNumber ? ` · ${t.colJobNo}: ${it.jobNumber}` : ""}
+              </div>
+            )}
+            {itemized ? (
+              <div>
+                {selectableBatches.length > 1 && (
+                  <div className="mb-3">
+                    <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
+                      {t.selectByBatchLabel}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {selectableBatches.map((b) => {
+                        const allSelected = b.remainingCodes.every((c) => sel.codes.includes(c));
+                        const someSelected = !allSelected && b.remainingCodes.some((c) => sel.codes.includes(c));
+                        return (
+                          <button
+                            key={b.id}
+                            type="button"
+                            onClick={() => toggleBatch(it.id, b)}
+                            className="px-3 py-1.5 rounded text-xs font-semibold text-left"
+                            style={{
+                              border: `1px solid ${allSelected || someSelected ? colors.amber : colors.line}`,
+                              background: allSelected ? colors.amberSoft : someSelected ? colors.surfaceDim : colors.surface,
+                              color: allSelected || someSelected ? colors.amberText : colors.ink,
+                            }}
+                          >
+                            {fmt(b.date)}{b.type ? ` · ${b.type}` : ""} · {b.remainingCodes.length} {t.jsPkgs}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+                <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
+                  {t.selectCodesLabel}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {remainingPkgs.map((p) => {
+                    const notHere = pendingArrival.has(p.code);
+                    if (notHere) {
+                      return (
+                        <span
+                          key={p.code}
+                          className="px-2.5 py-1.5 rounded text-xs font-semibold text-left"
+                          style={{ border: `1px dashed ${colors.line}`, background: colors.surfaceDim, color: colors.inkFaint, cursor: "not-allowed" }}
+                          title={t.notYetArrivedHint}
+                        >
+                          {p.code} · {t.notYetArrivedTag}
+                        </span>
+                      );
+                    }
+                    return (
+                    <button
+                      key={p.code}
+                      type="button"
+                      onClick={() => toggleCode(it.id, p.code)}
+                      className="px-2.5 py-1.5 rounded text-xs font-semibold text-left"
+                      style={{
+                        border: `1px solid ${sel.codes.includes(p.code) ? colors.amber : colors.line}`,
+                        background: sel.codes.includes(p.code) ? colors.amberSoft : colors.surface,
+                        color: sel.codes.includes(p.code) ? colors.amberText : colors.ink,
+                      }}
+                      title={p.description}
+                    >
+                      {p.code}{p.description ? ` — ${p.description}` : ""}
+                    </button>
+                    );
+                  })}
+                </div>
+                {pendingArrival.size > 0 && (
+                  <div className="mt-2 px-3 py-2 rounded text-xs" style={{ background: colors.amberSoft, color: colors.amberText }}>
+                    {t.pendingArrivalNotice(pendingArrival.size)}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="max-w-xs">
+                {multiUnit ? (
+                  <Field label={t.fQty} hint={t.fQtyHint(remaining)} colors={colors}>
+                    <input type="number" min="1" max={remaining} className={inputClass} style={inputStyle} value={sel.qty} onChange={(e) => setQty(it.id, e.target.value)} />
+                  </Field>
+                ) : (
+                  <button
+                    type="button"
+                    className="px-2.5 py-1.5 rounded text-xs font-semibold"
+                    style={{
+                      border: `1px solid ${Number(sel.qty) > 0 ? colors.amber : colors.line}`,
+                      background: Number(sel.qty) > 0 ? colors.amberSoft : colors.surface,
+                      color: Number(sel.qty) > 0 ? colors.amberText : colors.ink,
+                    }}
+                    onClick={() => setQty(it.id, Number(sel.qty) > 0 ? "" : "1")}
+                  >
+                    {Number(sel.qty) > 0 ? t.selectedTag : t.includeInDeliveryBtn}
+                  </button>
+                )}
+                {Number(sel.qty) > remaining && (
+                  <div className="mt-2 px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>
+                    {t.overshootMsg(remaining)}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {!form.recordedBy && (
+        <div className="mt-4 px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>
+          {t.recordedByRequiredMsg}
+        </div>
+      )}
+
+      <div className="flex gap-2 mt-5">
+        <button
+          className="px-4 py-2 rounded text-sm font-semibold"
+          style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY }}
+          disabled={!anySelected || anyOvershoot || !form.date || !form.recordedBy}
+          onClick={handleAddClick}
+        >
+          {isCombined ? t.addCombinedDeliveryBtn : t.addDeliveryBtn}
+        </button>
+        <button
+          className="px-4 py-2 rounded text-sm font-semibold"
+          style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY }}
+          onClick={onCancel}
+        >
+          {t.closeBtn}
+        </button>
+      </div>
     </div>
   );
 }
@@ -2480,7 +2566,215 @@ function computeOversizeText(item) {
   return lines.join("\n").trim();
 }
 
+function deliveryTotalsFor(it, del) {
+  const pkgs = del.codes ? del.codes.length : Number(del.packageCount) || 0;
+  let kgs = "", cbm = "", estimated = false;
+  if (del.codes && (it.packages || []).length > 0) {
+    const delivered = it.packages.filter((p) => del.codes.includes(p.code));
+    const haveAllWeights = delivered.length > 0 && delivered.every((p) => p.weightKg !== "" && p.weightKg != null);
+    const haveAllCbm = delivered.length > 0 && delivered.every((p) => p.cbm !== "" && p.cbm != null);
+    kgs = haveAllWeights ? String(Math.round(delivered.reduce((s, p) => s + Number(p.weightKg), 0) * 10) / 10) : "";
+    cbm = haveAllCbm ? String(Math.round(delivered.reduce((s, p) => s + Number(p.cbm), 0) * 1000) / 1000) : "";
+    if (!haveAllWeights || !haveAllCbm) estimated = true;
+  } else {
+    estimated = true;
+  }
+  if (estimated) {
+    const totalU = totalUnits(it) || 1;
+    const share = pkgs / totalU;
+    if (!kgs && it.weightKg) kgs = `~${Math.round(Number(it.weightKg) * share * 10) / 10}`;
+    if (!cbm && it.volumeCbm) cbm = `~${Math.round(Number(it.volumeCbm) * share * 1000) / 1000}`;
+  }
+  return { pkgs, kgs, cbm, estimated };
+}
+function refTextFor(it, del) {
+  const jn = it.jobNumber || "";
+  let dates = [];
+  if (usesArrivalBatches(it) && del && del.codes) {
+    const set = new Set(del.codes);
+    dates = [...new Set(activeArrivals(it).filter((a) => (a.codes || []).some((c) => set.has(c))).map((a) => a.date).filter(Boolean))];
+  }
+  if (dates.length === 0) dates = [effectiveDepotArrivalDate(it)].filter(Boolean);
+  if (dates.length === 0 || !jn) return "";
+  return dates.map((d) => `Refer to job no. ${jn} on ${fmt(d)}`).join("\n");
+}
+
+function CombinedDeliveryPrint({ sheet, onClose, directory, colors, t, lang }) {
+  const { groups, jobNumber, date, deliveredTo } = sheet;
+  const firstItem = groups[0].item;
+  const depotEn = firstItem.depot || "";
+  const depotZh = DEPOT_LABELS_ZH[firstItem.depot] || "";
+  const dirMatch = (directory || []).find((s) => s.siteEn && (s.siteEn === firstItem.constructionSite || s.siteEn === firstItem.project));
+  const siteZh = (dirMatch && dirMatch.siteZh) || "";
+  const siteContact = dirMatch ? [dirMatch.contactName, dirMatch.contactPhone].filter(Boolean).join(" ") : "";
+
+  const site = firstItem.constructionSite || firstItem.project || deliveredTo || "";
+  const toTop = [site ? (/^site\s+at/i.test(site) ? site : `SITE AT ${site}`) : "", siteZh].filter(Boolean).join("\n");
+  const toBottom = siteContact;
+
+  const rows = groups.map((g) => ({ ...g, totals: deliveryTotalsFor(g.item, g.delivery), ref: refTextFor(g.item, g.delivery) }));
+  const anyEstimated = rows.some((r) => r.totals.estimated);
+  const totalPkgs = rows.reduce((s, r) => s + r.totals.pkgs, 0);
+  const numOrNull = (v) => { const n = Number(String(v || "").replace("~", "")); return isNaN(n) ? null : n; };
+  const kgVals = rows.map((r) => numOrNull(r.totals.kgs));
+  const cbmVals = rows.map((r) => numOrNull(r.totals.cbm));
+  const totalKgs = kgVals.every((v) => v != null) ? Math.round(kgVals.reduce((s, v) => s + v, 0) * 10) / 10 : "";
+  const totalCbm = cbmVals.every((v) => v != null) ? Math.round(cbmVals.reduce((s, v) => s + v, 0) * 1000) / 1000 : "";
+
+  const lbl = { border: "1px solid #111", fontWeight: "bold", padding: "4px 6px", verticalAlign: "top", width: 78, fontSize: 13, wordBreak: "break-word", overflowWrap: "break-word" };
+  const cel = { border: "1px solid #111", padding: 6, verticalAlign: "top", wordBreak: "break-word", overflowWrap: "break-word" };
+  const cel0 = { border: "1px solid #111", padding: 0, verticalAlign: "top", wordBreak: "break-word", overflowWrap: "break-word" };
+
+  return (
+    <div id="job-sheet-print-root" className="fixed inset-0 z-50 flex flex-col" style={{ background: "rgba(0,0,0,0.5)" }}>
+      <style>{`
+        @media print {
+          body * { visibility: hidden; }
+          #job-sheet-print-root, #job-sheet-print-root * { visibility: visible; }
+          #job-sheet-print-root { position: absolute; inset: auto; left: 0; top: 0; width: 100%; background: #fff !important; }
+          #job-sheet-print-toolbar { display: none !important; }
+          #job-sheet-print-scroll { overflow: visible !important; height: auto !important; padding: 0 !important; }
+          #job-sheet-print-area { margin: 0 !important; max-width: 100% !important; }
+        }
+      `}</style>
+      <div id="job-sheet-print-toolbar" className="flex flex-wrap items-center gap-2 p-3" style={{ background: colors.navy }}>
+        <span className="text-sm font-semibold" style={{ color: colors.onDark, fontFamily: FONT_DISPLAY }}>{t.combinedPrintLabel}</span>
+        <div className="ml-auto flex gap-2">
+          <button className="px-4 py-2 rounded text-sm font-semibold" style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }} onClick={() => window.print()}>
+            {t.printBtn}
+          </button>
+          <button className="px-4 py-2 rounded text-sm font-semibold" style={{ border: `1px solid ${colors.onDark}`, color: colors.onDark, fontFamily: FONT_DISPLAY }} onClick={onClose}>
+            {t.closePreviewBtn}
+          </button>
+        </div>
+      </div>
+      <div id="job-sheet-print-scroll" className="flex-1 overflow-y-auto p-6" style={{ background: colors.bg }}>
+        <div id="job-sheet-print-area" className="mx-auto" style={{ background: "#fff", color: "#111", maxWidth: 700, padding: 24, fontFamily: "Arial, sans-serif", fontSize: 15 }}>
+
+          <div className="flex items-start justify-between" style={{ marginBottom: 8 }}>
+            <div className="flex items-center gap-3">
+              <img src={FARSPEED_LOGO_DATA_URI} alt="Farspeed" style={{ height: 78, width: "auto" }} />
+              <div>
+                <div style={{ fontSize: 24, fontWeight: 700, color: "#111", lineHeight: 1.1 }}>FARSPEED Contractors Limited</div>
+                <div style={{ fontSize: 11, color: "#111" }}>P. O. Box No. 1985, Yuen Long Post Office, Yuen Long, N.T., Hong Kong</div>
+                <div style={{ fontSize: 11, color: "#111" }}>Tel: +852 5337-9500&nbsp;&nbsp;Fax: +852 2402-4450&nbsp;&nbsp;http://www.farspeed.hk</div>
+              </div>
+            </div>
+            <div className="flex items-start" style={{ fontSize: 16, fontWeight: 700, lineHeight: 1.5 }}>
+              <div style={{ writingMode: "vertical-rl", color: "#111", letterSpacing: 3 }}>有限公司</div>
+              <div style={{ writingMode: "vertical-rl", color: "#111", letterSpacing: 3, marginLeft: 4 }}>快達承判</div>
+            </div>
+          </div>
+          <div style={{ borderTop: "2.5px solid #111", marginBottom: 10 }} />
+
+          <div className="text-center font-bold mb-3" style={{ fontSize: 22, letterSpacing: 6 }}>
+            {t.jsTitleZh}&nbsp;&nbsp;{t.jsTitle}
+          </div>
+
+          <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", fontSize: 18 }}>
+            <tbody>
+              <tr>
+                <td style={lbl}>{t.jsFromZh}<br />{t.jsFrom}</td>
+                <td style={{ ...cel0, borderLeft: "1px solid #111", borderRight: "1px solid #111", borderTop: "1px solid #111", borderBottom: "1px solid #111" }}>
+                  <div style={{ padding: "6px 8px", whiteSpace: "pre-line", fontSize: 20 }}>{[depotZh, depotEn].filter(Boolean).join("\n")}</div>
+                </td>
+                <td style={lbl} rowSpan={toBottom ? 1 : 1}>{t.jsToZh}<br />{t.jsTo}</td>
+                <td style={{ ...cel0, borderLeft: "1px solid #111", borderRight: "1px solid #111", borderTop: "1px solid #111", borderBottom: toBottom ? "none" : "1px solid #111" }} rowSpan={toBottom ? 1 : 1}>
+                  <div style={{ padding: "6px 8px", whiteSpace: "pre-line", fontSize: 20, fontWeight: "bold" }}>{toTop}</div>
+                </td>
+              </tr>
+              {toBottom && (
+                <tr>
+                  <td style={lbl}></td>
+                  <td style={cel0}></td>
+                  <td style={{ ...cel0, borderLeft: "1px solid #111", borderRight: "1px solid #111", borderBottom: "1px solid #111", borderTop: "none" }}>
+                    <div style={{ padding: "6px 8px", whiteSpace: "pre-line", fontSize: 20, fontWeight: "bold" }}>{toBottom}</div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+
+          <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", fontSize: 18, marginTop: -1 }}>
+            <tbody>
+              <tr>
+                <td style={lbl}>{t.jsAccountZh}<br />{t.jsAccount}</td>
+                <td style={cel}>{firstItem.client}</td>
+                <td style={lbl}>{t.jsJobNoZh}<br />{t.jsJobNo}</td>
+                <td style={{ ...cel, fontWeight: "bold" }}>{jobNumber || "—"}</td>
+                <td style={lbl}>{t.jsDateZh}<br />{t.jsDate}</td>
+                <td style={cel}>{fmt(date)}</td>
+              </tr>
+              <tr>
+                <td style={lbl}>{t.jsOrderedByZh}<br />{t.jsOrderedBy}</td>
+                <td style={cel}>{firstItem.orderedBy || "—"}</td>
+                <td style={lbl}>{t.jsPoNoZh}<br />{t.jsPoNo}</td>
+                <td style={cel}>{firstItem.poNumber || "—"}</td>
+                <td style={lbl}>{t.jsJobRefZh}<br />{t.jsJobRef}</td>
+                <td style={cel}>{firstItem.jobRef || "—"}</td>
+              </tr>
+              <tr>
+                <td style={lbl}>提單資料<br />SS/D.O. NO.</td>
+                <td style={cel} colSpan={5}>—</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div style={{ border: "1px solid #111", borderTop: "none", padding: "4px 6px", display: "flex", alignItems: "center", fontSize: 16 }}>
+            <span style={{ flex: 1, textAlign: "center", fontWeight: "bold" }}>
+              {t.jsDescriptionZh}<br /><span style={{ letterSpacing: 2 }}>{t.jsDescription}</span>
+            </span>
+            <span style={{ fontSize: 12 }}>{t.jsIssuedByZh}: {groups[0].delivery.recordedBy || "—"}</span>
+          </div>
+
+          <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #111", borderTop: "none", fontSize: 16 }}>
+            <tbody>
+              <tr>
+                <td style={{ padding: 8, verticalAlign: "top", height: 400 }}>
+                  {rows.map((r, idx) => (
+                    <div key={r.item.id} style={{ marginBottom: idx < rows.length - 1 ? 14 : 0 }}>
+                      {r.ref && <div style={{ marginBottom: 4, textDecoration: "underline", whiteSpace: "pre-line" }}>{r.ref}</div>}
+                      {r.item.shkNumber && <div style={{ fontWeight: "bold" }}>{r.item.shkNumber}</div>}
+                      {r.item.unitCode && <div style={{ fontWeight: "bold" }}>{r.item.unitCode}</div>}
+                      {r.item.description && <div>{r.item.description}</div>}
+                      {r.delivery.codes && r.delivery.codes.length > 0 && (
+                        <div style={{ fontSize: 12, color: "#111" }}>
+                          C/S NO. {r.delivery.codes.join(", ")} &nbsp;&nbsp; {r.totals.pkgs} {t.jsPkgs}
+                          {r.totals.kgs ? ` \u00b7 ${r.totals.kgs} ${t.jsKgs}` : ""}{r.totals.cbm ? ` \u00b7 ${r.totals.cbm} ${t.jsCbm}` : ""}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  <div style={{ borderTop: "1px solid #111", marginTop: 12, paddingTop: 6 }}>
+                    共:&nbsp;&nbsp;&nbsp;{totalPkgs} {t.jsPkgs} &nbsp;&nbsp;&nbsp; {totalKgs !== "" ? totalKgs : "—"} {t.jsKgs} &nbsp;&nbsp;&nbsp; {totalCbm !== "" ? totalCbm : "—"} {t.jsCbm}
+                  </div>
+                  {anyEstimated && <div style={{ fontSize: 10, color: "#900", marginTop: 4 }}>{t.jsEstimatedNote}</div>}
+                </td>
+              </tr>
+              <tr>
+                <td style={{ padding: "0 8px", fontSize: 16 }}>
+                  客戶簽署確認 / Customer&nbsp;signature:&nbsp;______________________________&nbsp;(工作妥當及完成)
+                  <br /><br /><br /><br />
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div style={{ borderTop: "1px solid #ccc", paddingTop: 5, fontSize: 8, color: "#111", textAlign: "center", marginTop: 8 }}>
+            Office and Depot: 21D Wang Toi Shan, Hung Mo Tam, Kam Tin. NT., HK
+            <div style={{ marginTop: 2 }}>N.B. Farspeed Contractors Ltd. is a private company. All transaction(s) taken into account are subject to the STANDARD BUSINESS CONDITIONS of the company, details as behind.</div>
+            <div style={{ marginTop: 2 }}>(a member of FARSPEED Group)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
+  if (sheet.combined) {
+    return <CombinedDeliveryPrint sheet={sheet} onClose={onClose} directory={directory} colors={colors} t={t} lang={lang} />;
+  }
   const { type, item, delivery } = sheet;
   const isDelivery = type === "Delivery";
   const depotEn = item.depot || "";
@@ -3901,7 +4195,8 @@ export default function FarspeedInventory() {
   const [loaded, setLoaded] = useState(false);
   const [view, setView] = useState("dashboard");
   const [editing, setEditing] = useState(null);
-  const [exitingItem, setExitingItem] = useState(null);
+  const [exitingItems, setExitingItems] = useState([]);
+  const [deliveryPickerSelection, setDeliveryPickerSelection] = useState([]);
   const [deliverySearch, setDeliverySearch] = useState("");
   const [deliveryFilterClient, setDeliveryFilterClient] = useState("All");
   const [deliveryFilterDepot, setDeliveryFilterDepot] = useState("All");
@@ -4048,15 +4343,27 @@ export default function FarspeedInventory() {
     persist(items.filter((i) => i.id !== id));
   }
 
-  function handleAddDelivery(delivery) {
+  function handleAddDelivery(delivery, itemId) {
     const record = { ...delivery, id: `D${Date.now()}${Math.floor(Math.random() * 1000)}` };
-    persist(items.map((i) => (i.id === exitingItem.id ? { ...i, deliveries: [...(i.deliveries || []), record] } : i)));
-    setExitingItem((prev) => (prev ? { ...prev, deliveries: [...(prev.deliveries || []), record] } : prev));
+    persist(items.map((i) => (i.id === itemId ? { ...i, deliveries: [...(i.deliveries || []), record] } : i)));
+    setExitingItems((prev) => prev.map((i) => (i.id === itemId ? { ...i, deliveries: [...(i.deliveries || []), record] } : i)));
+    return record;
   }
 
-  function handleDeleteDelivery(deliveryId) {
-    persist(items.map((i) => (i.id === exitingItem.id ? { ...i, deliveries: (i.deliveries || []).map((d) => (d.id === deliveryId ? { ...d, cancelled: true } : d)) } : i)));
-    setExitingItem((prev) => (prev ? { ...prev, deliveries: (prev.deliveries || []).map((d) => (d.id === deliveryId ? { ...d, cancelled: true } : d)) } : prev));
+  // Records one combined delivery across multiple items at once (same job number, date,
+  // destination and receiver) - each item gets its own delivery entry with its own codes,
+  // linked only by sharing that job number/date, and prints as a single combined job sheet.
+  function handleAddCombinedDelivery(entries) {
+    const records = entries.map(({ itemId, delivery }) => ({ itemId, record: { ...delivery, id: `D${Date.now()}${Math.floor(Math.random() * 1000)}-${itemId}` } }));
+    const byItemId = new Map(records.map((r) => [r.itemId, r.record]));
+    persist(items.map((i) => (byItemId.has(i.id) ? { ...i, deliveries: [...(i.deliveries || []), byItemId.get(i.id)] } : i)));
+    setExitingItems((prev) => prev.map((i) => (byItemId.has(i.id) ? { ...i, deliveries: [...(i.deliveries || []), byItemId.get(i.id)] } : i)));
+    return records;
+  }
+
+  function handleDeleteDelivery(deliveryId, itemId) {
+    persist(items.map((i) => (i.id === itemId ? { ...i, deliveries: (i.deliveries || []).map((d) => (d.id === deliveryId ? { ...d, cancelled: true } : d)) } : i)));
+    setExitingItems((prev) => prev.map((i) => (i.id === itemId ? { ...i, deliveries: (i.deliveries || []).map((d) => (d.id === deliveryId ? { ...d, cancelled: true } : d)) } : i)));
   }
 
   function handleCancelItem(itemId) {
@@ -4253,7 +4560,7 @@ export default function FarspeedInventory() {
               ["dashboard", t.navDashboard],
               ["inventory", t.navInventory],
             ].map(([k, label]) => (
-              <button key={k} onClick={() => { setEditing(null); setExitingItem(null); setNewEntryMenuOpen(false); setSettingsOpen(false); setView(k); }}
+              <button key={k} onClick={() => { setEditing(null); setExitingItems([]); setDeliveryPickerSelection([]); setNewEntryMenuOpen(false); setSettingsOpen(false); setView(k); }}
                 className="px-3 py-1.5 rounded text-sm font-semibold"
                 style={{ fontFamily: FONT_DISPLAY, background: view === k ? colors.amber : "transparent", color: view === k ? colors.ink : colors.onDark }}>
                 {label}
@@ -4294,7 +4601,7 @@ export default function FarspeedInventory() {
               ["directory", t.navDirectory],
               ["joblog", t.navJobLog],
             ].map(([k, label]) => (
-              <button key={k} onClick={() => { setEditing(null); setExitingItem(null); setNewEntryMenuOpen(false); setSettingsOpen(false); setView(k); }}
+              <button key={k} onClick={() => { setEditing(null); setExitingItems([]); setDeliveryPickerSelection([]); setNewEntryMenuOpen(false); setSettingsOpen(false); setView(k); }}
                 className="px-3 py-1.5 rounded text-sm font-semibold"
                 style={{ fontFamily: FONT_DISPLAY, background: view === k ? colors.amber : "transparent", color: view === k ? colors.ink : colors.onDark }}>
                 {label}
@@ -4576,7 +4883,7 @@ export default function FarspeedInventory() {
                         <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                           <div className="flex flex-wrap justify-end items-center gap-x-3 gap-y-1">
                             {["at_depot", "partial"].includes(deriveStatus(i)) && (
-                              <button className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => { setExitingItem(i); setView("exit"); }}>{t.deliverBtn}</button>
+                              <button className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => { setExitingItems([i]); setView("exit"); }}>{t.deliverBtn}</button>
                             )}
                             <button className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => { setEditing(i); setView("add"); }}>{t.editBtn}</button>
                             {i.jobNumber && (
@@ -4660,9 +4967,9 @@ export default function FarspeedInventory() {
 
         {view === "exit" && (
           <div className="flex flex-col gap-4">
-            {exitingItem ? (
-              <DeliveryForm item={exitingItem} onAddDelivery={handleAddDelivery} onDeleteDelivery={handleDeleteDelivery}
-                onCancel={() => { setExitingItem(null); setView("inventory"); }} onPrintJobSheet={setPrintJobSheet}
+            {exitingItems.length > 0 ? (
+              <DeliveryForm deliveryItems={exitingItems} onAddDelivery={handleAddDelivery} onAddCombinedDelivery={handleAddCombinedDelivery} onDeleteDelivery={handleDeleteDelivery}
+                onCancel={() => { setExitingItems([]); setDeliveryPickerSelection([]); setView("inventory"); }} onPrintJobSheet={setPrintJobSheet}
                 employees={employees} currentUser={currentUser} items={items} colors={colors} t={t} lang={lang} />
             ) : (
               <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
@@ -4689,11 +4996,27 @@ export default function FarspeedInventory() {
                       <option value="partial">{t.statusPartial}</option>
                     </select>
                   </Field>
+                  <div className="ml-auto">
+                    <button
+                      className="text-sm font-semibold px-3 py-2 rounded"
+                      style={{ background: deliveryPickerSelection.length > 0 ? colors.amber : colors.surfaceDim, color: deliveryPickerSelection.length > 0 ? colors.ink : colors.inkFaint, fontFamily: FONT_DISPLAY, cursor: deliveryPickerSelection.length > 0 ? "pointer" : "default" }}
+                      disabled={deliveryPickerSelection.length === 0}
+                      onClick={() => setExitingItems(filteredForDelivery.filter((i) => deliveryPickerSelection.includes(i.id)))}
+                    >
+                      {t.recordCombinedBtn(deliveryPickerSelection.length)}
+                    </button>
+                  </div>
                 </div>
+                {deliveryPickerSelection.length > 0 && (
+                  <div className="px-4 py-2 text-xs" style={{ background: colors.amberSoft, color: colors.amberText }}>
+                    {t.combinedSelectionHint}
+                  </div>
+                )}
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm" style={{ background: colors.surface }}>
                     <thead>
                       <tr style={{ background: colors.surfaceDim }}>
+                        <th className="px-3 py-2" style={{ width: 32 }}></th>
                         {[t.colClient, t.colProjectSite, t.colUnit, t.colDepot, t.colDepotArrival, t.colStatus, ""].map((h) => (
                           <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
                         ))}
@@ -4701,10 +5024,15 @@ export default function FarspeedInventory() {
                     </thead>
                     <tbody>
                       {filteredForDelivery.length === 0 && (
-                        <tr><td colSpan={7} className="px-3 py-6 text-center text-sm" style={{ color: colors.inkFaint }}>{t.nothingAtDepotMsg}</td></tr>
+                        <tr><td colSpan={8} className="px-3 py-6 text-center text-sm" style={{ color: colors.inkFaint }}>{t.nothingAtDepotMsg}</td></tr>
                       )}
-                      {filteredForDelivery.map((i) => (
-                        <tr key={i.id} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
+                      {filteredForDelivery.map((i) => {
+                        const checked = deliveryPickerSelection.includes(i.id);
+                        return (
+                        <tr key={i.id} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink, background: checked ? colors.amberSoft : "transparent" }}>
+                          <td className="px-3 py-2">
+                            <input type="checkbox" checked={checked} onChange={() => setDeliveryPickerSelection((prev) => checked ? prev.filter((x) => x !== i.id) : [...prev, i.id])} />
+                          </td>
                           <td className="px-3 py-2">{i.client}</td>
                           <td className="px-3 py-2 max-w-[220px] truncate">{i.project}</td>
                           <td className="px-3 py-2">{i.unitCode || "—"}</td>
@@ -4712,12 +5040,13 @@ export default function FarspeedInventory() {
                           <td className="px-3 py-2">{fmt(i.depotArrivalDate)}</td>
                           <td className="px-3 py-2"><StatusBadge item={i} colors={colors} t={t} /></td>
                           <td className="px-3 py-2 text-right">
-                            <button className="text-xs font-semibold px-2 py-1 rounded" style={{ background: colors.amber, color: colors.ink }} onClick={() => setExitingItem(i)}>
+                            <button className="text-xs font-semibold px-2 py-1 rounded" style={{ background: colors.amber, color: colors.ink }} onClick={() => setExitingItems([i])}>
                               {t.recordDeliveryBtn}
                             </button>
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
