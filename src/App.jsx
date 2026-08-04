@@ -509,6 +509,11 @@ function parsePackingListSheet(rows, legend) {
     if (colMap.dimension !== undefined && row[colMap.dimension]) cbm = plCbmFromDimension(row[colMap.dimension]);
     if (!cbm && colMap.cbm !== undefined && row[colMap.cbm] !== "" && row[colMap.cbm] != null) cbm = plNum(row[colMap.cbm]);
 
+    // Many bilingual packing lists have a second header row directly below the first,
+    // repeating the same column labels in Chinese (e.g. "项目号/行号/梯号" under "SAP NO.").
+    // That row has no real weight or CBM data, so skip it rather than counting it as a case.
+    if (i === headerIdx + 1 && !weight && !cbm) continue;
+
     if (lot) lastLot = lot;
     if (container) lastContainer = container;
     if (caseNo) lastCase = caseNo;
@@ -1164,6 +1169,9 @@ const TEXT = {
     incomingCheckInBtn: (n) => n > 0 ? `Check In (${n})` : "Check In",
     incomingCheckedInNote: (incId) => `Checked in from Incoming ${incId}`,
     packingListAddToIncomingBtn: (n) => `Add ${n} Group${n === 1 ? "" : "s"} to Incoming`,
+    packingListRemoveGroupBtn: "Remove this group",
+    incomingDeleteBtn: "Delete this Incoming shipment",
+    incomingDeleteConfirm: "Delete this Incoming shipment? This only removes it from Incoming \u2014 any inventory entry already checked in from it is not affected.",
     packingListIncomingHint: "This just adds the cases to Incoming \u2014 depot, Devan/CFS, job number, and date get decided later when you check them in from the Incoming tab.",
     billingTitle: "Storage Billing",
     billingDesc: "Search by client, project, job number, or case to see storage charges. Billed per arrival batch (not split by construction site) at the client's $/CBM monthly rate: free days first, the remainder of that month pro-rated by day, then every following month in full — even if the goods leave partway through it.",
@@ -1672,6 +1680,9 @@ const TEXT = {
     incomingCheckInBtn: (n) => n > 0 ? `辦理到倉 (${n})` : "辦理到倉",
     incomingCheckedInNote: (incId) => `由待到倉記錄 ${incId} 辦理到倉`,
     packingListAddToIncomingBtn: (n) => `新增 ${n} 組至待到倉`,
+    packingListRemoveGroupBtn: "移除此組",
+    incomingDeleteBtn: "刪除此待到倉貨件",
+    incomingDeleteConfirm: "確定刪除此待到倉貨件？此操作只會移除待到倉記錄 \u2014 已辦理到倉的存倉記錄不受影響。",
     packingListIncomingHint: "此步驟只會將件號加入待到倉名單 \u2014 倉庫、拆櫃/CFS、工單號及日期會在稍後於「待到倉」分頁辦理到倉時才決定。",
     billingTitle: "存倉收費",
     billingDesc: "可按客戶、項目、工單號或件號搜尋存倉收費。收費以到倉批次計算（不按地盤分開），按客戶的每CBM月費計：先扣免費日數，該月餘下日數按日比例計算，其後每個月則全額收取——即使貨物於月中送出亦然。",
@@ -3913,7 +3924,7 @@ function LegacyUploadRow({ row, onChange, onRemove, colors, t }) {
   );
 }
 
-function IncomingPanel({ incoming, items, directory, onCheckIn, colors, t, lang }) {
+function IncomingPanel({ incoming, setIncoming, items, directory, onCheckIn, colors, t, lang }) {
   const [search, setSearch] = useState("");
   const [filterClient, setFilterClient] = useState("All");
   const [showCompleted, setShowCompleted] = useState(false);
@@ -4021,6 +4032,16 @@ function IncomingPanel({ incoming, items, directory, onCheckIn, colors, t, lang 
                 ) : (
                   <Badge tone="amber" colors={colors}>{t.incomingRemainingBadge(remaining.length, (inc.packages || []).length)}</Badge>
                 )}
+                <button
+                  type="button"
+                  title={t.incomingDeleteBtn}
+                  aria-label={t.incomingDeleteBtn}
+                  className="w-6 h-6 rounded-full inline-flex items-center justify-center font-bold"
+                  style={{ background: colors.redSoft, color: colors.red, lineHeight: 1 }}
+                  onClick={(e) => { e.stopPropagation(); if (window.confirm(t.incomingDeleteConfirm)) setIncoming((prev) => prev.filter((i) => i.id !== inc.id)); }}
+                >
+                  &minus;
+                </button>
               </div>
               {isOpen && (
                 <div className="p-4 flex flex-col gap-4">
@@ -5152,7 +5173,7 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                 <table className="w-full text-sm" style={{ background: colors.surface }}>
                   <thead>
                     <tr style={{ background: colors.surfaceDim }}>
-                      {[t.colLot, t.colPackages, t.colContainers, t.colWeight, t.colCbm].map((h) => (
+                      {[t.colLot, t.colPackages, t.colContainers, t.colWeight, t.colCbm, ""].map((h) => (
                         <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
                       ))}
                     </tr>
@@ -5165,6 +5186,18 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                         <td className="px-3 py-2 text-xs" style={{ color: colors.inkFaint }}>{g.containers.join(", ") || "—"}</td>
                         <td className="px-3 py-2">{Math.round(g.totalWeight)}</td>
                         <td className="px-3 py-2">{g.totalCbm ? Math.round(g.totalCbm * 1000) / 1000 : "—"}</td>
+                        <td className="px-3 py-2 text-right">
+                          <button
+                            type="button"
+                            title={t.packingListRemoveGroupBtn}
+                            aria-label={t.packingListRemoveGroupBtn}
+                            className="w-6 h-6 rounded-full inline-flex items-center justify-center font-bold"
+                            style={{ background: colors.redSoft, color: colors.red, lineHeight: 1 }}
+                            onClick={() => setPlPreview((prev) => prev.filter((_, i) => i !== idx))}
+                          >
+                            &minus;
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -5172,7 +5205,12 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
               </div>
 
               <div className="flex gap-2">
-                <button className="px-4 py-2 rounded text-sm font-semibold w-fit" style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY }} onClick={addToIncoming}>
+                <button
+                  className="px-4 py-2 rounded text-sm font-semibold w-fit"
+                  style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY, opacity: plPreview.length === 0 ? 0.5 : 1 }}
+                  disabled={plPreview.length === 0}
+                  onClick={addToIncoming}
+                >
                   {t.packingListAddToIncomingBtn(plPreview.length)}
                 </button>
                 <button className="px-4 py-2 rounded text-sm font-semibold w-fit" style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY }}
@@ -6545,7 +6583,7 @@ export default function FarspeedInventory() {
         )}
 
         {view === "incoming" && (
-          <IncomingPanel incoming={incoming} items={items} directory={directory} onCheckIn={handleCheckIn} colors={colors} t={t} lang={lang} />
+          <IncomingPanel incoming={incoming} setIncoming={setIncoming} items={items} directory={directory} onCheckIn={handleCheckIn} colors={colors} t={t} lang={lang} />
         )}
 
         {view === "billing" && (
