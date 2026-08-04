@@ -328,10 +328,10 @@ const PL_HEADER_ALIASES = {
   containerNo: ["container no.", "container no", "container"],
   caseNo: ["case no.", "case no", "case\nno", "case", "cases discript", "cases     discript"],
   qty: ["qty", "quantity", "qyt = quantity", "qyt"],
-  lot: ["project no.", "project no", "lift name", "lift no.", "lift no", "lift"],
+  lot: ["project no.", "project no", "lift name", "lift no.", "lift no", "lift", "sap no.", "sap no", "sap"],
   description: ["description", "material description"],
-  grossWeight: ["g.weight", "gross weight", "gross", "actual   weight", "actual weight"],
-  netWeight: ["n.weight", "net weight", "net", "estimated  weight", "estimated weight"],
+  grossWeight: ["g.weight", "gross weight", "gross", "actual   weight", "actual weight", "g.w./kg", "g.w.", "g.w"],
+  netWeight: ["n.weight", "net weight", "net", "estimated  weight", "estimated weight", "n.w./kg", "n.w.", "n.w"],
   cbm: ["cbm", "volume(m3)", "volume (m3)", "volume"],
   dimension: ["dimension", "dimension (mm)", "dimensions", "size"],
 };
@@ -388,6 +388,48 @@ function plMapColumns(headerRow) {
   });
   return colMap;
 }
+// Manufacturer packing lists (like TK Elevator's) often list a "Marks:" block where the
+// first line is the project/building name (sometimes with unit codes and city tacked on,
+// e.g. "1881 Heritage E3&4,HongKong") followed by lines pairing a part/SAP number with its
+// unit code (e.g. "410217-501-003/E3"). This pulls out both: the clean project name, and a
+// lookup from part number to unit code so case groups can be labeled "E3"/"E4" instead of
+// showing the raw part number.
+function plGuessMarksBlock(rows) {
+  const legend = {};
+  let rawProjectLine = "";
+  for (let r = 0; r < Math.min(rows.length, 25); r++) {
+    const row = rows[r];
+    for (let i = 0; i < row.length; i++) {
+      const n = plNorm(row[i]);
+      if (n !== "marks" && n !== "marks:" && n !== "唛頭" && n !== "唛头" && n !== "shipping marks") continue;
+      let valueCol = -1;
+      for (let j = i + 1; j < row.length; j++) {
+        if (row[j] !== "" && row[j] != null) { rawProjectLine = String(row[j]).trim(); valueCol = j; break; }
+      }
+      if (valueCol === -1 && rows[r + 1] && row[i] !== undefined) {
+        if (rows[r + 1][i] !== "" && rows[r + 1][i] != null) { rawProjectLine = String(rows[r + 1][i]).trim(); valueCol = i; r = r + 1; }
+      }
+      if (valueCol === -1) continue;
+      for (let rr = r + 1; rr < Math.min(r + 6, rows.length); rr++) {
+        const cell = rows[rr] ? rows[rr][valueCol] : undefined;
+        if (cell === "" || cell == null) break;
+        const text = String(cell).trim();
+        const m = text.match(/^([\w\-]+)\s*\/\s*([A-Za-z0-9]+)$/);
+        if (!m) break;
+        legend[m[1].trim()] = m[2].trim();
+      }
+      return { rawProjectLine, legend };
+    }
+  }
+  return { rawProjectLine, legend };
+}
+function plCleanProjectName(rawLine) {
+  if (!rawLine) return "";
+  // Drop a trailing unit-code list and city (e.g. "1881 Heritage E3&4,HongKong" -> "1881 Heritage")
+  const beforeComma = rawLine.split(",")[0];
+  const stripped = beforeComma.replace(/\s*[A-Za-z]\d+(\s*&\s*[A-Za-z]?\d+)*\s*$/i, "").trim();
+  return stripped || beforeComma.trim();
+}
 function plGuessClient(rows) {
   for (const row of rows.slice(0, 25)) {
     for (const cell of row) {
@@ -411,13 +453,40 @@ function plGuessProject(rows) {
       }
     }
   }
-  return "";
+  // Fallback: manufacturer packing lists often have no literal "Project" label at all -
+  // pull the cleaned building name out of the Marks block instead.
+  const { rawProjectLine } = plGuessMarksBlock(rows);
+  return plCleanProjectName(rawProjectLine);
 }
-function parsePackingListSheet(rows) {
+function parsePackingListSheet(rows, legend) {
   const headerIdx = plDetectHeaderRow(rows);
   if (headerIdx === -1) return null;
   const colMap = plMapColumns(rows[headerIdx]);
   if (colMap.lot === undefined && colMap.caseNo === undefined) return null;
+
+  // Translates a raw lot value (which may be a manufacturer part/SAP number, or several
+  // comma-separated ones for cases shared across units) into friendly unit codes via the
+  // legend pulled from the Marks block, e.g. "410217-501-003,502-004" -> "E3, E4". The
+  // second part often omits the shared numeric prefix, so that's restored first.
+  function expandAbbreviatedParts(raw) {
+    const parts = raw.split(",").map((p) => p.trim()).filter(Boolean);
+    if (parts.length <= 1) return parts;
+    const firstSegs = parts[0].split("-");
+    const prefix = firstSegs.length > 2 ? firstSegs.slice(0, firstSegs.length - 2).join("-") : null;
+    return parts.map((p, idx) => {
+      if (idx === 0) return p;
+      const segs = p.split("-");
+      if (prefix && segs.length < firstSegs.length) return `${prefix}-${p}`;
+      return p;
+    });
+  }
+  function translateLot(raw) {
+    if (!legend || !Object.keys(legend).length) return raw;
+    const parts = expandAbbreviatedParts(raw);
+    const translated = parts.map((p) => legend[p] || p);
+    const allTranslated = parts.every((p) => legend[p]);
+    return allTranslated ? [...new Set(translated)].join(", ") : raw;
+  }
 
   const groups = {};
   const order = [];
@@ -432,9 +501,10 @@ function parsePackingListSheet(rows) {
     const container = colMap.containerNo !== undefined ? String(row[colMap.containerNo] || "").trim() : "";
     const caseNo = colMap.caseNo !== undefined ? String(row[colMap.caseNo] || "").trim() : "";
     const description = colMap.description !== undefined ? String(row[colMap.description] || "").trim() : "";
-    let weight = 0;
-    if (colMap.grossWeight !== undefined && row[colMap.grossWeight] !== "" && row[colMap.grossWeight] != null) weight = plNum(row[colMap.grossWeight]);
-    else if (colMap.netWeight !== undefined && row[colMap.netWeight] !== "" && row[colMap.netWeight] != null) weight = plNum(row[colMap.netWeight]);
+    const grossVal = colMap.grossWeight !== undefined && row[colMap.grossWeight] !== "" && row[colMap.grossWeight] != null ? plNum(row[colMap.grossWeight]) : null;
+    const netVal = colMap.netWeight !== undefined && row[colMap.netWeight] !== "" && row[colMap.netWeight] != null ? plNum(row[colMap.netWeight]) : null;
+    // Use whichever weight is bigger - usually gross, but this doesn't assume it.
+    const weight = grossVal != null && netVal != null ? Math.max(grossVal, netVal) : (grossVal != null ? grossVal : (netVal != null ? netVal : 0));
     let cbm = 0;
     if (colMap.dimension !== undefined && row[colMap.dimension]) cbm = plCbmFromDimension(row[colMap.dimension]);
     if (!cbm && colMap.cbm !== undefined && row[colMap.cbm] !== "" && row[colMap.cbm] != null) cbm = plNum(row[colMap.cbm]);
@@ -444,7 +514,7 @@ function parsePackingListSheet(rows) {
     if (caseNo) lastCase = caseNo;
     if (!description) continue;
 
-    const key = lastLot || "UNSPECIFIED";
+    const key = translateLot(lastLot) || "UNSPECIFIED";
     if (!groups[key]) { groups[key] = { lot: key, packages: [], containers: new Set(), totalWeight: 0, totalCbm: 0 }; order.push(key); }
     groups[key].packages.push({ code: lastCase || String(groups[key].packages.length + 1), description, weightKg: weight ? String(weight) : "", cbm: cbm ? String(cbm) : "" });
     if (lastContainer) groups[key].containers.add(lastContainer);
@@ -462,7 +532,8 @@ function parsePackingListWorkbook(workbook) {
     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: true });
     if (!client) client = plGuessClient(rows);
     if (!project) project = plGuessProject(rows);
-    const groups = parsePackingListSheet(rows);
+    const { legend } = plGuessMarksBlock(rows);
+    const groups = parsePackingListSheet(rows, legend);
     if (groups && groups.length > 0) {
       if (!bestGroups || groups.length > bestGroups.length) bestGroups = groups;
     }
@@ -1170,7 +1241,7 @@ const TEXT = {
     pricingResetBtn: "Reset to default",
     tabLegacy: "Legacy Uploads",
     legacyUploadTitle: "Legacy Upload",
-    legacyUploadDesc: "Bulk-upload old Devan, CFS, Delivery, Shifting, Hoisting and other job sheet files. Devan/CFS files can create a real inventory entry (optionally already marked delivered, for closed historical jobs); every file type is archived and kept searchable below regardless.",
+    legacyUploadDesc: "Bulk-upload old Devan, CFS, Delivery, Shifting, Hoisting and other job sheet files. Best done in two rounds: upload all Devan/CFS files first (these create the storage arrivals), then upload Delivery files afterward \u2014 each one automatically finds and closes the arrival it refers to. Every file type is archived and kept searchable below regardless.",
     legacyChooseFilesBtn: "Choose Files\u2026",
     legacyDocType: "Doc Type",
     legacyProjectSite: "Project / Site",
@@ -1181,7 +1252,7 @@ const TEXT = {
     legacyAlreadyDelivered: "Already delivered \u2014 close this job immediately instead of leaving it at the depot",
     legacyProcessBtn: (n) => `Process ${n} File${n === 1 ? "" : "s"}`,
     legacyProcessingMsg: "Processing\u2026",
-    legacyResultsMsg: (archived, created, delivered) => `Archived ${archived} file${archived === 1 ? "" : "s"}${created > 0 ? ` \u2014 created ${created} inventory ${created === 1 ? "entry" : "entries"}` : ""}${delivered > 0 ? ` \u2014 recorded ${delivered} deliver${delivered === 1 ? "y" : "ies"} against existing arrivals` : ""}.`,
+    legacyResultsMsg: (archived, created, delivered, enriched) => `Archived ${archived} file${archived === 1 ? "" : "s"}${created > 0 ? ` \u2014 created ${created} inventory ${created === 1 ? "entry" : "entries"}` : ""}${enriched > 0 ? ` \u2014 matched ${enriched} to existing ${enriched === 1 ? "entry" : "entries"} and added its details` : ""}${delivered > 0 ? ` \u2014 recorded ${delivered} deliver${delivered === 1 ? "y" : "ies"} against existing arrivals` : ""}.`,
     legacyImportedNote: (name) => `Imported from legacy file: ${name}`,
     legacyAutoClosedNote: "Auto-closed on legacy import (marked already delivered).",
     legacyBacklogTitle: "Backlog",
@@ -1203,6 +1274,10 @@ const TEXT = {
     legacyAutoDetectHint: "Excel files (.xlsx/.xls/.csv) are scanned automatically for client, site, job number, date, SS/D.O. info, and package totals \u2014 review and correct the pre-filled fields below before processing. PDFs and images still need manual entry.",
     legacyAutoDetectedTag: "Auto-detected from file \u2014 please check",
     legacyReferLine: (job, date) => `refers to job no. ${job} on ${date}`,
+    legacyReferJobNoLabel: "Refers to Arrival Job No.",
+    legacyEnrichedNote: (name) => `Enriched from legacy file: ${name}`,
+    legacyArrivalStaysOpenHint: "Stays open at the depot until a matching Delivery file is uploaded (or you record a delivery for it normally).",
+    legacyNoReferralHint: "No \"Ref Job no.\" line detected \u2014 enter the arrival's job number manually, or this file will only be archived.",
   },
   zh: {
     appSubtitle: "倉庫及貨物存倉表",
@@ -1660,7 +1735,7 @@ const TEXT = {
     pricingResetBtn: "回復預設",
     tabLegacy: "舊資料上載",
     legacyUploadTitle: "舊資料上載",
-    legacyUploadDesc: "批量上載舊有的拆櫃、CFS、送貨、調位、吊運等工單檔案。拆櫃/CFS檔案可建立真實存倉記錄（可選擇直接標記為已送出，適合已完結的舊工作）；不論類型，所有檔案均會存檔並可於下方搜尋。",
+    legacyUploadDesc: "批量上載舊有的拆櫃、CFS、送貨、調位、吊運等工單檔案。建議分兩輪上載：先上載所有拆櫃/CFS檔案（建立到倉記錄），再上載送貨檔案 — 系統會自動配對並完結對應的到倉記錄。不論類型，所有檔案均會存檔並可於下方搜尋。",
     legacyChooseFilesBtn: "選擇檔案…",
     legacyDocType: "工單類型",
     legacyProjectSite: "項目／地盤",
@@ -1671,7 +1746,7 @@ const TEXT = {
     legacyAlreadyDelivered: "已送出 — 直接完結此工作，不留在倉內",
     legacyProcessBtn: (n) => `處理 ${n} 個檔案`,
     legacyProcessingMsg: "處理中…",
-    legacyResultsMsg: (archived, created, delivered) => `已存檔 ${archived} 個檔案${created > 0 ? `，並建立 ${created} 項存倉記錄` : ""}${delivered > 0 ? `，並為 ${delivered} 項已到倉記錄登記送貨` : ""}。`,
+    legacyResultsMsg: (archived, created, delivered, enriched) => `已存檔 ${archived} 個檔案${created > 0 ? `，並建立 ${created} 項存倉記錄` : ""}${enriched > 0 ? `，並配對 ${enriched} 項現有記錄並補充其資料` : ""}${delivered > 0 ? `，並為 ${delivered} 項已到倉記錄登記送貨` : ""}。`,
     legacyImportedNote: (name) => `由舊資料檔案匯入：${name}`,
     legacyAutoClosedNote: "舊資料匯入時自動完結（標記為已送出）。",
     legacyBacklogTitle: "待處理記錄",
@@ -1693,6 +1768,10 @@ const TEXT = {
     legacyAutoDetectHint: "Excel檔案 (.xlsx/.xls/.csv) 會自動掃描客戶、地盤、工單號、日期、提單資料及件數/重量/CBM等資料 — 請於處理前檢查並修正下方已預填的欄位。PDF及圖片檔仍需手動輸入。",
     legacyAutoDetectedTag: "已從檔案自動偵測 — 請核對",
     legacyReferLine: (job, date) => `指向工單號 ${job}，日期 ${date}`,
+    legacyReferJobNoLabel: "指向到倉工單號",
+    legacyEnrichedNote: (name) => `由舊資料檔案補充資料：${name}`,
+    legacyArrivalStaysOpenHint: "此記錄會保持在倉狀態，直至上載對應的送貨檔案（或日後手動記錄送貨）為止。",
+    legacyNoReferralHint: "未有偵測到「Ref Job no.」字句 — 請手動輸入到倉工單號，否則此檔案只會被存檔。",
   },
 };
 
@@ -3733,7 +3812,7 @@ function LegacyUploadRow({ row, onChange, onRemove, colors, t }) {
       </div>
       {row.autoDetected && (
         <div className="px-2 py-1 rounded text-xs w-fit" style={{ background: colors.amberSoft, color: colors.amberText }}>
-          {t.legacyAutoDetectedTag}{row.referJobNumber ? ` \u00b7 ${t.legacyReferLine(row.referJobNumber, row.referDate ? fmt(row.referDate) : "?")}` : ""}
+          {t.legacyAutoDetectedTag}
         </div>
       )}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
@@ -3781,6 +3860,11 @@ function LegacyUploadRow({ row, onChange, onRemove, colors, t }) {
                 </Field>
               </div>
             )}
+            {row.docType === "Delivery" && (
+              <Field label={t.legacyReferJobNoLabel} colors={colors}>
+                <input className={inputClass} style={{ ...inputStyle, borderColor: !row.referJobNumber ? colors.amber : inputStyle.borderColor }} value={row.referJobNumber} onChange={set("referJobNumber")} />
+              </Field>
+            )}
           </>
         )}
       </div>
@@ -3790,16 +3874,18 @@ function LegacyUploadRow({ row, onChange, onRemove, colors, t }) {
         </div>
       )}
       {(row.docType === "Devan" || row.docType === "CFS") && (
-        <label className="flex items-center gap-2 text-xs" style={{ color: colors.inkFaint }}>
-          <input type="checkbox" checked={row.alreadyDelivered} onChange={(e) => onChange({ ...row, alreadyDelivered: e.target.checked })} />
-          {t.legacyAlreadyDelivered}
-        </label>
+        <div className="text-xs" style={{ color: colors.inkFaint }}>{t.legacyArrivalStaysOpenHint}</div>
+      )}
+      {row.docType === "Delivery" && (
+        <div className="text-xs" style={{ color: row.referJobNumber ? colors.inkFaint : colors.amberText }}>
+          {row.referJobNumber ? t.legacyReferLine(row.referJobNumber, row.referDate ? fmt(row.referDate) : "?") : t.legacyNoReferralHint}
+        </div>
       )}
     </div>
   );
 }
 
-function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory, onLegacyImport, onLegacyDeliver, colors, t, lang }) {
+function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory, onLegacyImport, onLegacyDeliver, onLegacyEnrich, colors, t, lang }) {
   const [rows, setRows] = useState([]);
   const [processing, setProcessing] = useState(false);
   const [results, setResults] = useState(null);
@@ -3830,7 +3916,6 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
         ssDoNo: "",
         referJobNumber: "",
         referDate: "",
-        alreadyDelivered: true,
         autoDetected: false,
       };
       const isExcel = /\.(xlsx|xls|csv)$/i.test(file.name);
@@ -3877,6 +3962,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
     const archiveEntries = [];
     const importRows = [];
     const jobNoToImportIdx = new Map(); // arrival job number -> index into importRows, for same-batch linking
+    const pendingEnrichments = [];
     const fileUriById = {};
 
     // Pass 1: archive every file, and create the arrival (Devan/CFS = add to storage).
@@ -3894,38 +3980,54 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
 
       const hasSite = !!(row.projectEn || row.projectZh);
       let linkedItemIndex = null;
+      let enrichTargetId = null;
       if (row.docType !== "Delivery" && row.client && hasSite) {
-        const dirMatch = (directory || []).find((s) =>
-          (row.projectEn && s.siteEn && s.siteEn.toLowerCase() === row.projectEn.toLowerCase()) ||
-          (row.projectZh && s.siteZh && s.siteZh === row.projectZh)
-        );
-        const newItem = {
-          ...emptyForm(),
-          client: row.client,
-          project: row.projectEn || (dirMatch ? dirMatch.siteEn : ""),
-          constructionSite: row.projectZh || (dirMatch ? dirMatch.siteZh : ""),
-          jobNumber: row.jobNumber,
-          depotArrivalDate: row.date,
-          unitCode: row.unitCode,
-          packageCount: row.packageCount || "",
-          weightKg: row.weightKg || "",
-          volumeCbm: row.volumeCbm || "",
-          arrivingType: row.docType === "CFS" ? "CFS" : "Devan",
-          ssDoNo: row.ssDoNo || "",
-          notes: t.legacyImportedNote(row.file.name),
-          deliveries: row.alreadyDelivered && row.date
-            ? [{ id: `D${Date.now()}${i}`, date: row.date, deliveredTo: row.projectEn || row.projectZh, receivedBy: "", jobNumber: row.jobNumber, recordedBy: "", notes: t.legacyAutoClosedNote, packageCount: row.packageCount || 1 }]
-            : [],
-        };
-        linkedItemIndex = importRows.length;
-        if (row.jobNumber) jobNoToImportIdx.set(String(row.jobNumber).trim(), linkedItemIndex);
-        importRows.push(newItem);
+        const jobNoTrim = String(row.jobNumber || "").trim();
+        const existingByJobNo = jobNoTrim ? items.find((it) => String(it.jobNumber || "").trim() === jobNoTrim) : null;
+        if (existingByJobNo) {
+          // A real item already exists for this job number - most likely created via the
+          // proper Packing List import, which has real per-case CBM/KG/case numbers.
+          // Enrich it with this file's metadata rather than creating a duplicate that
+          // would only carry flat totals and shadow the good per-case data.
+          const patch = {};
+          if (!existingByJobNo.ssDoNo && row.ssDoNo) patch.ssDoNo = row.ssDoNo;
+          if (!existingByJobNo.project && row.projectEn) patch.project = row.projectEn;
+          if (!existingByJobNo.constructionSite && row.projectZh) patch.constructionSite = row.projectZh;
+          if (!existingByJobNo.depotArrivalDate && row.date) patch.depotArrivalDate = row.date;
+          patch.notes = [existingByJobNo.notes, t.legacyEnrichedNote(row.file.name)].filter(Boolean).join(" \u00b7 ");
+          enrichTargetId = existingByJobNo.id;
+          pendingEnrichments.push({ itemId: existingByJobNo.id, patch });
+        } else {
+          const dirMatch = (directory || []).find((s) =>
+            (row.projectEn && s.siteEn && s.siteEn.toLowerCase() === row.projectEn.toLowerCase()) ||
+            (row.projectZh && s.siteZh && s.siteZh === row.projectZh)
+          );
+          const newItem = {
+            ...emptyForm(),
+            client: row.client,
+            project: row.projectEn || (dirMatch ? dirMatch.siteEn : ""),
+            constructionSite: row.projectZh || (dirMatch ? dirMatch.siteZh : ""),
+            jobNumber: row.jobNumber,
+            depotArrivalDate: row.date,
+            unitCode: row.unitCode,
+            packageCount: row.packageCount || "",
+            weightKg: row.weightKg || "",
+            volumeCbm: row.volumeCbm || "",
+            arrivingType: row.docType === "CFS" ? "CFS" : "Devan",
+            ssDoNo: row.ssDoNo || "",
+            notes: t.legacyImportedNote(row.file.name),
+            deliveries: [],
+          };
+          linkedItemIndex = importRows.length;
+          if (row.jobNumber) jobNoToImportIdx.set(String(row.jobNumber).trim(), linkedItemIndex);
+          importRows.push(newItem);
+        }
       }
       archiveEntries.push({
         id, rowIndex: i, fileName: row.file.name, docType: row.docType, client: row.client,
         project: [row.projectEn, row.projectZh].filter(Boolean).join(" / "),
         jobNumber: row.jobNumber, date: row.date, uploadedAt: todayStr(), hasFile: !!fileUri,
-        linkedItemId: null, __linkedItemIndex: linkedItemIndex,
+        linkedItemId: enrichTargetId, __linkedItemIndex: linkedItemIndex,
       });
     }
 
@@ -3966,13 +4068,14 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
       delete entry.__linkedItemIndex;
       delete entry.rowIndex;
     }
+    if (pendingEnrichments.length > 0 && onLegacyEnrich) onLegacyEnrich(pendingEnrichments);
     if (existingDeliveryEntries.length > 0 && onLegacyDeliver) {
       const results = onLegacyDeliver(existingDeliveryEntries.map((e) => ({ itemId: e.itemId, delivery: e.delivery })));
       results.forEach((r, idx) => { existingDeliveryEntries[idx].archiveEntry.linkedItemId = r.itemId; });
     }
 
     setLegacyArchive((prev) => [...archiveEntries, ...prev]);
-    setResults({ archived: archiveEntries.length, created: createdItems.length, delivered: sameBatchDeliveryCount + existingDeliveryEntries.length });
+    setResults({ archived: archiveEntries.length, created: createdItems.length, delivered: sameBatchDeliveryCount + existingDeliveryEntries.length, enriched: pendingEnrichments.length });
     setRows([]);
     setProcessing(false);
   }
@@ -4047,7 +4150,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
       )}
       {results && (
         <div className="px-3 py-2 rounded text-sm" style={{ background: colors.greenSoft, color: colors.green }}>
-          {t.legacyResultsMsg(results.archived, results.created, results.delivered)}
+          {t.legacyResultsMsg(results.archived, results.created, results.delivered, results.enriched)}
         </div>
       )}
 
@@ -4109,7 +4212,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
   );
 }
 
-function DirectoryPanel({ directory, setDirectory, employees, setEmployees, freeRules, setFreeRules, cbmRates, setCbmRates, legacyArchive, setLegacyArchive, items, onLegacyImport, onLegacyDeliver, colors, t, lang }) {
+function DirectoryPanel({ directory, setDirectory, employees, setEmployees, freeRules, setFreeRules, cbmRates, setCbmRates, legacyArchive, setLegacyArchive, items, onLegacyImport, onLegacyDeliver, onLegacyEnrich, colors, t, lang }) {
   const [mode, setMode] = useState("sites");
   const [editingSite, setEditingSite] = useState(null);
   const [siteForm, setSiteForm] = useState(null);
@@ -4286,7 +4389,7 @@ function DirectoryPanel({ directory, setDirectory, employees, setEmployees, free
       )}
 
       {mode === "legacy" && (
-        <LegacyUploadsPanel legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} directory={directory} onLegacyImport={onLegacyImport} onLegacyDeliver={onLegacyDeliver} colors={colors} t={t} lang={lang} />
+        <LegacyUploadsPanel legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} directory={directory} onLegacyImport={onLegacyImport} onLegacyDeliver={onLegacyDeliver} onLegacyEnrich={onLegacyEnrich} colors={colors} t={t} lang={lang} />
       )}
 
       {mode === "sites" && (
@@ -5345,6 +5448,16 @@ export default function FarspeedInventory() {
   // Records one combined delivery across multiple items at once (same job number, date,
   // destination and receiver) - each item gets its own delivery entry with its own codes,
   // linked only by sharing that job number/date, and prints as a single combined job sheet.
+  // Merges Legacy Upload metadata (SS/D.O., notes, missing site names) onto an item
+  // that already exists - used when the job number matches an item created earlier via
+  // the proper Packing List import, so its real per-case package data is never touched
+  // or duplicated, only enriched.
+  function handleLegacyEnrich(entries) {
+    const byItemId = new Map(entries.map((e) => [e.itemId, e.patch]));
+    persist(items.map((i) => (byItemId.has(i.id) ? { ...i, ...byItemId.get(i.id) } : i)));
+    return entries.map((e) => ({ itemId: e.itemId }));
+  }
+
   function handleAddCombinedDelivery(entries) {
     const records = entries.map(({ itemId, delivery }) => ({ itemId, record: { ...delivery, id: `D${Date.now()}${Math.floor(Math.random() * 1000)}-${itemId}` } }));
     const byItemId = new Map(records.map((r) => [r.itemId, r.record]));
@@ -6188,7 +6301,7 @@ export default function FarspeedInventory() {
         )}
 
         {view === "directory" && (
-          <DirectoryPanel directory={directory} setDirectory={setDirectory} employees={employees} setEmployees={setEmployees} freeRules={freeRules} setFreeRules={setFreeRules} cbmRates={cbmRates} setCbmRates={setCbmRates} legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} onLegacyImport={handleLegacyImport} onLegacyDeliver={handleAddCombinedDelivery} colors={colors} t={t} lang={lang} />
+          <DirectoryPanel directory={directory} setDirectory={setDirectory} employees={employees} setEmployees={setEmployees} freeRules={freeRules} setFreeRules={setFreeRules} cbmRates={cbmRates} setCbmRates={setCbmRates} legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} onLegacyImport={handleLegacyImport} onLegacyDeliver={handleAddCombinedDelivery} onLegacyEnrich={handleLegacyEnrich} colors={colors} t={t} lang={lang} />
         )}
 
         {view === "joblog" && (
