@@ -1190,6 +1190,10 @@ const TEXT = {
     legacyColFile: "File",
     legacyColLinked: "Linked Entry",
     legacyArchivedOnly: "Archived only",
+    legacyProjectSiteEn: "Project / Site (English)",
+    legacyProjectSiteZh: "Project / Site (Chinese)",
+    legacySiteRequiredMsg: "Enter at least one of English or Chinese site name.",
+    legacySiteRequiredSummaryMsg: "One or more files are missing a site name in both languages \u2014 fill in at least one (English or Chinese) for each file before processing.",
     legacyScanningMsg: "Reading files\u2026",
     legacyAutoDetectHint: "Excel files (.xlsx/.xls/.csv) are scanned automatically for client, site, job number, date, SS/D.O. info, and package totals \u2014 review and correct the pre-filled fields below before processing. PDFs and images still need manual entry.",
     legacyAutoDetectedTag: "Auto-detected from file \u2014 please check",
@@ -1671,6 +1675,10 @@ const TEXT = {
     legacyColFile: "檔案",
     legacyColLinked: "連結記錄",
     legacyArchivedOnly: "僅存檔",
+    legacyProjectSiteEn: "項目／地盤（英文）",
+    legacyProjectSiteZh: "項目／地盤（中文）",
+    legacySiteRequiredMsg: "請至少填寫英文或中文地盤名稱其中一項。",
+    legacySiteRequiredSummaryMsg: "部分檔案的地盤名稱（中英文）均未填寫 — 處理前請至少填寫其中一種語言。",
     legacyScanningMsg: "讀取檔案中…",
     legacyAutoDetectHint: "Excel檔案 (.xlsx/.xls/.csv) 會自動掃描客戶、地盤、工單號、日期、提單資料及件數/重量/CBM等資料 — 請於處理前檢查並修正下方已預填的欄位。PDF及圖片檔仍需手動輸入。",
     legacyAutoDetectedTag: "已從檔案自動偵測 — 請核對",
@@ -3548,41 +3556,101 @@ const JOBSHEET_LABEL_ALIASES = {
   to: ["送", "to"],
   from: ["由", "from"],
 };
+const ALL_JOBSHEET_LABELS = Object.values(JOBSHEET_LABEL_ALIASES).flat();
 function normCell(v) {
   return String(v == null ? "" : v).replace(/\s+/g, "").toLowerCase();
 }
+function normLabelCompare(v) {
+  return normCell(v).replace(/[.:]+$/g, "");
+}
+function isKnownLabel(v) {
+  const n = normLabelCompare(v);
+  if (!n) return false;
+  // Exact match only (after trimming trailing punctuation) - a substring check here
+  // would flag real data as a label whenever a short alias like "to" happens to
+  // appear inside a word (e.g. "Elevator").
+  return ALL_JOBSHEET_LABELS.some((a) => n === normLabelCompare(a));
+}
+// Tries every cell matching one of the given labels (not just the first), and for each
+// match looks to its right then below for a value - skipping any candidate that is
+// itself a recognized label (adjacent field labels sit right next to each other in
+// these sheets, e.g. "JOB NO." next to "DATE", so a naive "next cell" grab picks up
+// the neighboring label's text instead of real data).
 function findLabelValue(rows, aliases) {
   for (let r = 0; r < rows.length; r++) {
     for (let c = 0; c < rows[r].length; c++) {
       const cellNorm = normCell(rows[r][c]);
       if (!cellNorm) continue;
       if (!aliases.some((a) => cellNorm.includes(normCell(a)))) continue;
-      for (let cc = c + 1; cc < Math.min(c + 5, rows[r].length); cc++) {
+      for (let cc = c + 1; cc < Math.min(c + 6, rows[r].length); cc++) {
         const v = rows[r][cc];
-        if (v != null && String(v).trim() !== "") return String(v).trim();
+        if (v != null && String(v).trim() !== "" && !isKnownLabel(v)) return String(v).trim();
       }
       for (let rr = r + 1; rr < Math.min(r + 3, rows.length); rr++) {
         const v = rows[rr][c];
-        if (v != null && String(v).trim() !== "") return String(v).trim();
+        if (v != null && String(v).trim() !== "" && !isKnownLabel(v)) return String(v).trim();
       }
+      // This occurrence's neighbors were empty or just more labels - keep scanning
+      // the sheet in case the same label appears again (often once in Chinese, once
+      // in English) with real data next to the other occurrence.
     }
   }
   return "";
+}
+// Collects the address block after a FROM/TO-style label - these often span several
+// lines (English site name, then a separate Chinese site name below it), so this
+// gathers consecutive non-empty lines and splits them by script rather than grabbing
+// just the single adjacent cell.
+function findAddressLines(rows, aliases, maxLines = 8) {
+  for (let r = 0; r < rows.length; r++) {
+    for (let c = 0; c < rows[r].length; c++) {
+      const cellNorm = normCell(rows[r][c]);
+      if (!cellNorm) continue;
+      if (!aliases.some((a) => cellNorm.includes(normCell(a)))) continue;
+      let startR = -1, startC = -1;
+      for (let cc = c + 1; cc < Math.min(c + 6, rows[r].length); cc++) {
+        const v = rows[r][cc];
+        if (v != null && String(v).trim() !== "" && !isKnownLabel(v)) { startR = r; startC = cc; break; }
+      }
+      if (startR === -1) {
+        for (let rr = r + 1; rr < Math.min(r + 3, rows.length); rr++) {
+          const v = rows[rr][c];
+          if (v != null && String(v).trim() !== "" && !isKnownLabel(v)) { startR = rr; startC = c; break; }
+        }
+      }
+      if (startR === -1) continue;
+      const enLines = [], zhLines = [];
+      for (let rr = startR; rr < Math.min(startR + maxLines, rows.length); rr++) {
+        const v = rows[rr][startC];
+        if (v == null || String(v).trim() === "") break;
+        const text = String(v).trim();
+        if (isKnownLabel(text)) break;
+        if (/^(暫存|temp\.?\s*storage)/i.test(text)) break;
+        if (/[\u4e00-\u9fff]/.test(text)) zhLines.push(text);
+        else enLines.push(text);
+      }
+      if (enLines.length || zhLines.length) return { en: enLines.join(" ").trim(), zh: zhLines.join("").trim() };
+    }
+  }
+  return { en: "", zh: "" };
 }
 function guessFieldsFromWorkbook(wb) {
   const sheet = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false });
   const flatText = rows.map((r) => r.join(" ")).join("\n");
 
+  const siteBlock = findAddressLines(rows, JOBSHEET_LABEL_ALIASES.to);
   const out = {
     client: findLabelValue(rows, JOBSHEET_LABEL_ALIASES.account),
     jobNumber: findLabelValue(rows, JOBSHEET_LABEL_ALIASES.jobNo),
     date: "",
-    project: findLabelValue(rows, JOBSHEET_LABEL_ALIASES.to),
+    projectEn: siteBlock.en,
+    projectZh: siteBlock.zh,
     orderedBy: findLabelValue(rows, JOBSHEET_LABEL_ALIASES.orderedBy),
     poNumber: findLabelValue(rows, JOBSHEET_LABEL_ALIASES.poNo),
     jobRef: findLabelValue(rows, JOBSHEET_LABEL_ALIASES.jobRef),
     ssDoNo: findLabelValue(rows, JOBSHEET_LABEL_ALIASES.ssDoNo),
+    unitCode: "",
     referJobNumber: "",
     referDate: "",
     packageCount: "",
@@ -3609,6 +3677,10 @@ function guessFieldsFromWorkbook(wb) {
     const d = new Date(referMatch[2].trim());
     if (!isNaN(d)) out.referDate = d.toISOString().slice(0, 10);
   }
+
+  const liftMatch = flatText.match(/lift\s*no\.?\s*(?:phase\s*\d+\s*)?(#[0-9,\s]+)/i)
+    || flatText.match(/unit\s*(?:no\.?|code)\s*[:\-]?\s*([A-Za-z0-9\-\.\/#, ]{2,30})/i);
+  if (liftMatch) out.unitCode = liftMatch[1].trim().replace(/\s+/g, " ");
 
   const pkgsMatch = flatText.match(/(\d+)\s*PKGS?/i);
   if (pkgsMatch) out.packageCount = pkgsMatch[1];
@@ -3649,8 +3721,11 @@ function LegacyUploadRow({ row, onChange, onRemove, colors, t }) {
             {CLIENTS.map((c) => <option key={c}>{c}</option>)}
           </select>
         </Field>
-        <Field label={t.legacyProjectSite} colors={colors}>
-          <input className={inputClass} style={inputStyle} value={row.project} onChange={set("project")} />
+        <Field label={t.legacyProjectSiteEn} colors={colors}>
+          <input className={inputClass} style={{ ...inputStyle, borderColor: !row.projectEn && !row.projectZh ? colors.red : inputStyle.borderColor }} value={row.projectEn} onChange={set("projectEn")} />
+        </Field>
+        <Field label={t.legacyProjectSiteZh} colors={colors}>
+          <input className={inputClass} style={{ ...inputStyle, borderColor: !row.projectEn && !row.projectZh ? colors.red : inputStyle.borderColor }} value={row.projectZh} onChange={set("projectZh")} />
         </Field>
         <Field label={t.fJobNumber} colors={colors}>
           <input className={inputClass} style={inputStyle} value={row.jobNumber} onChange={set("jobNumber")} />
@@ -3682,6 +3757,11 @@ function LegacyUploadRow({ row, onChange, onRemove, colors, t }) {
           </>
         )}
       </div>
+      {!row.projectEn && !row.projectZh && (
+        <div className="px-2 py-1.5 rounded text-xs" style={{ background: colors.redSoft, color: colors.red }}>
+          {t.legacySiteRequiredMsg}
+        </div>
+      )}
       {(row.docType === "Devan" || row.docType === "CFS") && (
         <label className="flex items-center gap-2 text-xs" style={{ color: colors.inkFaint }}>
           <input type="checkbox" checked={row.alreadyDelivered} onChange={(e) => onChange({ ...row, alreadyDelivered: e.target.checked })} />
@@ -3712,7 +3792,8 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
         file,
         docType: guessDocTypeFromName(file.name),
         client: CLIENTS[0],
-        project: "",
+        projectEn: "",
+        projectZh: "",
         jobNumber: guessJobNumberFromName(file.name),
         date: "",
         unitCode: "",
@@ -3734,10 +3815,11 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
           const clientMatch = CLIENTS.find((c) => guessed.client && (c.toLowerCase() === guessed.client.toLowerCase() || guessed.client.toLowerCase().includes(c.toLowerCase())));
           Object.assign(base, {
             client: clientMatch || base.client,
-            project: guessed.project || base.project,
+            projectEn: guessed.projectEn || base.projectEn,
+            projectZh: guessed.projectZh || base.projectZh,
             jobNumber: guessed.jobNumber || base.jobNumber,
             date: guessed.date || base.date,
-            unitCode: guessed.referJobNumber ? "" : base.unitCode,
+            unitCode: guessed.unitCode || base.unitCode,
             packageCount: guessed.packageCount || base.packageCount,
             weightKg: guessed.weightKg || base.weightKg,
             volumeCbm: guessed.volumeCbm || base.volumeCbm,
@@ -3780,13 +3862,17 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
       }
       const itemized = JOB_SHEET_ITEMIZED.includes(row.docType);
       let linkedItemIndex = null;
-      if (itemized && row.docType !== "Delivery" && (row.client && (row.project || row.jobNumber))) {
-        const dirMatch = (directory || []).find((s) => s.siteEn && s.siteEn.toLowerCase() === row.project.toLowerCase());
+      const hasSite = !!(row.projectEn || row.projectZh);
+      if (itemized && row.docType !== "Delivery" && row.client && hasSite) {
+        const dirMatch = (directory || []).find((s) =>
+          (row.projectEn && s.siteEn && s.siteEn.toLowerCase() === row.projectEn.toLowerCase()) ||
+          (row.projectZh && s.siteZh && s.siteZh === row.projectZh)
+        );
         const newItem = {
           ...emptyForm(),
           client: row.client,
-          project: row.project,
-          constructionSite: dirMatch ? dirMatch.siteZh : "",
+          project: row.projectEn || (dirMatch ? dirMatch.siteEn : ""),
+          constructionSite: row.projectZh || (dirMatch ? dirMatch.siteZh : ""),
           jobNumber: row.jobNumber,
           depotArrivalDate: row.date,
           unitCode: row.unitCode,
@@ -3797,7 +3883,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
           ssDoNo: row.ssDoNo || "",
           notes: t.legacyImportedNote(row.file.name),
           deliveries: row.alreadyDelivered && row.date
-            ? [{ id: `D${Date.now()}${i}`, date: row.date, deliveredTo: row.project, receivedBy: "", jobNumber: row.jobNumber, recordedBy: "", notes: t.legacyAutoClosedNote, packageCount: row.packageCount || 1 }]
+            ? [{ id: `D${Date.now()}${i}`, date: row.date, deliveredTo: row.projectEn || row.projectZh, receivedBy: "", jobNumber: row.jobNumber, recordedBy: "", notes: t.legacyAutoClosedNote, packageCount: row.packageCount || 1 }]
             : [],
         };
         linkedItemIndex = importRows.length;
@@ -3805,7 +3891,8 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
         rowToImportIdx.push(i);
       }
       archiveEntries.push({
-        id, fileName: row.file.name, docType: row.docType, client: row.client, project: row.project,
+        id, fileName: row.file.name, docType: row.docType, client: row.client,
+        project: [row.projectEn, row.projectZh].filter(Boolean).join(" / "),
         jobNumber: row.jobNumber, date: row.date, uploadedAt: todayStr(), hasFile: !!fileUri,
         linkedItemId: null, __linkedItemIndex: linkedItemIndex,
       });
@@ -3871,11 +3958,16 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
           {rows.map((row, idx) => (
             <LegacyUploadRow key={idx} row={row} onChange={(next) => updateRow(idx, next)} onRemove={() => removeRow(idx)} colors={colors} t={t} />
           ))}
+          {rows.some((r) => !r.projectEn && !r.projectZh) && (
+            <div className="px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>
+              {t.legacySiteRequiredSummaryMsg}
+            </div>
+          )}
           <div className="flex gap-2">
             <button
               className="px-4 py-2 rounded text-sm font-semibold"
-              style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY, opacity: processing ? 0.6 : 1 }}
-              disabled={processing}
+              style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY, opacity: (processing || rows.some((r) => !r.projectEn && !r.projectZh)) ? 0.6 : 1 }}
+              disabled={processing || rows.some((r) => !r.projectEn && !r.projectZh)}
               onClick={processAll}
             >
               {processing ? t.legacyProcessingMsg : t.legacyProcessBtn(rows.length)}
