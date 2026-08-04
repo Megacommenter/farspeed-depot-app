@@ -1048,6 +1048,7 @@ const TEXT = {
     empNoneMsg: "No employees added yet.",
 
     signedInAs: "Signed in as",
+    mobileMenuLabel: "Menu",
     loginNameLabel: "Name",
     loginNamePlaceholder: "Select your name",
     loginPasswordLabel: "Password",
@@ -1189,6 +1190,10 @@ const TEXT = {
     legacyColFile: "File",
     legacyColLinked: "Linked Entry",
     legacyArchivedOnly: "Archived only",
+    legacyScanningMsg: "Reading files\u2026",
+    legacyAutoDetectHint: "Excel files (.xlsx/.xls/.csv) are scanned automatically for client, site, job number, date, SS/D.O. info, and package totals \u2014 review and correct the pre-filled fields below before processing. PDFs and images still need manual entry.",
+    legacyAutoDetectedTag: "Auto-detected from file \u2014 please check",
+    legacyReferLine: (job, date) => `refers to job no. ${job} on ${date}`,
   },
   zh: {
     appSubtitle: "倉庫及貨物存倉表",
@@ -1524,6 +1529,7 @@ const TEXT = {
     empNoneMsg: "尚未新增任何員工。",
 
     signedInAs: "登入身份",
+    mobileMenuLabel: "選單",
     loginNameLabel: "姓名",
     loginNamePlaceholder: "請選擇你的姓名",
     loginPasswordLabel: "密碼",
@@ -1665,6 +1671,10 @@ const TEXT = {
     legacyColFile: "檔案",
     legacyColLinked: "連結記錄",
     legacyArchivedOnly: "僅存檔",
+    legacyScanningMsg: "讀取檔案中…",
+    legacyAutoDetectHint: "Excel檔案 (.xlsx/.xls/.csv) 會自動掃描客戶、地盤、工單號、日期、提單資料及件數/重量/CBM等資料 — 請於處理前檢查並修正下方已預填的欄位。PDF及圖片檔仍需手動輸入。",
+    legacyAutoDetectedTag: "已從檔案自動偵測 — 請核對",
+    legacyReferLine: (job, date) => `指向工單號 ${job}，日期 ${date}`,
   },
 };
 
@@ -1874,7 +1884,7 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, directory, emplo
         </div>
       )}
 
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
         <Field label={t.fClient} colors={colors}>
           <select className={inputClass} style={inputStyle} value={form.client} onChange={set("client")}>
             {CLIENTS.map((c) => <option key={c}>{c}</option>)}
@@ -1894,7 +1904,7 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, directory, emplo
       <div className="text-xs font-semibold uppercase tracking-wider mt-5 mb-2 pb-1" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY, borderBottom: `1px solid ${colors.surfaceDim}` }}>
         {t.sectionSite}
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
         <div className="col-span-2 md:col-span-3">
           <Field label={t.fSiteName} hint={t.fSiteHint} colors={colors}>
             <input className={inputClass} style={inputStyle} placeholder={t.fSitePlaceholder} value={form.constructionSite} onChange={set("constructionSite")} />
@@ -1905,7 +1915,7 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, directory, emplo
       <div className="text-xs font-semibold uppercase tracking-wider mt-5 mb-2 pb-1" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY, borderBottom: `1px solid ${colors.surfaceDim}` }}>
         {t.sectionCargo}
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
         <Field label={t.fItemType} colors={colors}>
           <select className={inputClass} style={inputStyle} value={form.itemType} onChange={set("itemType")}>
             {ITEM_TYPES.map((tt) => <option key={tt}>{tt}</option>)}
@@ -1961,7 +1971,7 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, directory, emplo
       <div className="text-xs font-semibold uppercase tracking-wider mt-5 mb-2 pb-1" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY, borderBottom: `1px solid ${colors.surfaceDim}` }}>
         {t.sectionArrival}
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
         <Field label={t.fArrivingType} hint={t.fArrivingTypeHint} colors={colors}>
           <select className={inputClass} style={inputStyle} value={form.arrivingType} onChange={set("arrivingType")}>
             {ARRIVING_TYPES.map((a) => <option key={a}>{a}</option>)}
@@ -2016,7 +2026,7 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, directory, emplo
       <div className="text-xs font-semibold uppercase tracking-wider mt-5 mb-2 pb-1" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY, borderBottom: `1px solid ${colors.surfaceDim}` }}>
         {t.sectionJobSheet}
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
         <Field label={t.fJobNumber} hint={t.fJobNumberHint} colors={colors}>
           <div className="flex gap-2">
             <input className={inputClass + " flex-1"} style={inputStyle} value={form.jobNumber} onChange={set("jobNumber")} />
@@ -2349,7 +2359,7 @@ function DeliveryForm({ deliveryItems, onAddDelivery, onAddCombinedDelivery, onD
         </div>
       )}
 
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
         <Field label={t.fDeliveryDate} hint={t.fDeliveryDateHint} colors={colors}>
           <input type="date" className={inputClass} style={inputStyle} value={form.date} onChange={set("date")} />
         </Field>
@@ -3360,7 +3370,7 @@ function BillingPanel({ items, colors, t, lang }) {
 
       {mode === "monthly" && (
         <>
-          <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+          <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}` }}>
             <table className="w-full text-sm" style={{ background: colors.surface }}>
               <thead>
                 <tr style={{ background: colors.surfaceDim }}>
@@ -3430,7 +3440,7 @@ function BillingPanel({ items, colors, t, lang }) {
 
       {mode === "search" && (
       <>
-        <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+        <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}` }}>
         <table className="w-full text-sm" style={{ background: colors.surface }}>
           <thead>
             <tr style={{ background: colors.surfaceDim }}>
@@ -3523,6 +3533,96 @@ function guessJobNumberFromName(name) {
   return m ? m[1] : "";
 }
 
+// Scans a job-sheet-style Excel (Devan/CFS/Delivery layouts) for known Chinese/English
+// labels and pulls whatever value sits next to each one - to the right first, then below.
+// This is a best-effort pre-fill: the person still reviews and can correct every field
+// before committing, same as the PDF/Excel packing-list importers already do.
+const JOBSHEET_LABEL_ALIASES = {
+  account: ["客戶", "account"],
+  jobNo: ["快達單號", "job no", "job no."],
+  date: ["日期", "date"],
+  orderedBy: ["落單人", "ordered by"],
+  poNo: ["採購編號", "p.o. no", "po no"],
+  jobRef: ["地盤代號", "job ref"],
+  ssDoNo: ["提單資料", "ss/d.o. no", "ss/do no"],
+  to: ["送", "to"],
+  from: ["由", "from"],
+};
+function normCell(v) {
+  return String(v == null ? "" : v).replace(/\s+/g, "").toLowerCase();
+}
+function findLabelValue(rows, aliases) {
+  for (let r = 0; r < rows.length; r++) {
+    for (let c = 0; c < rows[r].length; c++) {
+      const cellNorm = normCell(rows[r][c]);
+      if (!cellNorm) continue;
+      if (!aliases.some((a) => cellNorm.includes(normCell(a)))) continue;
+      for (let cc = c + 1; cc < Math.min(c + 5, rows[r].length); cc++) {
+        const v = rows[r][cc];
+        if (v != null && String(v).trim() !== "") return String(v).trim();
+      }
+      for (let rr = r + 1; rr < Math.min(r + 3, rows.length); rr++) {
+        const v = rows[rr][c];
+        if (v != null && String(v).trim() !== "") return String(v).trim();
+      }
+    }
+  }
+  return "";
+}
+function guessFieldsFromWorkbook(wb) {
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false });
+  const flatText = rows.map((r) => r.join(" ")).join("\n");
+
+  const out = {
+    client: findLabelValue(rows, JOBSHEET_LABEL_ALIASES.account),
+    jobNumber: findLabelValue(rows, JOBSHEET_LABEL_ALIASES.jobNo),
+    date: "",
+    project: findLabelValue(rows, JOBSHEET_LABEL_ALIASES.to),
+    orderedBy: findLabelValue(rows, JOBSHEET_LABEL_ALIASES.orderedBy),
+    poNumber: findLabelValue(rows, JOBSHEET_LABEL_ALIASES.poNo),
+    jobRef: findLabelValue(rows, JOBSHEET_LABEL_ALIASES.jobRef),
+    ssDoNo: findLabelValue(rows, JOBSHEET_LABEL_ALIASES.ssDoNo),
+    referJobNumber: "",
+    referDate: "",
+    packageCount: "",
+    weightKg: "",
+    volumeCbm: "",
+  };
+
+  const rawDate = findLabelValue(rows, JOBSHEET_LABEL_ALIASES.date);
+  if (rawDate) {
+    const d = new Date(rawDate);
+    if (!isNaN(d)) out.date = d.toISOString().slice(0, 10);
+    else {
+      const m = rawDate.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+      if (m) {
+        const yr = m[3].length === 2 ? `20${m[3]}` : m[3];
+        out.date = `${yr}-${String(m[2]).padStart(2, "0")}-${String(m[1]).padStart(2, "0")}`;
+      }
+    }
+  }
+
+  const referMatch = flatText.match(/refer to job\s*no\.?\s*([A-Za-z0-9\-]+)\s*on\s*([\d\/\.\- ]+\d)/i);
+  if (referMatch) {
+    out.referJobNumber = referMatch[1].trim();
+    const d = new Date(referMatch[2].trim());
+    if (!isNaN(d)) out.referDate = d.toISOString().slice(0, 10);
+  }
+
+  const pkgsMatch = flatText.match(/(\d+)\s*PKGS?/i);
+  if (pkgsMatch) out.packageCount = pkgsMatch[1];
+  const kgsMatch = flatText.match(/([\d,]+(?:\.\d+)?)\s*KGS?/i);
+  if (kgsMatch) out.weightKg = kgsMatch[1].replace(/,/g, "");
+  const cbmMatch = flatText.match(/([\d,]+(?:\.\d+)?)\s*CBM/i);
+  if (cbmMatch) out.volumeCbm = cbmMatch[1].replace(/,/g, "");
+
+  const ssShipMatch = flatText.match(/ex\s*ss\.?\s*"[^"]+"[^\n]*/i);
+  if (ssShipMatch && !out.ssDoNo) out.ssDoNo = ssShipMatch[0].trim();
+
+  return out;
+}
+
 function LegacyUploadRow({ row, onChange, onRemove, colors, t }) {
   const inputStyle = inputStyleFor(colors);
   const set = (k) => (e) => onChange({ ...row, [k]: e.target.value });
@@ -3533,7 +3633,12 @@ function LegacyUploadRow({ row, onChange, onRemove, colors, t }) {
         <div className="text-sm font-semibold" style={{ color: colors.ink, wordBreak: "break-all" }}>{row.file.name}</div>
         <button type="button" className="text-xs font-semibold whitespace-nowrap" style={{ color: colors.red }} onClick={onRemove}>{t.deleteBtn}</button>
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      {row.autoDetected && (
+        <div className="px-2 py-1 rounded text-xs w-fit" style={{ background: colors.amberSoft, color: colors.amberText }}>
+          {t.legacyAutoDetectedTag}{row.referJobNumber ? ` \u00b7 ${t.legacyReferLine(row.referJobNumber, row.referDate ? fmt(row.referDate) : "?")}` : ""}
+        </div>
+      )}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
         <Field label={t.legacyDocType} colors={colors}>
           <select className={inputClass} style={inputStyle} value={row.docType} onChange={set("docType")}>
             {LEGACY_DOC_TYPES.map((tp) => <option key={tp} value={tp}>{tp}</option>)}
@@ -3567,6 +3672,13 @@ function LegacyUploadRow({ row, onChange, onRemove, colors, t }) {
             <Field label={t.legacyCbm} colors={colors}>
               <input type="number" min="0" step="0.001" className={inputClass} style={inputStyle} value={row.volumeCbm} onChange={set("volumeCbm")} />
             </Field>
+            {(row.docType === "Devan" || row.docType === "CFS") && (
+              <div className="col-span-2 md:col-span-4">
+                <Field label={t.fSsDoNo} colors={colors}>
+                  <input className={inputClass} style={inputStyle} value={row.ssDoNo} onChange={set("ssDoNo")} placeholder={'ex ss."SHIP" V.___; CONTAINERS NO. ___'} />
+                </Field>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -3588,24 +3700,60 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
   const [backlogTypeFilter, setBacklogTypeFilter] = useState("All");
   const fileInputRef = React.useRef(null);
 
-  function handleFilesSelected(e) {
+  const [scanning, setScanning] = useState(false);
+
+  async function handleFilesSelected(e) {
     const files = Array.from(e.target.files || []);
-    const newRows = files.map((file) => ({
-      file,
-      docType: guessDocTypeFromName(file.name),
-      client: CLIENTS[0],
-      project: "",
-      jobNumber: guessJobNumberFromName(file.name),
-      date: "",
-      unitCode: "",
-      packageCount: "",
-      weightKg: "",
-      volumeCbm: "",
-      alreadyDelivered: true,
-    }));
+    e.target.value = "";
+    setScanning(true);
+    const newRows = [];
+    for (const file of files) {
+      const base = {
+        file,
+        docType: guessDocTypeFromName(file.name),
+        client: CLIENTS[0],
+        project: "",
+        jobNumber: guessJobNumberFromName(file.name),
+        date: "",
+        unitCode: "",
+        packageCount: "",
+        weightKg: "",
+        volumeCbm: "",
+        ssDoNo: "",
+        referJobNumber: "",
+        referDate: "",
+        alreadyDelivered: true,
+        autoDetected: false,
+      };
+      const isExcel = /\.(xlsx|xls|csv)$/i.test(file.name);
+      if (isExcel) {
+        try {
+          const buf = await file.arrayBuffer();
+          const wb = XLSX.read(buf, { type: "array", cellDates: true });
+          const guessed = guessFieldsFromWorkbook(wb);
+          const clientMatch = CLIENTS.find((c) => guessed.client && (c.toLowerCase() === guessed.client.toLowerCase() || guessed.client.toLowerCase().includes(c.toLowerCase())));
+          Object.assign(base, {
+            client: clientMatch || base.client,
+            project: guessed.project || base.project,
+            jobNumber: guessed.jobNumber || base.jobNumber,
+            date: guessed.date || base.date,
+            unitCode: guessed.referJobNumber ? "" : base.unitCode,
+            packageCount: guessed.packageCount || base.packageCount,
+            weightKg: guessed.weightKg || base.weightKg,
+            volumeCbm: guessed.volumeCbm || base.volumeCbm,
+            ssDoNo: guessed.ssDoNo || base.ssDoNo,
+            referJobNumber: guessed.referJobNumber || base.referJobNumber,
+            referDate: guessed.referDate || base.referDate,
+            autoDetected: true,
+          });
+          if (base.docType === "Delivery" && guessed.referJobNumber) base.jobNumber = base.jobNumber || guessed.referJobNumber;
+        } catch (err) { /* fall back to filename-only guesses */ }
+      }
+      newRows.push(base);
+    }
     setRows((prev) => [...prev, ...newRows]);
     setResults(null);
-    e.target.value = "";
+    setScanning(false);
   }
 
   function updateRow(idx, next) {
@@ -3646,6 +3794,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
           weightKg: row.weightKg || "",
           volumeCbm: row.volumeCbm || "",
           arrivingType: row.docType === "CFS" ? "CFS" : "Devan",
+          ssDoNo: row.ssDoNo || "",
           notes: t.legacyImportedNote(row.file.name),
           deliveries: row.alreadyDelivered && row.date
             ? [{ id: `D${Date.now()}${i}`, date: row.date, deliveredTo: row.project, receivedBy: "", jobNumber: row.jobNumber, recordedBy: "", notes: t.legacyAutoClosedNote, packageCount: row.packageCount || 1 }]
@@ -3705,14 +3854,16 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
       <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
         <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.legacyUploadTitle}</h3>
         <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.legacyUploadDesc}</p>
-        <input ref={fileInputRef} type="file" multiple accept=".xlsx,.xls,.pdf,image/*" className="hidden" onChange={handleFilesSelected} />
+        <input ref={fileInputRef} type="file" multiple accept=".xlsx,.xls,.pdf,image/*" className="hidden" onChange={handleFilesSelected} disabled={scanning} />
         <button
           className="px-3 py-1.5 rounded text-sm font-semibold"
-          style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}
+          style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY, opacity: scanning ? 0.6 : 1 }}
+          disabled={scanning}
           onClick={() => fileInputRef.current && fileInputRef.current.click()}
         >
-          {t.legacyChooseFilesBtn}
+          {scanning ? t.legacyScanningMsg : t.legacyChooseFilesBtn}
         </button>
+        {!scanning && <div className="text-xs mt-2" style={{ color: colors.inkFaint }}>{t.legacyAutoDetectHint}</div>}
       </div>
 
       {rows.length > 0 && (
@@ -3754,7 +3905,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
         </div>
       </div>
 
-      <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+      <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}` }}>
         <table className="w-full text-sm" style={{ background: colors.surface }}>
           <thead>
             <tr style={{ background: colors.surfaceDim }}>
@@ -3885,7 +4036,7 @@ function DirectoryPanel({ directory, setDirectory, employees, setEmployees, free
             </div>
           </div>
 
-          <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+          <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}` }}>
             <table className="w-full text-sm" style={{ background: colors.surface }}>
               <thead>
                 <tr style={{ background: colors.surfaceDim }}>
@@ -3920,7 +4071,7 @@ function DirectoryPanel({ directory, setDirectory, employees, setEmployees, free
             <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.pricingDesc}</p>
           </div>
 
-          <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+          <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}` }}>
             <table className="w-full text-sm" style={{ background: colors.surface }}>
               <thead>
                 <tr style={{ background: colors.surfaceDim }}>
@@ -3981,7 +4132,7 @@ function DirectoryPanel({ directory, setDirectory, employees, setEmployees, free
 
           {siteForm && (
             <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                 <Field label={t.fSiteEn} colors={colors}>
                   <input className={inputClass} style={inputStyle} value={siteForm.siteEn} onChange={(e) => setSiteForm((f) => ({ ...f, siteEn: e.target.value }))} />
                 </Field>
@@ -4018,7 +4169,7 @@ function DirectoryPanel({ directory, setDirectory, employees, setEmployees, free
             </div>
           )}
 
-          <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+          <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}` }}>
             <table className="w-full text-sm" style={{ background: colors.surface }}>
               <thead>
                 <tr style={{ background: colors.surfaceDim }}>
@@ -4066,7 +4217,7 @@ function DirectoryPanel({ directory, setDirectory, employees, setEmployees, free
 
           {empForm && (
             <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                 <Field label={t.fEmpName} colors={colors}>
                   <input className={inputClass} style={inputStyle} value={empForm.name} onChange={(e) => setEmpForm((f) => ({ ...f, name: e.target.value }))} />
                 </Field>
@@ -4096,7 +4247,7 @@ function DirectoryPanel({ directory, setDirectory, employees, setEmployees, free
             </div>
           )}
 
-          <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+          <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}` }}>
             <table className="w-full text-sm" style={{ background: colors.surface }}>
               <thead>
                 <tr style={{ background: colors.surfaceDim }}>
@@ -4485,7 +4636,7 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                     </Field>
                   </div>
                 )}
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                   <Field label={t.packingListApplyClient} colors={colors}>
                     <select className={inputClass} style={inputStyle} value={plCommon.client} onChange={(e) => setPlCommon((c) => ({ ...c, client: e.target.value }))}>
                       {CLIENTS.map((c) => <option key={c}>{c}</option>)}
@@ -4548,7 +4699,7 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                 )}
               </div>
 
-              <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+              <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}` }}>
                 <div className="px-4 py-2 text-sm font-semibold" style={{ background: colors.amberSoft, color: colors.amberText, fontFamily: FONT_DISPLAY }}>
                   {t.packingListDetectedTitle(plPreview.length)}
                 </div>
@@ -4838,6 +4989,7 @@ export default function FarspeedInventory() {
   const [expandedRowId, setExpandedRowId] = useState(null);
   const [siteTotalsOpen, setSiteTotalsOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [newEntryMenuOpen, setNewEntryMenuOpen] = useState(false);
   const [directory, setDirectoryState] = useState([]);
   const [employees, setEmployeesState] = useState([]);
@@ -5238,12 +5390,20 @@ export default function FarspeedInventory() {
     <div style={{ background: colors.bg, minHeight: "100%", fontFamily: FONT_BODY }} className="w-full">
       <style>{FONT_IMPORT}</style>
 
-      <div style={{ background: colors.navy }} className="px-6 py-4 flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <div className="text-2xl font-bold tracking-tight" style={{ color: colors.onDark, fontFamily: FONT_DISPLAY }}>FARSPEED CONTRACTORS LTD</div>
-          <div className="text-xs tracking-widest uppercase" style={{ color: colors.amber }}>{t.appSubtitle}</div>
+      <div style={{ background: colors.navy }} className="px-4 md:px-6 py-3 md:py-4 flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-lg md:text-2xl font-bold tracking-tight truncate" style={{ color: colors.onDark, fontFamily: FONT_DISPLAY }}>FARSPEED CONTRACTORS LTD</div>
+          <div className="text-[10px] md:text-xs tracking-widest uppercase" style={{ color: colors.amber }}>{t.appSubtitle}</div>
         </div>
-        <div className="flex items-center gap-3 flex-wrap">
+        <button
+          className="md:hidden flex items-center justify-center rounded"
+          style={{ width: 40, height: 40, background: colors.navySoft, color: colors.onDark, fontSize: 20, flexShrink: 0 }}
+          onClick={() => setMobileMenuOpen((o) => !o)}
+          aria-label={t.mobileMenuLabel}
+        >
+          {mobileMenuOpen ? "\u2715" : "\u2630"}
+        </button>
+        <div className="hidden md:flex items-center gap-3 flex-wrap">
           <div className="flex gap-1 rounded-lg p-1" style={{ background: colors.navySoft }}>
             {[
               ["dashboard", t.navDashboard],
@@ -5353,7 +5513,66 @@ export default function FarspeedInventory() {
         </div>
       </div>
 
-      <div className="p-6 max-w-6xl mx-auto">
+      {mobileMenuOpen && (
+        <div className="md:hidden flex flex-col" style={{ background: colors.navySoft, borderTop: `1px solid ${colors.navy}` }}>
+          {[
+            ["dashboard", t.navDashboard],
+            ["inventory", t.navInventory],
+            ["add", t.newEntryManual],
+            ["import", t.newEntryImport],
+            ["exit", t.navDeliveries],
+            ["billing", t.navBilling],
+            ["directory", t.navDirectory],
+            ["joblog", t.navJobLog],
+            ["duplicates", duplicateGroups.length > 0 ? t.navDuplicatesCount(duplicateGroups.length) : t.navDuplicatesShort],
+            ["cancelledjobs", cancelledJobs.length > 0 ? `${t.navCancelledJobs} (${cancelledJobs.length})` : t.navCancelledJobs],
+          ].map(([k, label]) => (
+            <button
+              key={k}
+              onClick={() => { setEditing(null); setExitingItems([]); setDeliveryPickerSelection([]); setNewEntryMenuOpen(false); setSettingsOpen(false); setMobileMenuOpen(false); setView(k); }}
+              className="text-left px-5 py-3 text-sm font-semibold"
+              style={{ fontFamily: FONT_DISPLAY, background: view === k ? colors.amber : "transparent", color: view === k ? colors.ink : colors.onDark, borderBottom: `1px solid ${colors.navy}` }}
+            >
+              {label}
+            </button>
+          ))}
+          <div className="flex items-center justify-between px-5 py-3" style={{ borderBottom: `1px solid ${colors.navy}` }}>
+            <span className="text-xs" style={{ color: colors.onDark, opacity: 0.7, fontFamily: FONT_DISPLAY }}>{t.signedInAs}: <span className="font-semibold" style={{ color: colors.amber }}>{authUser}</span></span>
+          </div>
+          <button
+            className="text-left px-5 py-3 text-sm font-semibold"
+            style={{ fontFamily: FONT_DISPLAY, color: colors.onDark, borderBottom: `1px solid ${colors.navy}` }}
+            onClick={() => { setChangePasswordOpen(true); setMobileMenuOpen(false); }}
+          >
+            {t.changePasswordLink}
+          </button>
+          <button
+            className="text-left px-5 py-3 text-sm font-semibold"
+            style={{ fontFamily: FONT_DISPLAY, color: colors.onDark, borderBottom: `1px solid ${colors.navy}` }}
+            onClick={handleLogout}
+          >
+            {t.logoutBtn}
+          </button>
+          <div className="flex gap-2 px-5 py-3">
+            <button
+              className="flex-1 px-3 py-2 rounded text-sm font-semibold"
+              style={{ fontFamily: FONT_DISPLAY, color: colors.onDark, background: colors.navy }}
+              onClick={() => setLang((l) => (l === "en" ? "zh" : "en"))}
+            >
+              {lang === "en" ? "中文" : "EN"}
+            </button>
+            <button
+              className="flex-1 px-3 py-2 rounded text-sm font-semibold"
+              style={{ fontFamily: FONT_DISPLAY, color: colors.onDark, background: colors.navy }}
+              onClick={() => setTheme((th) => (th === "light" ? "dark" : "light"))}
+            >
+              {theme === "light" ? "🌙" : "☀️"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="p-3 md:p-6 max-w-6xl mx-auto">
         {error && <div className="mb-4 px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>{error}</div>}
 
         {view === "dashboard" && (
@@ -5450,7 +5669,7 @@ export default function FarspeedInventory() {
 
         {view === "inventory" && (
           <div className="flex flex-col gap-4">
-            <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+            <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}` }}>
               <div
                 className="px-4 py-2 flex items-center justify-between cursor-pointer"
                 style={{ background: colors.surfaceDim }}
@@ -5524,7 +5743,7 @@ export default function FarspeedInventory() {
               </button>
             </div>
 
-            <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+            <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}` }}>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm" style={{ background: colors.surface }}>
                   <thead>
@@ -5655,7 +5874,7 @@ export default function FarspeedInventory() {
                 onCancel={() => { setExitingItems([]); setDeliveryPickerSelection([]); setView("inventory"); }} onPrintJobSheet={setPrintJobSheet}
                 employees={employees} currentUser={currentUser} items={items} colors={colors} t={t} lang={lang} />
             ) : (
-              <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+              <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}` }}>
                 <div className="px-4 py-3 flex flex-wrap gap-3 items-end" style={{ background: colors.surfaceDim }}>
                   <Field label={t.searchLabel} colors={colors}>
                     <input className={inputClass} style={{ ...inputStyleFor(colors), minWidth: 220 }} placeholder={t.deliverySearchPlaceholder} value={deliverySearch} onChange={(e) => setDeliverySearch(e.target.value)} />
@@ -5808,7 +6027,7 @@ export default function FarspeedInventory() {
               <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.jobLogTitle}</h3>
               <p className="text-sm" style={{ color: colors.inkFaint }}>{t.jobLogDesc}</p>
             </div>
-            <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+            <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}` }}>
               <table className="w-full text-sm" style={{ background: colors.surface }}>
                 <thead>
                   <tr style={{ background: colors.surfaceDim }}>
@@ -5852,7 +6071,7 @@ export default function FarspeedInventory() {
               <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.cancelledJobsTitle}</h3>
               <p className="text-sm" style={{ color: colors.inkFaint }}>{t.cancelledJobsDesc}</p>
             </div>
-            <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+            <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}` }}>
               <table className="w-full text-sm" style={{ background: colors.surface }}>
                 <thead>
                   <tr style={{ background: colors.surfaceDim }}>
