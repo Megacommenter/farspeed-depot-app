@@ -1181,7 +1181,7 @@ const TEXT = {
     legacyAlreadyDelivered: "Already delivered \u2014 close this job immediately instead of leaving it at the depot",
     legacyProcessBtn: (n) => `Process ${n} File${n === 1 ? "" : "s"}`,
     legacyProcessingMsg: "Processing\u2026",
-    legacyResultsMsg: (archived, created) => `Archived ${archived} file${archived === 1 ? "" : "s"}${created > 0 ? ` \u2014 created ${created} inventory ${created === 1 ? "entry" : "entries"}` : ""}.`,
+    legacyResultsMsg: (archived, created, delivered) => `Archived ${archived} file${archived === 1 ? "" : "s"}${created > 0 ? ` \u2014 created ${created} inventory ${created === 1 ? "entry" : "entries"}` : ""}${delivered > 0 ? ` \u2014 recorded ${delivered} deliver${delivered === 1 ? "y" : "ies"} against existing arrivals` : ""}.`,
     legacyImportedNote: (name) => `Imported from legacy file: ${name}`,
     legacyAutoClosedNote: "Auto-closed on legacy import (marked already delivered).",
     legacyBacklogTitle: "Backlog",
@@ -1190,6 +1190,11 @@ const TEXT = {
     legacyColFile: "File",
     legacyColLinked: "Linked Entry",
     legacyArchivedOnly: "Archived only",
+    legacyClientUnresolved: "\u2014 select client \u2014",
+    legacyClientRequiredSummaryMsg: "One or more files don't have a recognized client \u2014 select the correct client for each file before processing.",
+    legacyDeliveredFrom: (id) => `Delivered from ${id}`,
+    legacyUnmatchedReferral: (job) => `No arrival found for job ${job}`,
+    legacyUnmatchedHint: "This delivery refers to a job number that isn't in the system yet - upload its Devan/CFS file first, or link it manually later.",
     legacyProjectSiteEn: "Project / Site (English)",
     legacyProjectSiteZh: "Project / Site (Chinese)",
     legacySiteRequiredMsg: "Enter at least one of English or Chinese site name.",
@@ -1666,7 +1671,7 @@ const TEXT = {
     legacyAlreadyDelivered: "已送出 — 直接完結此工作，不留在倉內",
     legacyProcessBtn: (n) => `處理 ${n} 個檔案`,
     legacyProcessingMsg: "處理中…",
-    legacyResultsMsg: (archived, created) => `已存檔 ${archived} 個檔案${created > 0 ? `，並建立 ${created} 項存倉記錄` : ""}。`,
+    legacyResultsMsg: (archived, created, delivered) => `已存檔 ${archived} 個檔案${created > 0 ? `，並建立 ${created} 項存倉記錄` : ""}${delivered > 0 ? `，並為 ${delivered} 項已到倉記錄登記送貨` : ""}。`,
     legacyImportedNote: (name) => `由舊資料檔案匯入：${name}`,
     legacyAutoClosedNote: "舊資料匯入時自動完結（標記為已送出）。",
     legacyBacklogTitle: "待處理記錄",
@@ -1675,6 +1680,11 @@ const TEXT = {
     legacyColFile: "檔案",
     legacyColLinked: "連結記錄",
     legacyArchivedOnly: "僅存檔",
+    legacyClientUnresolved: "— 請選擇客戶 —",
+    legacyClientRequiredSummaryMsg: "部分檔案未能識別客戶 — 處理前請為每個檔案選擇正確客戶。",
+    legacyDeliveredFrom: (id) => `送出自 ${id}`,
+    legacyUnmatchedReferral: (job) => `找不到工單號 ${job} 的到倉記錄`,
+    legacyUnmatchedHint: "此送貨記錄指向的工單號尚未存在系統內 — 請先上載其拆櫃/CFS檔案，或稍後手動連結。",
     legacyProjectSiteEn: "項目／地盤（英文）",
     legacyProjectSiteZh: "項目／地盤（中文）",
     legacySiteRequiredMsg: "請至少填寫英文或中文地盤名稱其中一項。",
@@ -3545,6 +3555,20 @@ function guessJobNumberFromName(name) {
 // labels and pulls whatever value sits next to each one - to the right first, then below.
 // This is a best-effort pre-fill: the person still reviews and can correct every field
 // before committing, same as the PDF/Excel packing-list importers already do.
+const CHINESE_CLIENT_ALIASES = {
+  "三菱": "Mitsubishi", "迅達": "Schindler", "蒂升": "TK Elevator", "通力": "Kone",
+  "富士達": "Fujitec", "其士": "Chevalier", "希格馬": "Sigma", "日立": "Hitachi",
+};
+function resolveClientGuess(text) {
+  if (!text) return "";
+  const t = text.trim();
+  for (const [zh, client] of Object.entries(CHINESE_CLIENT_ALIASES)) {
+    if (t.includes(zh)) return client;
+  }
+  const lower = t.toLowerCase();
+  const match = CLIENTS.find((c) => lower.includes(c.toLowerCase()));
+  return match || "";
+}
 const JOBSHEET_LABEL_ALIASES = {
   account: ["客戶", "account"],
   jobNo: ["快達單號", "job no", "job no."],
@@ -3671,11 +3695,13 @@ function guessFieldsFromWorkbook(wb) {
     }
   }
 
-  const referMatch = flatText.match(/refer to job\s*no\.?\s*([A-Za-z0-9\-]+)\s*on\s*([\d\/\.\- ]+\d)/i);
+  const referMatch = flatText.match(/ref(?:er)?\.?\s*(?:to\s+)?job\s*no\.?\s*([A-Za-z0-9\-]+)\s*(?:on\s*([\d\/\.\- ]+\d))?/i);
   if (referMatch) {
     out.referJobNumber = referMatch[1].trim();
-    const d = new Date(referMatch[2].trim());
-    if (!isNaN(d)) out.referDate = d.toISOString().slice(0, 10);
+    if (referMatch[2]) {
+      const d = new Date(referMatch[2].trim());
+      if (!isNaN(d)) out.referDate = d.toISOString().slice(0, 10);
+    }
   }
 
   const liftMatch = flatText.match(/lift\s*no\.?\s*(?:phase\s*\d+\s*)?(#[0-9,\s]+)/i)
@@ -3717,7 +3743,8 @@ function LegacyUploadRow({ row, onChange, onRemove, colors, t }) {
           </select>
         </Field>
         <Field label={t.clientLabel} colors={colors}>
-          <select className={inputClass} style={inputStyle} value={row.client} onChange={set("client")}>
+          <select className={inputClass} style={{ ...inputStyle, borderColor: !row.client ? colors.red : inputStyle.borderColor }} value={row.client} onChange={set("client")}>
+            <option value="">{t.legacyClientUnresolved}</option>
             {CLIENTS.map((c) => <option key={c}>{c}</option>)}
           </select>
         </Field>
@@ -3772,7 +3799,7 @@ function LegacyUploadRow({ row, onChange, onRemove, colors, t }) {
   );
 }
 
-function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory, onLegacyImport, colors, t, lang }) {
+function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory, onLegacyImport, onLegacyDeliver, colors, t, lang }) {
   const [rows, setRows] = useState([]);
   const [processing, setProcessing] = useState(false);
   const [results, setResults] = useState(null);
@@ -3791,7 +3818,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
       const base = {
         file,
         docType: guessDocTypeFromName(file.name),
-        client: CLIENTS[0],
+        client: "",
         projectEn: "",
         projectZh: "",
         jobNumber: guessJobNumberFromName(file.name),
@@ -3812,7 +3839,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
           const buf = await file.arrayBuffer();
           const wb = XLSX.read(buf, { type: "array", cellDates: true });
           const guessed = guessFieldsFromWorkbook(wb);
-          const clientMatch = CLIENTS.find((c) => guessed.client && (c.toLowerCase() === guessed.client.toLowerCase() || guessed.client.toLowerCase().includes(c.toLowerCase())));
+          const clientMatch = resolveClientGuess(guessed.client);
           Object.assign(base, {
             client: clientMatch || base.client,
             projectEn: guessed.projectEn || base.projectEn,
@@ -3849,7 +3876,10 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
     setProcessing(true);
     const archiveEntries = [];
     const importRows = [];
-    const rowToImportIdx = [];
+    const jobNoToImportIdx = new Map(); // arrival job number -> index into importRows, for same-batch linking
+    const fileUriById = {};
+
+    // Pass 1: archive every file, and create the arrival (Devan/CFS = add to storage).
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       const id = `LEG${Date.now()}${Math.floor(Math.random() * 1000)}-${i}`;
@@ -3860,10 +3890,11 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
       if (fileUri) {
         try { await storageSet(`legacyDoc:${id}`, JSON.stringify({ uri: fileUri, name: row.file.name, at: todayStr() })); } catch (e) {}
       }
-      const itemized = JOB_SHEET_ITEMIZED.includes(row.docType);
-      let linkedItemIndex = null;
+      fileUriById[i] = fileUri;
+
       const hasSite = !!(row.projectEn || row.projectZh);
-      if (itemized && row.docType !== "Delivery" && row.client && hasSite) {
+      let linkedItemIndex = null;
+      if (row.docType !== "Delivery" && row.client && hasSite) {
         const dirMatch = (directory || []).find((s) =>
           (row.projectEn && s.siteEn && s.siteEn.toLowerCase() === row.projectEn.toLowerCase()) ||
           (row.projectZh && s.siteZh && s.siteZh === row.projectZh)
@@ -3887,27 +3918,61 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
             : [],
         };
         linkedItemIndex = importRows.length;
+        if (row.jobNumber) jobNoToImportIdx.set(String(row.jobNumber).trim(), linkedItemIndex);
         importRows.push(newItem);
-        rowToImportIdx.push(i);
       }
       archiveEntries.push({
-        id, fileName: row.file.name, docType: row.docType, client: row.client,
+        id, rowIndex: i, fileName: row.file.name, docType: row.docType, client: row.client,
         project: [row.projectEn, row.projectZh].filter(Boolean).join(" / "),
         jobNumber: row.jobNumber, date: row.date, uploadedAt: todayStr(), hasFile: !!fileUri,
         linkedItemId: null, __linkedItemIndex: linkedItemIndex,
       });
     }
-    const createdItems = importRows.length > 0 ? onLegacyImport(importRows) : [];
-    let ci = 0;
-    for (const entry of archiveEntries) {
-      if (entry.__linkedItemIndex != null) {
-        entry.linkedItemId = createdItems[ci] ? createdItems[ci].id : null;
-        ci++;
+
+    // Pass 2: Delivery = subtract from storage. Link each Delivery row to the arrival it
+    // refers to - first checking the arrivals just created in this same batch, then
+    // falling back to whatever's already in live inventory.
+    const existingDeliveryEntries = [];
+    let sameBatchDeliveryCount = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (row.docType !== "Delivery") continue;
+      const refNo = String(row.referJobNumber || "").trim();
+      const archiveEntry = archiveEntries[i];
+      if (!refNo) continue;
+      const sameBatchIdx = jobNoToImportIdx.get(refNo);
+      const deliveryRecord = {
+        date: row.date || todayStr(), deliveredTo: row.projectEn || row.projectZh, receivedBy: "",
+        jobNumber: row.jobNumber, recordedBy: "", notes: t.legacyImportedNote(row.file.name),
+        packageCount: row.packageCount || 1,
+      };
+      if (sameBatchIdx != null) {
+        importRows[sameBatchIdx].deliveries = [...(importRows[sameBatchIdx].deliveries || []), { ...deliveryRecord, id: `D${Date.now()}${i}` }];
+        archiveEntry.__linkedItemIndex = sameBatchIdx;
+        sameBatchDeliveryCount++;
+      } else {
+        const existing = items.find((it) => String(it.jobNumber || "").trim() === refNo);
+        if (existing) {
+          existingDeliveryEntries.push({ itemId: existing.id, delivery: deliveryRecord, archiveEntry });
+        } else {
+          archiveEntry.unmatchedReferral = refNo;
+        }
       }
-      delete entry.__linkedItemIndex;
     }
+
+    const createdItems = importRows.length > 0 ? onLegacyImport(importRows) : [];
+    for (const entry of archiveEntries) {
+      if (entry.__linkedItemIndex != null) entry.linkedItemId = createdItems[entry.__linkedItemIndex] ? createdItems[entry.__linkedItemIndex].id : null;
+      delete entry.__linkedItemIndex;
+      delete entry.rowIndex;
+    }
+    if (existingDeliveryEntries.length > 0 && onLegacyDeliver) {
+      const results = onLegacyDeliver(existingDeliveryEntries.map((e) => ({ itemId: e.itemId, delivery: e.delivery })));
+      results.forEach((r, idx) => { existingDeliveryEntries[idx].archiveEntry.linkedItemId = r.itemId; });
+    }
+
     setLegacyArchive((prev) => [...archiveEntries, ...prev]);
-    setResults({ archived: archiveEntries.length, created: createdItems.length });
+    setResults({ archived: archiveEntries.length, created: createdItems.length, delivered: sameBatchDeliveryCount + existingDeliveryEntries.length });
     setRows([]);
     setProcessing(false);
   }
@@ -3958,6 +4023,11 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
           {rows.map((row, idx) => (
             <LegacyUploadRow key={idx} row={row} onChange={(next) => updateRow(idx, next)} onRemove={() => removeRow(idx)} colors={colors} t={t} />
           ))}
+          {rows.some((r) => !r.client) && (
+            <div className="px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>
+              {t.legacyClientRequiredSummaryMsg}
+            </div>
+          )}
           {rows.some((r) => !r.projectEn && !r.projectZh) && (
             <div className="px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>
               {t.legacySiteRequiredSummaryMsg}
@@ -3966,8 +4036,8 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
           <div className="flex gap-2">
             <button
               className="px-4 py-2 rounded text-sm font-semibold"
-              style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY, opacity: (processing || rows.some((r) => !r.projectEn && !r.projectZh)) ? 0.6 : 1 }}
-              disabled={processing || rows.some((r) => !r.projectEn && !r.projectZh)}
+              style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY, opacity: (processing || rows.some((r) => !r.projectEn && !r.projectZh) || rows.some((r) => !r.client)) ? 0.6 : 1 }}
+              disabled={processing || rows.some((r) => !r.projectEn && !r.projectZh) || rows.some((r) => !r.client)}
               onClick={processAll}
             >
               {processing ? t.legacyProcessingMsg : t.legacyProcessBtn(rows.length)}
@@ -3977,7 +4047,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
       )}
       {results && (
         <div className="px-3 py-2 rounded text-sm" style={{ background: colors.greenSoft, color: colors.green }}>
-          {t.legacyResultsMsg(results.archived, results.created)}
+          {t.legacyResultsMsg(results.archived, results.created, results.delivered)}
         </div>
       )}
 
@@ -4018,7 +4088,15 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
                 <td className="px-3 py-2 max-w-[180px] truncate">{r.project}</td>
                 <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{r.jobNumber || "—"}</td>
                 <td className="px-3 py-2">{r.date ? fmt(r.date) : "—"}</td>
-                <td className="px-3 py-2">{r.linkedItemId ? <span style={{ color: colors.green, fontWeight: 600 }}>{r.linkedItemId}</span> : <span style={{ color: colors.inkFaint }}>{t.legacyArchivedOnly}</span>}</td>
+                <td className="px-3 py-2">
+                  {r.linkedItemId ? (
+                    <span style={{ color: colors.green, fontWeight: 600 }}>{r.docType === "Delivery" ? t.legacyDeliveredFrom(r.linkedItemId) : r.linkedItemId}</span>
+                  ) : r.unmatchedReferral ? (
+                    <span style={{ color: colors.red }} title={t.legacyUnmatchedHint}>{t.legacyUnmatchedReferral(r.unmatchedReferral)}</span>
+                  ) : (
+                    <span style={{ color: colors.inkFaint }}>{t.legacyArchivedOnly}</span>
+                  )}
+                </td>
                 <td className="px-3 py-2 text-right">
                   {r.hasFile && <button className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => viewArchivedFile(r.id)}>{t.signedDocViewBtn}</button>}
                 </td>
@@ -4031,7 +4109,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
   );
 }
 
-function DirectoryPanel({ directory, setDirectory, employees, setEmployees, freeRules, setFreeRules, cbmRates, setCbmRates, legacyArchive, setLegacyArchive, items, onLegacyImport, colors, t, lang }) {
+function DirectoryPanel({ directory, setDirectory, employees, setEmployees, freeRules, setFreeRules, cbmRates, setCbmRates, legacyArchive, setLegacyArchive, items, onLegacyImport, onLegacyDeliver, colors, t, lang }) {
   const [mode, setMode] = useState("sites");
   const [editingSite, setEditingSite] = useState(null);
   const [siteForm, setSiteForm] = useState(null);
@@ -4208,7 +4286,7 @@ function DirectoryPanel({ directory, setDirectory, employees, setEmployees, free
       )}
 
       {mode === "legacy" && (
-        <LegacyUploadsPanel legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} directory={directory} onLegacyImport={onLegacyImport} colors={colors} t={t} lang={lang} />
+        <LegacyUploadsPanel legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} directory={directory} onLegacyImport={onLegacyImport} onLegacyDeliver={onLegacyDeliver} colors={colors} t={t} lang={lang} />
       )}
 
       {mode === "sites" && (
@@ -6110,7 +6188,7 @@ export default function FarspeedInventory() {
         )}
 
         {view === "directory" && (
-          <DirectoryPanel directory={directory} setDirectory={setDirectory} employees={employees} setEmployees={setEmployees} freeRules={freeRules} setFreeRules={setFreeRules} cbmRates={cbmRates} setCbmRates={setCbmRates} legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} onLegacyImport={handleLegacyImport} colors={colors} t={t} lang={lang} />
+          <DirectoryPanel directory={directory} setDirectory={setDirectory} employees={employees} setEmployees={setEmployees} freeRules={freeRules} setFreeRules={setFreeRules} cbmRates={cbmRates} setCbmRates={setCbmRates} legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} onLegacyImport={handleLegacyImport} onLegacyDeliver={handleAddCombinedDelivery} colors={colors} t={t} lang={lang} />
         )}
 
         {view === "joblog" && (
