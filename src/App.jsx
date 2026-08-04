@@ -1151,6 +1151,20 @@ const TEXT = {
 
     navJobLog: "Job Log",
     navBilling: "Billing",
+    navIncoming: "Incoming",
+    incomingTitle: "Incoming",
+    incomingDesc: "Cases from uploaded packing lists that haven't been checked into the depot yet. Select which cases arrived via Devan or CFS and when \u2014 this creates or updates the real inventory entry.",
+    incomingShowCompleted: "Show fully checked-in shipments",
+    incomingNoneMsg: "Nothing incoming right now \u2014 upload a packing list to add cases here.",
+    incomingCaseCount: (n) => `${n} case${n === 1 ? "" : "s"} on packing list`,
+    incomingLinkedTo: (id) => `linked to ${id}`,
+    incomingFullyCheckedIn: "Fully checked in",
+    incomingRemainingBadge: (remaining, total) => `${remaining} of ${total} not yet checked in`,
+    incomingSelectCasesLabel: "Select which cases are coming in",
+    incomingCheckInBtn: (n) => n > 0 ? `Check In (${n})` : "Check In",
+    incomingCheckedInNote: (incId) => `Checked in from Incoming ${incId}`,
+    packingListAddToIncomingBtn: (n) => `Add ${n} Group${n === 1 ? "" : "s"} to Incoming`,
+    packingListIncomingHint: "This just adds the cases to Incoming \u2014 depot, Devan/CFS, job number, and date get decided later when you check them in from the Incoming tab.",
     billingTitle: "Storage Billing",
     billingDesc: "Search by client, project, job number, or case to see storage charges. Billed per arrival batch (not split by construction site) at the client's $/CBM monthly rate: free days first, the remainder of that month pro-rated by day, then every following month in full — even if the goods leave partway through it.",
     billingSearchPlaceholder: "Client, project, job no., or case no.",
@@ -1645,6 +1659,20 @@ const TEXT = {
 
     navJobLog: "單號記錄",
     navBilling: "帳單",
+    navIncoming: "待到倉",
+    incomingTitle: "待到倉",
+    incomingDesc: "已上載裝箱單但尚未辦理到倉手續的貨件。選擇哪些件號經拆櫃或CFS到倉及日期 \u2014 系統會建立或更新相應的存倉記錄。",
+    incomingShowCompleted: "顯示已全部到倉的貨件",
+    incomingNoneMsg: "目前沒有待到倉貨件 \u2014 上載裝箱單以新增。",
+    incomingCaseCount: (n) => `裝箱單共 ${n} 件`,
+    incomingLinkedTo: (id) => `已連結至 ${id}`,
+    incomingFullyCheckedIn: "已全部到倉",
+    incomingRemainingBadge: (remaining, total) => `尚有 ${remaining}／${total} 件未到倉`,
+    incomingSelectCasesLabel: "選擇哪些件號到倉",
+    incomingCheckInBtn: (n) => n > 0 ? `辦理到倉 (${n})` : "辦理到倉",
+    incomingCheckedInNote: (incId) => `由待到倉記錄 ${incId} 辦理到倉`,
+    packingListAddToIncomingBtn: (n) => `新增 ${n} 組至待到倉`,
+    packingListIncomingHint: "此步驟只會將件號加入待到倉名單 \u2014 倉庫、拆櫃/CFS、工單號及日期會在稍後於「待到倉」分頁辦理到倉時才決定。",
     billingTitle: "存倉收費",
     billingDesc: "可按客戶、項目、工單號或件號搜尋存倉收費。收費以到倉批次計算（不按地盤分開），按客戶的每CBM月費計：先扣免費日數，該月餘下日數按日比例計算，其後每個月則全額收取——即使貨物於月中送出亦然。",
     billingSearchPlaceholder: "客戶、項目、工單號或件號",
@@ -3885,6 +3913,200 @@ function LegacyUploadRow({ row, onChange, onRemove, colors, t }) {
   );
 }
 
+function IncomingPanel({ incoming, items, directory, onCheckIn, colors, t, lang }) {
+  const [search, setSearch] = useState("");
+  const [filterClient, setFilterClient] = useState("All");
+  const [showCompleted, setShowCompleted] = useState(false);
+  const [expandedId, setExpandedId] = useState(null);
+  const [selectedByShipment, setSelectedByShipment] = useState({});
+  const [formByShipment, setFormByShipment] = useState({});
+  const inputStyle = inputStyleFor(colors);
+
+  function remainingPkgs(inc) {
+    const done = new Set(inc.checkedInCodes || []);
+    return (inc.packages || []).filter((p) => !done.has(p.code));
+  }
+  function isComplete(inc) {
+    return remainingPkgs(inc).length === 0;
+  }
+
+  const clientOptions = useMemo(() => [...new Set(incoming.map((i) => i.client).filter(Boolean))].sort(), [incoming]);
+  const filtered = incoming.filter((inc) => {
+    if (filterClient !== "All" && inc.client !== filterClient) return false;
+    if (!showCompleted && isComplete(inc)) return false;
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    return inc.client?.toLowerCase().includes(q) || inc.project?.toLowerCase().includes(q) ||
+      inc.constructionSite?.toLowerCase().includes(q) || inc.unitCode?.toLowerCase().includes(q) ||
+      (inc.packages || []).some((p) => (p.code || "").toLowerCase().includes(q));
+  });
+
+  function getSel(id) { return selectedByShipment[id] || []; }
+  function toggleCode(id, code) {
+    setSelectedByShipment((prev) => {
+      const cur = prev[id] || [];
+      return { ...prev, [id]: cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code] };
+    });
+  }
+  function selectAll(inc) {
+    setSelectedByShipment((prev) => ({ ...prev, [inc.id]: remainingPkgs(inc).map((p) => p.code) }));
+  }
+  function getForm(id) {
+    return formByShipment[id] || { type: "Devan", depot: DEPOTS[0], jobNumber: "", date: todayStr(), ssDoNo: "" };
+  }
+  function setForm(id, patch) {
+    setFormByShipment((prev) => ({ ...prev, [id]: { ...getForm(id), ...patch } }));
+  }
+
+  function submitCheckIn(inc) {
+    const codes = getSel(inc.id);
+    const form = getForm(inc.id);
+    if (codes.length === 0 || !form.jobNumber || !form.date) return;
+    onCheckIn({ incomingId: inc.id, codes, type: form.type, depot: form.depot, jobNumber: form.jobNumber, date: form.date, ssDoNo: form.ssDoNo });
+    setSelectedByShipment((prev) => ({ ...prev, [inc.id]: [] }));
+    setFormByShipment((prev) => ({ ...prev, [inc.id]: { ...getForm(inc.id), jobNumber: "" } }));
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+        <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.incomingTitle}</h3>
+        <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.incomingDesc}</p>
+        <div className="flex flex-wrap gap-3 items-end">
+          <Field label={t.searchLabel} colors={colors}>
+            <input className={inputClass} style={{ ...inputStyle, minWidth: 220 }} value={search} onChange={(e) => setSearch(e.target.value)} />
+          </Field>
+          <Field label={t.clientLabel} colors={colors}>
+            <select className={inputClass} style={inputStyle} value={filterClient} onChange={(e) => setFilterClient(e.target.value)}>
+              <option>All</option>
+              {clientOptions.map((c) => <option key={c}>{c}</option>)}
+            </select>
+          </Field>
+          <label className="flex items-center gap-2 text-sm pb-2" style={{ color: colors.inkFaint }}>
+            <input type="checkbox" checked={showCompleted} onChange={(e) => setShowCompleted(e.target.checked)} />
+            {t.incomingShowCompleted}
+          </label>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-3">
+        {filtered.length === 0 && (
+          <div className="px-3 py-6 text-center text-sm rounded-lg" style={{ background: colors.surface, border: `1px solid ${colors.line}`, color: colors.inkFaint }}>
+            {t.incomingNoneMsg}
+          </div>
+        )}
+        {filtered.map((inc) => {
+          const remaining = remainingPkgs(inc);
+          const complete = isComplete(inc);
+          const isOpen = expandedId === inc.id;
+          const sel = getSel(inc.id);
+          const form = getForm(inc.id);
+          return (
+            <div key={inc.id} className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}`, background: colors.surface }}>
+              <div
+                className="px-4 py-3 flex flex-wrap items-center justify-between gap-2 cursor-pointer"
+                style={{ background: colors.surfaceDim }}
+                onClick={() => setExpandedId(isOpen ? null : inc.id)}
+              >
+                <div>
+                  <div className="text-sm font-bold" style={{ color: colors.ink, fontFamily: FONT_DISPLAY }}>
+                    {inc.client} \u00b7 {inc.project || inc.constructionSite}{inc.unitCode ? ` \u00b7 ${inc.unitCode}` : ""}
+                  </div>
+                  <div className="text-xs" style={{ color: colors.inkFaint }}>
+                    {t.incomingCaseCount((inc.packages || []).length)}{inc.linkedItemId ? ` \u00b7 ${t.incomingLinkedTo(inc.linkedItemId)}` : ""}
+                  </div>
+                </div>
+                {complete ? (
+                  <Badge tone="green" colors={colors}>{t.incomingFullyCheckedIn}</Badge>
+                ) : (
+                  <Badge tone="amber" colors={colors}>{t.incomingRemainingBadge(remaining.length, (inc.packages || []).length)}</Badge>
+                )}
+              </div>
+              {isOpen && (
+                <div className="p-4 flex flex-col gap-4">
+                  {remaining.length > 0 ? (
+                    <>
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{t.incomingSelectCasesLabel}</div>
+                          <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => selectAll(inc)}>{t.selectAllBtn}</button>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {remaining.map((p) => (
+                            <button
+                              key={p.code}
+                              type="button"
+                              onClick={() => toggleCode(inc.id, p.code)}
+                              className="px-2.5 py-1.5 rounded text-xs font-semibold text-left"
+                              style={{
+                                border: `1px solid ${sel.includes(p.code) ? colors.amber : colors.line}`,
+                                background: sel.includes(p.code) ? colors.amberSoft : colors.surface,
+                                color: sel.includes(p.code) ? colors.amberText : colors.ink,
+                              }}
+                              title={p.description}
+                            >
+                              {p.code}{p.description ? ` \u2014 ${p.description}` : ""}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                        <Field label={t.fArrivingType} colors={colors}>
+                          <select className={inputClass} style={inputStyle} value={form.type} onChange={(e) => setForm(inc.id, { type: e.target.value })}>
+                            {ARRIVING_TYPES.map((a) => <option key={a}>{a}</option>)}
+                          </select>
+                        </Field>
+                        <Field label={t.packingListApplyDepot} colors={colors}>
+                          <select className={inputClass} style={inputStyle} value={form.depot} onChange={(e) => setForm(inc.id, { depot: e.target.value })}>
+                            {DEPOTS.map((d) => <option key={d} value={d}>{depotLabel(d, lang)}</option>)}
+                          </select>
+                        </Field>
+                        <Field label={t.colDate} colors={colors}>
+                          <input type="date" className={inputClass} style={inputStyle} value={form.date} onChange={(e) => setForm(inc.id, { date: e.target.value })} />
+                        </Field>
+                        <Field label={t.fJobNumber} hint={t.fJobNumberHint} colors={colors}>
+                          <div className="flex gap-2">
+                            <input className={inputClass + " flex-1"} style={inputStyle} value={form.jobNumber} onChange={(e) => setForm(inc.id, { jobNumber: e.target.value })} />
+                            <button
+                              type="button"
+                              className="px-2.5 py-1.5 rounded text-xs font-semibold whitespace-nowrap"
+                              style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}
+                              onClick={() => setForm(inc.id, { jobNumber: nextJobNumber(items) })}
+                            >
+                              {t.generateJobNoBtn}
+                            </button>
+                          </div>
+                        </Field>
+                        {form.type === "Devan" && (
+                          <div className="col-span-1 sm:col-span-2 md:col-span-4">
+                            <Field label={t.fSsDoNo} hint={t.fSsDoNoHint} colors={colors}>
+                              <input className={inputClass} style={inputStyle} value={form.ssDoNo} onChange={(e) => setForm(inc.id, { ssDoNo: e.target.value })} placeholder={'ex ss."SHIP" V.___; CONTAINERS NO. ___'} />
+                            </Field>
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        className="px-4 py-2 rounded text-sm font-semibold w-fit"
+                        style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY, opacity: (sel.length === 0 || !form.jobNumber || !form.date) ? 0.5 : 1 }}
+                        disabled={sel.length === 0 || !form.jobNumber || !form.date}
+                        onClick={() => submitCheckIn(inc)}
+                      >
+                        {t.incomingCheckInBtn(sel.length)}
+                      </button>
+                    </>
+                  ) : (
+                    <div className="text-sm" style={{ color: colors.green }}>{t.incomingFullyCheckedIn}</div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory, onLegacyImport, onLegacyDeliver, onLegacyEnrich, colors, t, lang }) {
   const [rows, setRows] = useState([]);
   const [processing, setProcessing] = useState(false);
@@ -4600,7 +4822,7 @@ function exportToExcel(items) {
   XLSX.writeFile(wb, `farspeed-depot-export-${todayStr()}.xlsx`);
 }
 
-function ImportPanel({ onImportRows, existingItems, directory, setDirectory, colors, t, lang }) {
+function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, setDirectory, colors, t, lang }) {
   const [mode, setMode] = useState("packinglist");
   const [excelPreview, setExcelPreview] = useState(null);
   const [included, setIncluded] = useState([]);
@@ -4617,7 +4839,7 @@ function ImportPanel({ onImportRows, existingItems, directory, setDirectory, col
     return [...new Set([...fromDirectory, ...fromItems])];
   }, [directory, existingItems]);
 
-  function applyParsedResult({ groups, client, project, ssDoNo }) {
+  function applyParsedResult({ groups, client, project }) {
     if (!groups || groups.length === 0) { return false; }
     setPlPreview(groups);
     const guess = String(project || "").toLowerCase();
@@ -4629,12 +4851,6 @@ function ImportPanel({ onImportRows, existingItems, directory, setDirectory, col
     setPlCommon({
       client: matchedSite ? matchedSite.client : (CLIENTS.includes(client) ? client : CLIENTS[0]),
       project: matchedSite ? matchedSite.siteEn : (project || ""),
-      depot: DEPOTS[0],
-      depotArrivalDate: todayStr(),
-      depotLocation: "",
-      arrivingType: ARRIVING_TYPES[0],
-      jobNumber: "",
-      ssDoNo: ssDoNo || "",
       directoryId: matchedSite ? matchedSite.id : "",
       jobRef: matchedSite ? matchedSite.jobRef : "",
       orderedBy: matchedSite ? matchedSite.orderedBy : "",
@@ -4785,8 +5001,7 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
     e.target.value = "";
   }
 
-  function importPackingList() {
-    const sharedJobNumber = plCommon.jobNumber || nextJobNumber(existingItems);
+  function addToIncoming() {
     let effectiveDirectoryId = plCommon.directoryId || "";
 
     if (plCommon.saveToDirectory && !plCommon.directoryId && plCommon.project) {
@@ -4803,31 +5018,18 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
       effectiveDirectoryId = newSite.id;
     }
 
-    const newItems = plPreview.map((g) => {
-      const base = emptyForm();
-      return {
-        ...base,
-        client: plCommon.client,
-        project: plCommon.project,
-        constructionSite: plCommon.constructionSite || "",
-        depot: plCommon.depot,
-        depotArrivalDate: plCommon.depotArrivalDate,
-        depotLocation: plCommon.depotLocation,
-        arrivingType: plCommon.arrivingType,
-        jobNumber: sharedJobNumber,
-        ssDoNo: plCommon.ssDoNo || "",
-        jobRef: plCommon.jobRef || "",
-        orderedBy: plCommon.orderedBy || "",
-        directoryId: effectiveDirectoryId,
-        itemType: "Separate Items",
-        unitCode: g.lot,
-        weightKg: g.totalWeight ? String(Math.round(g.totalWeight * 10) / 10) : "",
-        volumeCbm: g.totalCbm ? String(Math.round(g.totalCbm * 1000) / 1000) : "",
-        packages: g.packages,
-        notes: g.containers.length ? `Container(s): ${g.containers.join(", ")}` : "",
-      };
-    });
-    onImportRows(newItems);
+    const newIncoming = plPreview.map((g) => ({
+      client: plCommon.client,
+      project: plCommon.project,
+      constructionSite: plCommon.constructionSite || "",
+      jobRef: plCommon.jobRef || "",
+      orderedBy: plCommon.orderedBy || "",
+      directoryId: effectiveDirectoryId,
+      unitCode: g.lot,
+      packages: g.packages,
+      notes: g.containers.length ? `Container(s): ${g.containers.join(", ")}` : "",
+    }));
+    onAddIncoming(newIncoming);
     setPlPreview(null);
     setPlCommon(null);
   }
@@ -4927,38 +5129,9 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                   <Field label={t.fJobRef} hint={t.fJobRefHint} colors={colors}>
                     <input className={inputClass} style={inputStyle} value={plCommon.jobRef || ""} onChange={(e) => setPlCommon((c) => ({ ...c, jobRef: e.target.value }))} />
                   </Field>
-                  <Field label={t.fSsDoNo} hint={t.fSsDoNoHint} colors={colors}>
-                    <input className={inputClass} style={inputStyle} value={plCommon.ssDoNo || ""} onChange={(e) => setPlCommon((c) => ({ ...c, ssDoNo: e.target.value }))} placeholder={'ex ss."SHIP" V.___; CONTAINERS NO. ___'} />
-                  </Field>
-                  <Field label={t.packingListApplyDepot} colors={colors}>
-                    <select className={inputClass} style={inputStyle} value={plCommon.depot} onChange={(e) => setPlCommon((c) => ({ ...c, depot: e.target.value }))}>
-                      {DEPOTS.map((d) => <option key={d} value={d}>{depotLabel(d, lang)}</option>)}
-                    </select>
-                  </Field>
-                  <Field label={t.packingListApplyDepotArrival} colors={colors}>
-                    <input type="date" className={inputClass} style={inputStyle} value={plCommon.depotArrivalDate} onChange={(e) => setPlCommon((c) => ({ ...c, depotArrivalDate: e.target.value }))} />
-                  </Field>
-                  <Field label={t.packingListApplyDepotLocation} colors={colors}>
-                    <input className={inputClass} style={inputStyle} value={plCommon.depotLocation} onChange={(e) => setPlCommon((c) => ({ ...c, depotLocation: e.target.value }))} />
-                  </Field>
-                  <Field label={t.fArrivingType} hint={t.fArrivingTypeHint} colors={colors}>
-                    <select className={inputClass} style={inputStyle} value={plCommon.arrivingType} onChange={(e) => setPlCommon((c) => ({ ...c, arrivingType: e.target.value }))}>
-                      {ARRIVING_TYPES.map((a) => <option key={a}>{a}</option>)}
-                    </select>
-                  </Field>
-                  <Field label={t.fJobNumber} hint={t.fJobNumberHint} colors={colors}>
-                    <div className="flex gap-2">
-                      <input className={inputClass + " flex-1"} style={inputStyle} value={plCommon.jobNumber} onChange={(e) => setPlCommon((c) => ({ ...c, jobNumber: e.target.value }))} />
-                      <button
-                        type="button"
-                        className="px-2.5 py-1.5 rounded text-xs font-semibold whitespace-nowrap"
-                        style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}
-                        onClick={() => setPlCommon((c) => ({ ...c, jobNumber: nextJobNumber(existingItems) }))}
-                      >
-                        {t.generateJobNoBtn}
-                      </button>
-                    </div>
-                  </Field>
+                </div>
+                <div className="mt-3 px-3 py-2 rounded text-xs" style={{ background: colors.surfaceDim, color: colors.inkFaint }}>
+                  {t.packingListIncomingHint}
                 </div>
                 {!plCommon.directoryId && plCommon.project && (
                   <label className="flex items-center gap-2 mt-4 text-sm" style={{ color: colors.ink }}>
@@ -4999,8 +5172,8 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
               </div>
 
               <div className="flex gap-2">
-                <button className="px-4 py-2 rounded text-sm font-semibold w-fit" style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY }} onClick={importPackingList}>
-                  {t.packingListImportBtn(plPreview.length)}
+                <button className="px-4 py-2 rounded text-sm font-semibold w-fit" style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY }} onClick={addToIncoming}>
+                  {t.packingListAddToIncomingBtn(plPreview.length)}
                 </button>
                 <button className="px-4 py-2 rounded text-sm font-semibold w-fit" style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY }}
                   onClick={() => { setPlPreview(null); setPlCommon(null); }}>
@@ -5269,6 +5442,7 @@ export default function FarspeedInventory() {
   const [freeRules, setFreeRulesState] = useState([]);
   const [cbmRates, setCbmRatesState] = useState({});
   const [legacyArchive, setLegacyArchiveState] = useState([]);
+  const [incoming, setIncomingState] = useState([]);
   const [currentUser, setCurrentUserState] = useState("");
   const [filterClient, setFilterClient] = useState("All");
   const [filterStatus, setFilterStatus] = useState("All");
@@ -5351,6 +5525,12 @@ export default function FarspeedInventory() {
         setLegacyArchiveState([]);
       }
       try {
+        const res = await storageGet("incoming");
+        setIncomingState(res ? JSON.parse(res.value) : []);
+      } catch (e) {
+        setIncomingState([]);
+      }
+      try {
         setCurrentUserState(window.localStorage.getItem("farspeed_current_user") || "");
       } catch (e) {}
       setLoaded(true);
@@ -5393,6 +5573,72 @@ export default function FarspeedInventory() {
       storageSet("legacyArchive", JSON.stringify(next));
       return next;
     });
+  }
+  function setIncoming(updater) {
+    setIncomingState((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      storageSet("incoming", JSON.stringify(next));
+      return next;
+    });
+  }
+  // Adds shipments from a Packing List upload to the Incoming pool - informational only,
+  // not yet checked into the depot via Devan or CFS.
+  function handleAddIncoming(rows) {
+    let counter = incoming.reduce((m, i) => Math.max(m, i.numericId || 0), 0);
+    const newRows = rows.map((r) => {
+      counter += 1;
+      return { ...r, numericId: counter, id: `INC-${String(counter).padStart(4, "0")}`, checkedInCodes: [], linkedItemId: null, createdAt: todayStr() };
+    });
+    setIncoming((prev) => [...prev, ...newRows]);
+    return newRows;
+  }
+  // Checks selected cases from an Incoming shipment into the depot via Devan or CFS.
+  // First check-in for a shipment creates the real inventory item (carrying the full case
+  // pool so later partial check-ins can keep adding arrival batches to the same item,
+  // reusing the existing Split Arrival mechanism); later check-ins just add another batch.
+  function handleCheckIn({ incomingId, codes, type, depot, jobNumber, date, ssDoNo }) {
+    const inc = incoming.find((i) => i.id === incomingId);
+    if (!inc || codes.length === 0) return null;
+    const batch = { id: `ARR${Date.now()}${Math.floor(Math.random() * 1000)}`, date, type, codes };
+    let resultItemId = inc.linkedItemId;
+
+    if (!inc.linkedItemId) {
+      let counter = items.reduce((m, i) => Math.max(m, i.numericId || 0), 0) + 1;
+      const totalWeight = inc.packages.reduce((s, p) => s + (Number(p.weightKg) || 0), 0);
+      const totalCbm = inc.packages.reduce((s, p) => s + (Number(p.cbm) || 0), 0);
+      const newItem = {
+        ...emptyForm(),
+        client: inc.client,
+        project: inc.project,
+        constructionSite: inc.constructionSite || "",
+        jobRef: inc.jobRef || "",
+        orderedBy: inc.orderedBy || "",
+        directoryId: inc.directoryId || "",
+        itemType: "Separate Items",
+        unitCode: inc.unitCode || "",
+        depot,
+        depotArrivalDate: date,
+        arrivingType: type,
+        jobNumber,
+        ssDoNo: type === "Devan" ? (ssDoNo || "") : "",
+        weightKg: totalWeight ? String(Math.round(totalWeight * 10) / 10) : "",
+        volumeCbm: totalCbm ? String(Math.round(totalCbm * 1000) / 1000) : "",
+        packages: inc.packages,
+        arrivals: [batch],
+        deliveries: [],
+        notes: t.incomingCheckedInNote(inc.id),
+        numericId: counter,
+        id: `FS-${String(counter).padStart(4, "0")}`,
+        createdAt: todayStr(),
+      };
+      persist([...items, newItem]);
+      resultItemId = newItem.id;
+    } else {
+      persist(items.map((it) => (it.id === inc.linkedItemId ? { ...it, arrivals: [...(it.arrivals || []), batch] } : it)));
+    }
+
+    setIncoming((prev) => prev.map((i) => (i.id === incomingId ? { ...i, checkedInCodes: [...new Set([...(i.checkedInCodes || []), ...codes])], linkedItemId: resultItemId } : i)));
+    return resultItemId;
   }
   function setCurrentUser(name) {
     setCurrentUserState(name);
@@ -5728,6 +5974,7 @@ export default function FarspeedInventory() {
             </div>
 
             {[
+              ["incoming", t.navIncoming],
               ["exit", t.navDeliveries],
               ["billing", t.navBilling],
               ["directory", t.navDirectory],
@@ -5803,6 +6050,7 @@ export default function FarspeedInventory() {
             ["inventory", t.navInventory],
             ["add", t.newEntryManual],
             ["import", t.newEntryImport],
+            ["incoming", t.navIncoming],
             ["exit", t.navDeliveries],
             ["billing", t.navBilling],
             ["directory", t.navDirectory],
@@ -6293,7 +6541,11 @@ export default function FarspeedInventory() {
         )}
 
         {view === "import" && (
-          <ImportPanel onImportRows={handleImportRows} existingItems={items} directory={directory} setDirectory={setDirectory} colors={colors} t={t} lang={lang} />
+          <ImportPanel onImportRows={handleImportRows} onAddIncoming={handleAddIncoming} existingItems={items} directory={directory} setDirectory={setDirectory} colors={colors} t={t} lang={lang} />
+        )}
+
+        {view === "incoming" && (
+          <IncomingPanel incoming={incoming} items={items} directory={directory} onCheckIn={handleCheckIn} colors={colors} t={t} lang={lang} />
         )}
 
         {view === "billing" && (
