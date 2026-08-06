@@ -3987,16 +3987,26 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, colors, t, 
               </>
             )}
             {(row.docType === "Devan" || row.docType === "CFS") && (
-              <div className="col-span-2 md:col-span-4">
-                <Field label={t.fSsDoNo} colors={colors}>
-                  <input className={inputClass} style={inputStyle} value={row.ssDoNo} onChange={set("ssDoNo")} placeholder={'ex ss."SHIP" V.___; CONTAINERS NO. ___'} />
+              <>
+                <Field label={t.fReference} hint={t.fReferenceHint} colors={colors}>
+                  <input className={inputClass} style={inputStyle} value={row.shkNumber} onChange={set("shkNumber")} />
                 </Field>
-              </div>
+                <div className="col-span-2 md:col-span-3">
+                  <Field label={t.fSsDoNo} colors={colors}>
+                    <input className={inputClass} style={inputStyle} value={row.ssDoNo} onChange={set("ssDoNo")} placeholder={'ex ss."SHIP" V.___; CONTAINERS NO. ___'} />
+                  </Field>
+                </div>
+              </>
             )}
             {row.docType === "Delivery" && (
-              <Field label={t.legacyReferJobNoLabel} hint={t.legacyReferJobNoHint} colors={colors}>
-                <input className={inputClass} style={inputStyle} value={row.referJobNumber} onChange={set("referJobNumber")} />
-              </Field>
+              <>
+                <Field label={t.legacyReferJobNoLabel} hint={t.legacyReferJobNoHint} colors={colors}>
+                  <input className={inputClass} style={inputStyle} value={row.referJobNumber} onChange={set("referJobNumber")} />
+                </Field>
+                <Field label={t.fReference} hint={t.fReferenceHint} colors={colors}>
+                  <input className={inputClass} style={inputStyle} value={row.shkNumber} onChange={set("shkNumber")} />
+                </Field>
+              </>
             )}
           </>
         )}
@@ -4341,6 +4351,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
         weightKg: "",
         volumeCbm: "",
         ssDoNo: "",
+        shkNumber: "",
         referJobNumber: "",
         referDate: "",
         autoDetected: false,
@@ -4445,6 +4456,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
                 jobNumber: row.jobNumber,
                 date: row.date,
                 ssDoNo: row.ssDoNo,
+                shkNumber: row.shkNumber,
               },
               archiveEntry,
             });
@@ -4459,6 +4471,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
           // would only carry flat totals and shadow the good per-case data.
           const patch = {};
           if (!existingByJobNo.ssDoNo && row.ssDoNo) patch.ssDoNo = row.ssDoNo;
+          if (!existingByJobNo.shkNumber && row.shkNumber) patch.shkNumber = row.shkNumber;
           if (!existingByJobNo.project && row.projectEn) patch.project = row.projectEn;
           if (!existingByJobNo.constructionSite && row.projectZh) patch.constructionSite = row.projectZh;
           if (!existingByJobNo.depotArrivalDate && row.date) patch.depotArrivalDate = row.date;
@@ -4483,6 +4496,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
             volumeCbm: row.volumeCbm || "",
             arrivingType: row.docType === "CFS" ? "CFS" : "Devan",
             ssDoNo: row.ssDoNo || "",
+            shkNumber: row.shkNumber || "",
             notes: t.legacyImportedNote(row.file.name),
             deliveries: [],
           };
@@ -4526,6 +4540,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
             delivery: {
               date: row.date || todayStr(), deliveredTo: row.projectEn || row.projectZh, receivedBy: "",
               jobNumber: row.jobNumber, recordedBy: "", notes: t.legacyImportedNote(row.file.name),
+              shkNumber: row.shkNumber || "",
               codes,
             },
             archiveEntry,
@@ -4540,6 +4555,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
       const deliveryRecord = {
         date: row.date || todayStr(), deliveredTo: row.projectEn || row.projectZh, receivedBy: "",
         jobNumber: row.jobNumber, recordedBy: "", notes: t.legacyImportedNote(row.file.name),
+        shkNumber: row.shkNumber || "",
         packageCount: row.packageCount || 1,
       };
       if (sameBatchIdx != null) {
@@ -5131,6 +5147,7 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
       directoryId: matchedSite ? matchedSite.id : "",
       jobRef: matchedSite ? matchedSite.jobRef : "",
       orderedBy: matchedSite ? matchedSite.orderedBy : "",
+      shkNumber: "",
       constructionSite: matchedSite ? (matchedSite.siteZh || matchedSite.siteEn) : (project || ""),
       saveToDirectory: !matchedSite,
     });
@@ -5301,6 +5318,7 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
       constructionSite: plCommon.constructionSite || "",
       jobRef: plCommon.jobRef || "",
       orderedBy: plCommon.orderedBy || "",
+      shkNumber: plCommon.shkNumber || "",
       directoryId: effectiveDirectoryId,
       unitCode: g.lot,
       packages: g.packages,
@@ -5405,6 +5423,9 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                   </Field>
                   <Field label={t.fJobRef} hint={t.fJobRefHint} colors={colors}>
                     <input className={inputClass} style={inputStyle} value={plCommon.jobRef || ""} onChange={(e) => setPlCommon((c) => ({ ...c, jobRef: e.target.value }))} />
+                  </Field>
+                  <Field label={t.fReference} hint={t.fReferenceHint} colors={colors}>
+                    <input className={inputClass} style={inputStyle} value={plCommon.shkNumber || ""} onChange={(e) => setPlCommon((c) => ({ ...c, shkNumber: e.target.value }))} />
                   </Field>
                 </div>
                 <div className="mt-3 px-3 py-2 rounded text-xs" style={{ background: colors.surfaceDim, color: colors.inkFaint }}>
@@ -5918,6 +5939,7 @@ export default function FarspeedInventory() {
           itemType: "Separate Items", unitCode: inc.unitCode || "",
           depot: op.depot, depotArrivalDate: op.date, arrivingType: op.type, jobNumber: op.jobNumber,
           ssDoNo: op.type === "Devan" ? (op.ssDoNo || "") : "",
+          shkNumber: op.shkNumber || inc.shkNumber || "",
           weightKg: totalWeight ? String(Math.round(totalWeight * 10) / 10) : "",
           volumeCbm: totalCbm ? String(Math.round(totalCbm * 1000) / 1000) : "",
           packages: inc.packages, arrivals: [batch], deliveries: [],
@@ -5968,6 +5990,7 @@ export default function FarspeedInventory() {
         arrivingType: type,
         jobNumber,
         ssDoNo: type === "Devan" ? (ssDoNo || "") : "",
+        shkNumber: inc.shkNumber || "",
         weightKg: totalWeight ? String(Math.round(totalWeight * 10) / 10) : "",
         volumeCbm: totalCbm ? String(Math.round(totalCbm * 1000) / 1000) : "",
         packages: inc.packages,
