@@ -4869,8 +4869,9 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
       (s.siteZh && guess.includes(s.siteZh.toLowerCase())) ||
       (s.siteEn && s.siteEn.toLowerCase().includes(guess))
     ) : null;
+    const resolvedClient = resolveClientGuess(client);
     setPlCommon({
-      client: matchedSite ? matchedSite.client : (CLIENTS.includes(client) ? client : CLIENTS[0]),
+      client: matchedSite ? matchedSite.client : (resolvedClient || CLIENTS[CLIENTS.length - 1]),
       project: matchedSite ? matchedSite.siteEn : (project || ""),
       directoryId: matchedSite ? matchedSite.id : "",
       jobRef: matchedSite ? matchedSite.jobRef : "",
