@@ -3864,9 +3864,17 @@ function guessFieldsFromWorkbook(wb) {
 function siteKeyFor(en, zh) {
   return [(en || "").trim().toLowerCase(), (zh || "").trim()].filter(Boolean);
 }
+function normalizeSiteForMatch(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/^(site at|no\.?)\s*/i, "")
+    .replace(/,?\s*(hong ?kong|hk|wan ?chai)\s*$/i, "")
+    .replace(/[^\w\u4e00-\u9fff]+/g, " ")
+    .trim();
+}
 function sitesLooselyMatch(enA, zhA, enB, zhB) {
-  const [aEn, aZh] = [(enA || "").trim().toLowerCase(), (zhA || "").trim()];
-  const [bEn, bZh] = [(enB || "").trim().toLowerCase(), (zhB || "").trim()];
+  const aEn = normalizeSiteForMatch(enA), bEn = normalizeSiteForMatch(enB);
+  const aZh = String(zhA || "").trim(), bZh = String(zhB || "").trim();
   if (aEn && bEn && (aEn.includes(bEn) || bEn.includes(aEn))) return true;
   if (aZh && bZh && (aZh.includes(bZh) || bZh.includes(aZh))) return true;
   return false;
@@ -4127,7 +4135,7 @@ function IncomingPanel({ incoming, setIncoming, items, directory, onCheckIn, col
               >
                 <div>
                   <div className="text-sm font-bold" style={{ color: colors.ink, fontFamily: FONT_DISPLAY }}>
-                    {inc.client} \u00b7 {inc.project || inc.constructionSite}{inc.unitCode ? ` \u00b7 ${inc.unitCode}` : ""}
+                    {inc.client} · {inc.project || inc.constructionSite}{inc.unitCode ? ` \u00b7 ${inc.unitCode}` : ""}
                   </div>
                   <div className="text-xs" style={{ color: colors.inkFaint }}>
                     {t.incomingCaseCount((inc.packages || []).length)}{inc.linkedItemId ? ` \u00b7 ${t.incomingLinkedTo(inc.linkedItemId)}` : ""}
