@@ -4239,6 +4239,16 @@ function IncomingPanel({ incoming, setIncoming, items, directory, onCheckIn, col
               </div>
               {isOpen && (
                 <div className="p-4 flex flex-col gap-4">
+                  <div className="max-w-xs">
+                    <Field label={t.fReference} hint={t.fReferenceHint} colors={colors}>
+                      <input
+                        className={inputClass}
+                        style={inputStyleFor(colors)}
+                        value={inc.shkNumber || ""}
+                        onChange={(e) => setIncoming((prev) => prev.map((i) => (i.id === inc.id ? { ...i, shkNumber: e.target.value } : i)))}
+                      />
+                    </Field>
+                  </div>
                   {remaining.length > 0 ? (
                     <>
                       <div>
