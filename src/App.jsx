@@ -1274,7 +1274,7 @@ const TEXT = {
     legacyAlreadyDelivered: "Already delivered \u2014 close this job immediately instead of leaving it at the depot",
     legacyProcessBtn: (n) => `Process ${n} File${n === 1 ? "" : "s"}`,
     legacyProcessingMsg: "Processing\u2026",
-    legacyResultsMsg: (archived, created, delivered, enriched) => `Archived ${archived} file${archived === 1 ? "" : "s"}${created > 0 ? ` \u2014 created ${created} inventory ${created === 1 ? "entry" : "entries"}` : ""}${enriched > 0 ? ` \u2014 matched ${enriched} to existing ${enriched === 1 ? "entry" : "entries"} and added its details` : ""}${delivered > 0 ? ` \u2014 recorded ${delivered} deliver${delivered === 1 ? "y" : "ies"} against existing arrivals` : ""}.`,
+    legacyResultsMsg: (archived, created, delivered, enriched, checkedIn) => `Archived ${archived} file${archived === 1 ? "" : "s"}${created > 0 ? ` \u2014 created ${created} inventory ${created === 1 ? "entry" : "entries"}` : ""}${checkedIn > 0 ? ` \u2014 checked in ${checkedIn} case group${checkedIn === 1 ? "" : "s"} against Incoming` : ""}${enriched > 0 ? ` \u2014 matched ${enriched} to existing ${enriched === 1 ? "entry" : "entries"} and added its details` : ""}${delivered > 0 ? ` \u2014 recorded ${delivered} deliver${delivered === 1 ? "y" : "ies"} against existing arrivals` : ""}.`,
     legacyImportedNote: (name) => `Imported from legacy file: ${name}`,
     legacyAutoClosedNote: "Auto-closed on legacy import (marked already delivered).",
     legacyBacklogTitle: "Backlog",
@@ -1298,6 +1298,7 @@ const TEXT = {
     legacyReferLine: (job, date) => `refers to job no. ${job} on ${date}`,
     legacyReferJobNoLabel: "Refers to Arrival Job No.",
     legacyEnrichedNote: (name) => `Enriched from legacy file: ${name}`,
+    legacyMatchedIncoming: (id) => `Matched to Incoming ${id} \u2014 select which of its cases arrived in this file`,
     legacyArrivalStaysOpenHint: "Stays open at the depot until a matching Delivery file is uploaded (or you record a delivery for it normally).",
     legacyNoReferralHint: "No \"Ref Job no.\" line detected \u2014 enter the arrival's job number manually, or this file will only be archived.",
   },
@@ -1785,7 +1786,7 @@ const TEXT = {
     legacyAlreadyDelivered: "已送出 — 直接完結此工作，不留在倉內",
     legacyProcessBtn: (n) => `處理 ${n} 個檔案`,
     legacyProcessingMsg: "處理中…",
-    legacyResultsMsg: (archived, created, delivered, enriched) => `已存檔 ${archived} 個檔案${created > 0 ? `，並建立 ${created} 項存倉記錄` : ""}${enriched > 0 ? `，並配對 ${enriched} 項現有記錄並補充其資料` : ""}${delivered > 0 ? `，並為 ${delivered} 項已到倉記錄登記送貨` : ""}。`,
+    legacyResultsMsg: (archived, created, delivered, enriched, checkedIn) => `已存檔 ${archived} 個檔案${created > 0 ? `，並建立 ${created} 項存倉記錄` : ""}${checkedIn > 0 ? `，並為 ${checkedIn} 組件號辦理待到倉核對` : ""}${enriched > 0 ? `，並配對 ${enriched} 項現有記錄並補充其資料` : ""}${delivered > 0 ? `，並為 ${delivered} 項已到倉記錄登記送貨` : ""}。`,
     legacyImportedNote: (name) => `由舊資料檔案匯入：${name}`,
     legacyAutoClosedNote: "舊資料匯入時自動完結（標記為已送出）。",
     legacyBacklogTitle: "待處理記錄",
@@ -1809,6 +1810,7 @@ const TEXT = {
     legacyReferLine: (job, date) => `指向工單號 ${job}，日期 ${date}`,
     legacyReferJobNoLabel: "指向到倉工單號",
     legacyEnrichedNote: (name) => `由舊資料檔案補充資料：${name}`,
+    legacyMatchedIncoming: (id) => `已配對至待到倉 ${id} \u2014 請選擇此檔案中已到達的件號`,
     legacyArrivalStaysOpenHint: "此記錄會保持在倉狀態，直至上載對應的送貨檔案（或日後手動記錄送貨）為止。",
     legacyNoReferralHint: "未有偵測到「Ref Job no.」字句 — 請手動輸入到倉工單號，否則此檔案只會被存檔。",
   },
@@ -3744,11 +3746,21 @@ function findLabelValue(rows, aliases) {
 // gathers consecutive non-empty lines and splits them by script rather than grabbing
 // just the single adjacent cell.
 function findAddressLines(rows, aliases, maxLines = 8) {
+  const aliasesNorm = aliases.map((a) => normLabelCompare(a));
+  // Prefer an exact label match over a substring match - a single Chinese character
+  // alias like "送"/"由" can appear embedded inside an unrelated sentence elsewhere on
+  // the sheet (e.g. "运输送到" contains "送"), which would otherwise be mistaken for
+  // the real FROM/TO label cell.
+  let hasExactMatch = false;
+  for (const row of rows) {
+    if (row.some((cell) => aliasesNorm.includes(normLabelCompare(cell)))) { hasExactMatch = true; break; }
+  }
   for (let r = 0; r < rows.length; r++) {
     for (let c = 0; c < rows[r].length; c++) {
       const cellNorm = normCell(rows[r][c]);
       if (!cellNorm) continue;
-      if (!aliases.some((a) => cellNorm.includes(normCell(a)))) continue;
+      const isMatch = hasExactMatch ? aliasesNorm.includes(normLabelCompare(rows[r][c])) : aliases.some((a) => cellNorm.includes(normCell(a)));
+      if (!isMatch) continue;
       let startR = -1, startC = -1;
       for (let cc = c + 1; cc < Math.min(c + 6, rows[r].length); cc++) {
         const v = rows[r][cc];
@@ -3823,8 +3835,16 @@ function guessFieldsFromWorkbook(wb) {
   }
 
   const liftMatch = flatText.match(/lift\s*no\.?\s*(?:phase\s*\d+\s*)?(#[0-9,\s]+)/i)
-    || flatText.match(/unit\s*(?:no\.?|code)\s*[:\-]?\s*([A-Za-z0-9\-\.\/#, ]{2,30})/i);
-  if (liftMatch) out.unitCode = liftMatch[1].trim().replace(/\s+/g, " ");
+    || flatText.match(/unit\s*(?:no\.?|code)\s*[:\-]?\s*([A-Za-z0-9\-\.\/#, ]{2,30})/i)
+    || flatText.match(/escalator\s*no\.?\s*([A-Za-z0-9 &,]{2,20})/i);
+  if (liftMatch) {
+    out.unitCode = liftMatch[1].trim().replace(/\s+/g, " ");
+  } else {
+    // Fallback: some sheets list unit codes only as "REFNUMBER/E1", "REFNUMBER2/E2" lines
+    // rather than a labeled heading - collect every such pair's unit code.
+    const pairMatches = [...flatText.matchAll(/\b\d{6,12}\/([A-Za-z]\d+)\b/g)];
+    if (pairMatches.length) out.unitCode = [...new Set(pairMatches.map((m) => m[1]))].join(", ");
+  }
 
   const pkgsMatch = flatText.match(/(\d+)\s*PKGS?/i);
   if (pkgsMatch) out.packageCount = pkgsMatch[1];
@@ -3839,10 +3859,37 @@ function guessFieldsFromWorkbook(wb) {
   return out;
 }
 
-function LegacyUploadRow({ row, onChange, onRemove, colors, t }) {
+function siteKeyFor(en, zh) {
+  return [(en || "").trim().toLowerCase(), (zh || "").trim()].filter(Boolean);
+}
+function sitesLooselyMatch(enA, zhA, enB, zhB) {
+  const [aEn, aZh] = [(enA || "").trim().toLowerCase(), (zhA || "").trim()];
+  const [bEn, bZh] = [(enB || "").trim().toLowerCase(), (zhB || "").trim()];
+  if (aEn && bEn && (aEn.includes(bEn) || bEn.includes(aEn))) return true;
+  if (aZh && bZh && (aZh.includes(bZh) || bZh.includes(aZh))) return true;
+  return false;
+}
+function LegacyUploadRow({ row, onChange, onRemove, incoming, colors, t, lang }) {
   const inputStyle = inputStyleFor(colors);
   const set = (k) => (e) => onChange({ ...row, [k]: e.target.value });
   const itemized = JOB_SHEET_ITEMIZED.includes(row.docType);
+  const canMatchIncoming = row.docType === "Devan" || row.docType === "CFS";
+  const matchedIncoming = canMatchIncoming && row.client && (row.projectEn || row.projectZh)
+    ? (incoming || []).find((inc) => {
+        if (inc.client !== row.client) return false;
+        const done = new Set(inc.checkedInCodes || []);
+        const remaining = (inc.packages || []).filter((p) => !done.has(p.code));
+        if (remaining.length === 0) return false;
+        return sitesLooselyMatch(row.projectEn, row.projectZh, inc.project, inc.constructionSite);
+      })
+    : null;
+  const selectedCodes = row.selectedIncomingCodes || [];
+  function toggleIncomingCode(code) {
+    onChange({ ...row, selectedIncomingCodes: selectedCodes.includes(code) ? selectedCodes.filter((c) => c !== code) : [...selectedCodes, code] });
+  }
+  function selectAllIncoming(remainingPkgs) {
+    onChange({ ...row, selectedIncomingCodes: remainingPkgs.map((p) => p.code) });
+  }
   return (
     <div className="rounded p-3 flex flex-col gap-3" style={{ border: `1px solid ${colors.line}`, background: colors.surface }}>
       <div className="flex items-start justify-between gap-2">
@@ -3880,18 +3927,24 @@ function LegacyUploadRow({ row, onChange, onRemove, colors, t }) {
         </Field>
         {itemized && (
           <>
-            <Field label={t.legacyUnitCode} colors={colors}>
-              <input className={inputClass} style={inputStyle} value={row.unitCode} onChange={set("unitCode")} />
-            </Field>
-            <Field label={t.legacyPkgs} colors={colors}>
-              <input type="number" min="0" className={inputClass} style={inputStyle} value={row.packageCount} onChange={set("packageCount")} />
-            </Field>
-            <Field label={t.legacyWeightKg} colors={colors}>
-              <input type="number" min="0" className={inputClass} style={inputStyle} value={row.weightKg} onChange={set("weightKg")} />
-            </Field>
-            <Field label={t.legacyCbm} colors={colors}>
-              <input type="number" min="0" step="0.001" className={inputClass} style={inputStyle} value={row.volumeCbm} onChange={set("volumeCbm")} />
-            </Field>
+            {matchedIncoming ? null : (
+              <Field label={t.legacyUnitCode} colors={colors}>
+                <input className={inputClass} style={inputStyle} value={row.unitCode} onChange={set("unitCode")} />
+              </Field>
+            )}
+            {matchedIncoming ? null : (
+              <>
+                <Field label={t.legacyPkgs} colors={colors}>
+                  <input type="number" min="0" className={inputClass} style={inputStyle} value={row.packageCount} onChange={set("packageCount")} />
+                </Field>
+                <Field label={t.legacyWeightKg} colors={colors}>
+                  <input type="number" min="0" className={inputClass} style={inputStyle} value={row.weightKg} onChange={set("weightKg")} />
+                </Field>
+                <Field label={t.legacyCbm} colors={colors}>
+                  <input type="number" min="0" step="0.001" className={inputClass} style={inputStyle} value={row.volumeCbm} onChange={set("volumeCbm")} />
+                </Field>
+              </>
+            )}
             {(row.docType === "Devan" || row.docType === "CFS") && (
               <div className="col-span-2 md:col-span-4">
                 <Field label={t.fSsDoNo} colors={colors}>
@@ -3907,6 +3960,46 @@ function LegacyUploadRow({ row, onChange, onRemove, colors, t }) {
           </>
         )}
       </div>
+      {matchedIncoming && (() => {
+        const done = new Set(matchedIncoming.checkedInCodes || []);
+        const remainingPkgs = (matchedIncoming.packages || []).filter((p) => !done.has(p.code));
+        return (
+          <div className="rounded p-3" style={{ background: colors.greenSoft, border: `1px solid ${colors.green}` }}>
+            <div className="text-sm font-semibold mb-2" style={{ color: colors.green }}>
+              {t.legacyMatchedIncoming(matchedIncoming.id)}
+            </div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{t.incomingSelectCasesLabel}</div>
+              <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => selectAllIncoming(remainingPkgs)}>{t.selectAllBtn}</button>
+            </div>
+            <div className="mb-3 max-w-xs">
+              <Field label={t.packingListApplyDepot} colors={colors}>
+                <select className={inputClass} style={inputStyle} value={row.depot || DEPOTS[0]} onChange={set("depot")}>
+                  {DEPOTS.map((d) => <option key={d} value={d}>{depotLabel(d, lang)}</option>)}
+                </select>
+              </Field>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {remainingPkgs.map((p) => (
+                <button
+                  key={p.code}
+                  type="button"
+                  onClick={() => toggleIncomingCode(p.code)}
+                  className="px-2.5 py-1.5 rounded text-xs font-semibold text-left"
+                  style={{
+                    border: `1px solid ${selectedCodes.includes(p.code) ? colors.amber : colors.line}`,
+                    background: selectedCodes.includes(p.code) ? colors.amberSoft : colors.surface,
+                    color: selectedCodes.includes(p.code) ? colors.amberText : colors.ink,
+                  }}
+                  title={p.description}
+                >
+                  {p.code}{p.description ? ` \u2014 ${p.description}` : ""}
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
       {!row.projectEn && !row.projectZh && (
         <div className="px-2 py-1.5 rounded text-xs" style={{ background: colors.redSoft, color: colors.red }}>
           {t.legacySiteRequiredMsg}
@@ -4128,7 +4221,7 @@ function IncomingPanel({ incoming, setIncoming, items, directory, onCheckIn, col
   );
 }
 
-function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory, onLegacyImport, onLegacyDeliver, onLegacyEnrich, colors, t, lang }) {
+function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, onLegacyCheckIn, onLegacyCheckInBatch, directory, onLegacyImport, onLegacyDeliver, onLegacyEnrich, colors, t, lang }) {
   const [rows, setRows] = useState([]);
   const [processing, setProcessing] = useState(false);
   const [results, setResults] = useState(null);
@@ -4206,6 +4299,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
     const importRows = [];
     const jobNoToImportIdx = new Map(); // arrival job number -> index into importRows, for same-batch linking
     const pendingEnrichments = [];
+    const checkInOps = []; // {op, archiveEntry} pairs, resolved in one batch call after the loop
     const fileUriById = {};
 
     // Pass 1: archive every file, and create the arrival (Devan/CFS = add to storage).
@@ -4224,7 +4318,40 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
       const hasSite = !!(row.projectEn || row.projectZh);
       let linkedItemIndex = null;
       let enrichTargetId = null;
+      const matchedIncoming = (row.docType === "Devan" || row.docType === "CFS") && row.client && hasSite
+        ? (incoming || []).find((inc) => {
+            if (inc.client !== row.client) return false;
+            const done = new Set(inc.checkedInCodes || []);
+            if ((inc.packages || []).filter((p) => !done.has(p.code)).length === 0) return false;
+            return sitesLooselyMatch(row.projectEn, row.projectZh, inc.project, inc.constructionSite);
+          })
+        : null;
+      const archiveEntry = {
+        id, rowIndex: i, fileName: row.file.name, docType: row.docType, client: row.client,
+        project: [row.projectEn, row.projectZh].filter(Boolean).join(" / "),
+        jobNumber: row.jobNumber, date: row.date, uploadedAt: todayStr(), hasFile: !!fileUri,
+        linkedItemId: null, __linkedItemIndex: null,
+      };
+      archiveEntries.push(archiveEntry);
+
       if (row.docType !== "Delivery" && row.client && hasSite) {
+        if (matchedIncoming && (row.selectedIncomingCodes || []).length > 0 && onLegacyCheckInBatch) {
+          // Matched to a real Incoming shipment with cases selected - queue it for a real
+          // check-in (creates or extends the linked inventory item, same as the Incoming
+          // tab), resolved together with any other rows' check-ins after this loop.
+          checkInOps.push({
+            op: {
+              incomingId: matchedIncoming.id,
+              codes: row.selectedIncomingCodes,
+              type: row.docType,
+              depot: row.depot || DEPOTS[0],
+              jobNumber: row.jobNumber,
+              date: row.date,
+              ssDoNo: row.ssDoNo,
+            },
+            archiveEntry,
+          });
+        } else {
         const jobNoTrim = String(row.jobNumber || "").trim();
         const existingByJobNo = jobNoTrim ? items.find((it) => String(it.jobNumber || "").trim() === jobNoTrim) : null;
         if (existingByJobNo) {
@@ -4265,13 +4392,15 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
           if (row.jobNumber) jobNoToImportIdx.set(String(row.jobNumber).trim(), linkedItemIndex);
           importRows.push(newItem);
         }
+        }
       }
-      archiveEntries.push({
-        id, rowIndex: i, fileName: row.file.name, docType: row.docType, client: row.client,
-        project: [row.projectEn, row.projectZh].filter(Boolean).join(" / "),
-        jobNumber: row.jobNumber, date: row.date, uploadedAt: todayStr(), hasFile: !!fileUri,
-        linkedItemId: enrichTargetId, __linkedItemIndex: linkedItemIndex,
-      });
+      archiveEntry.linkedItemId = enrichTargetId;
+      archiveEntry.__linkedItemIndex = linkedItemIndex;
+    }
+
+    if (checkInOps.length > 0 && onLegacyCheckInBatch) {
+      const results = onLegacyCheckInBatch(checkInOps.map((c) => c.op));
+      results.forEach((itemId, idx) => { checkInOps[idx].archiveEntry.linkedItemId = itemId; });
     }
 
     // Pass 2: Delivery = subtract from storage. Link each Delivery row to the arrival it
@@ -4318,7 +4447,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
     }
 
     setLegacyArchive((prev) => [...archiveEntries, ...prev]);
-    setResults({ archived: archiveEntries.length, created: createdItems.length, delivered: sameBatchDeliveryCount + existingDeliveryEntries.length, enriched: pendingEnrichments.length });
+    setResults({ archived: archiveEntries.length, created: createdItems.length, delivered: sameBatchDeliveryCount + existingDeliveryEntries.length, enriched: pendingEnrichments.length, checkedIn: checkInOps.length });
     setRows([]);
     setProcessing(false);
   }
@@ -4367,7 +4496,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
       {rows.length > 0 && (
         <div className="flex flex-col gap-3">
           {rows.map((row, idx) => (
-            <LegacyUploadRow key={idx} row={row} onChange={(next) => updateRow(idx, next)} onRemove={() => removeRow(idx)} colors={colors} t={t} />
+            <LegacyUploadRow key={idx} row={row} onChange={(next) => updateRow(idx, next)} onRemove={() => removeRow(idx)} incoming={incoming} colors={colors} t={t} lang={lang} />
           ))}
           {rows.some((r) => !r.client) && (
             <div className="px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>
@@ -4393,7 +4522,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
       )}
       {results && (
         <div className="px-3 py-2 rounded text-sm" style={{ background: colors.greenSoft, color: colors.green }}>
-          {t.legacyResultsMsg(results.archived, results.created, results.delivered, results.enriched)}
+          {t.legacyResultsMsg(results.archived, results.created, results.delivered, results.enriched, results.checkedIn)}
         </div>
       )}
 
@@ -4455,7 +4584,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, directory,
   );
 }
 
-function DirectoryPanel({ directory, setDirectory, employees, setEmployees, freeRules, setFreeRules, cbmRates, setCbmRates, legacyArchive, setLegacyArchive, items, onLegacyImport, onLegacyDeliver, onLegacyEnrich, colors, t, lang }) {
+function DirectoryPanel({ directory, setDirectory, employees, setEmployees, freeRules, setFreeRules, cbmRates, setCbmRates, legacyArchive, setLegacyArchive, items, incoming, onLegacyImport, onLegacyDeliver, onLegacyEnrich, onLegacyCheckIn, onLegacyCheckInBatch, colors, t, lang }) {
   const [mode, setMode] = useState("sites");
   const [editingSite, setEditingSite] = useState(null);
   const [siteForm, setSiteForm] = useState(null);
@@ -4632,7 +4761,7 @@ function DirectoryPanel({ directory, setDirectory, employees, setEmployees, free
       )}
 
       {mode === "legacy" && (
-        <LegacyUploadsPanel legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} directory={directory} onLegacyImport={onLegacyImport} onLegacyDeliver={onLegacyDeliver} onLegacyEnrich={onLegacyEnrich} colors={colors} t={t} lang={lang} />
+        <LegacyUploadsPanel legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} incoming={incoming} onLegacyCheckIn={onLegacyCheckIn} onLegacyCheckInBatch={onLegacyCheckInBatch} directory={directory} onLegacyImport={onLegacyImport} onLegacyDeliver={onLegacyDeliver} onLegacyEnrich={onLegacyEnrich} colors={colors} t={t} lang={lang} />
       )}
 
       {mode === "sites" && (
@@ -5635,6 +5764,59 @@ export default function FarspeedInventory() {
   // First check-in for a shipment creates the real inventory item (carrying the full case
   // pool so later partial check-ins can keep adding arrival batches to the same item,
   // reusing the existing Split Arrival mechanism); later check-ins just add another batch.
+  // Batch-safe version of handleCheckIn for when several check-ins happen in one go (e.g.
+  // Legacy Upload processing several Devan/CFS rows at once). Calling handleCheckIn
+  // synchronously in a loop would have each call read the same stale `items`/`incoming`
+  // snapshot, risking duplicate FS-#### ids or one check-in silently overwriting another's
+  // arrival batch. This computes everything against one working copy instead.
+  function handleCheckInBatch(operations) {
+    let workingItems = [...items];
+    let counter = workingItems.reduce((m, i) => Math.max(m, i.numericId || 0), 0);
+    const incomingPatches = new Map();
+    const results = [];
+    for (const op of operations) {
+      const inc = incoming.find((i) => i.id === op.incomingId);
+      if (!inc || op.codes.length === 0) { results.push(null); continue; }
+      const batch = { id: `ARR${Date.now()}${Math.floor(Math.random() * 1000)}`, date: op.date, type: op.type, codes: op.codes };
+      const prior = incomingPatches.get(op.incomingId);
+      const effectiveLinkedId = prior ? prior.linkedItemId : inc.linkedItemId;
+      let resultItemId;
+      if (!effectiveLinkedId) {
+        counter += 1;
+        const totalWeight = inc.packages.reduce((s, p) => s + (Number(p.weightKg) || 0), 0);
+        const totalCbm = inc.packages.reduce((s, p) => s + (Number(p.cbm) || 0), 0);
+        const newItem = {
+          ...emptyForm(),
+          client: inc.client, project: inc.project, constructionSite: inc.constructionSite || "",
+          jobRef: inc.jobRef || "", orderedBy: inc.orderedBy || "", directoryId: inc.directoryId || "",
+          itemType: "Separate Items", unitCode: inc.unitCode || "",
+          depot: op.depot, depotArrivalDate: op.date, arrivingType: op.type, jobNumber: op.jobNumber,
+          ssDoNo: op.type === "Devan" ? (op.ssDoNo || "") : "",
+          weightKg: totalWeight ? String(Math.round(totalWeight * 10) / 10) : "",
+          volumeCbm: totalCbm ? String(Math.round(totalCbm * 1000) / 1000) : "",
+          packages: inc.packages, arrivals: [batch], deliveries: [],
+          notes: t.incomingCheckedInNote(inc.id), numericId: counter,
+          id: `FS-${String(counter).padStart(4, "0")}`, createdAt: todayStr(),
+        };
+        workingItems = [...workingItems, newItem];
+        resultItemId = newItem.id;
+      } else {
+        workingItems = workingItems.map((it) => (it.id === effectiveLinkedId ? { ...it, arrivals: [...(it.arrivals || []), batch] } : it));
+        resultItemId = effectiveLinkedId;
+      }
+      incomingPatches.set(op.incomingId, { linkedItemId: resultItemId, addedCodes: [...(prior ? prior.addedCodes : []), ...op.codes] });
+      results.push(resultItemId);
+    }
+    if (operations.length > 0) {
+      persist(workingItems);
+      setIncoming((prev) => prev.map((inc) => {
+        const patch = incomingPatches.get(inc.id);
+        if (!patch) return inc;
+        return { ...inc, checkedInCodes: [...new Set([...(inc.checkedInCodes || []), ...patch.addedCodes])], linkedItemId: patch.linkedItemId };
+      }));
+    }
+    return results;
+  }
   function handleCheckIn({ incomingId, codes, type, depot, jobNumber, date, ssDoNo }) {
     const inc = incoming.find((i) => i.id === incomingId);
     if (!inc || codes.length === 0) return null;
@@ -6592,7 +6774,7 @@ export default function FarspeedInventory() {
         )}
 
         {view === "directory" && (
-          <DirectoryPanel directory={directory} setDirectory={setDirectory} employees={employees} setEmployees={setEmployees} freeRules={freeRules} setFreeRules={setFreeRules} cbmRates={cbmRates} setCbmRates={setCbmRates} legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} onLegacyImport={handleLegacyImport} onLegacyDeliver={handleAddCombinedDelivery} onLegacyEnrich={handleLegacyEnrich} colors={colors} t={t} lang={lang} />
+          <DirectoryPanel directory={directory} setDirectory={setDirectory} employees={employees} setEmployees={setEmployees} freeRules={freeRules} setFreeRules={setFreeRules} cbmRates={cbmRates} setCbmRates={setCbmRates} legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} incoming={incoming} onLegacyImport={handleLegacyImport} onLegacyDeliver={handleAddCombinedDelivery} onLegacyEnrich={handleLegacyEnrich} onLegacyCheckIn={handleCheckIn} onLegacyCheckInBatch={handleCheckInBatch} colors={colors} t={t} lang={lang} />
         )}
 
         {view === "joblog" && (
