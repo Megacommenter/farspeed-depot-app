@@ -526,10 +526,11 @@ function parsePackingListSheet(rows, legend) {
     groups[key].totalWeight += weight;
     groups[key].totalCbm += cbm;
   }
-  return order.map((k) => ({ ...groups[k], containers: [...groups[k].containers] }));
+  return { groups: order.map((k) => ({ ...groups[k], containers: [...groups[k].containers] })), hasLotColumn: colMap.lot !== undefined };
 }
 function parsePackingListWorkbook(workbook) {
   let bestGroups = null;
+  let bestHasLotColumn = false;
   let client = null;
   let project = "";
   for (const sheetName of workbook.SheetNames) {
@@ -538,10 +539,14 @@ function parsePackingListWorkbook(workbook) {
     if (!client) client = plGuessClient(rows);
     if (!project) project = plGuessProject(rows);
     const { legend } = plGuessMarksBlock(rows);
-    const groups = parsePackingListSheet(rows, legend);
-    if (groups && groups.length > 0) {
-      if (!bestGroups || groups.length > bestGroups.length) bestGroups = groups;
-    }
+    const result = parsePackingListSheet(rows, legend);
+    if (!result || !result.groups || result.groups.length === 0) continue;
+    const { groups, hasLotColumn } = result;
+    // A sheet that actually identifies lift/lot numbers is preferred over one that had to
+    // lump everything into a single UNSPECIFIED group, even if the latter has more raw
+    // rows (that's often a material/component breakdown sheet, not the case-level one).
+    const better = !bestGroups || (hasLotColumn && !bestHasLotColumn) || (hasLotColumn === bestHasLotColumn && groups.length > bestGroups.length);
+    if (better) { bestGroups = groups; bestHasLotColumn = hasLotColumn; }
   }
   return { groups: bestGroups, client, project };
 }
@@ -5468,7 +5473,14 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                   <tbody>
                     {plPreview.map((g, idx) => (
                       <tr key={idx} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
-                        <td className="px-3 py-2 font-semibold">{g.lot}</td>
+                        <td className="px-3 py-2">
+                          <input
+                            className={inputClass}
+                            style={{ ...inputStyleFor(colors), minWidth: 100, fontWeight: 600 }}
+                            value={g.lot}
+                            onChange={(e) => setPlPreview((prev) => prev.map((grp, i) => (i === idx ? { ...grp, lot: e.target.value } : grp)))}
+                          />
+                        </td>
                         <td className="px-3 py-2">{g.packages.length}</td>
                         <td className="px-3 py-2 text-xs" style={{ color: colors.inkFaint }}>{g.containers.join(", ") || "—"}</td>
                         <td className="px-3 py-2">{Math.round(g.totalWeight)}</td>
