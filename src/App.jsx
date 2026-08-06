@@ -329,6 +329,7 @@ const PL_HEADER_ALIASES = {
   caseNo: ["case no.", "case no", "case\nno", "case", "cases discript", "cases     discript"],
   qty: ["qty", "quantity", "qyt = quantity", "qyt"],
   lot: ["project no.", "project no", "lift name", "lift no.", "lift no", "lift", "sap no.", "sap no", "sap"],
+  orderNo: ["omc sales order no.", "omc sales order no", "sales order no.", "sales order no", "order no."],
   description: ["description", "material description"],
   grossWeight: ["g.weight", "gross weight", "gross", "actual   weight", "actual weight", "g.w./kg", "g.w.", "g.w"],
   netWeight: ["n.weight", "net weight", "net", "estimated  weight", "estimated weight", "n.w./kg", "n.w.", "n.w"],
@@ -490,7 +491,7 @@ function parsePackingListSheet(rows, legend) {
 
   const groups = {};
   const order = [];
-  let lastLot = "", lastContainer = "", lastCase = "";
+  let lastLot = "", lastContainer = "", lastCase = "", lastOrderNo = "";
   for (let i = headerIdx + 1; i < rows.length; i++) {
     const row = rows[i] || [];
     if (row.every((c) => String(c || "").trim() === "")) continue;
@@ -500,6 +501,7 @@ function parsePackingListSheet(rows, legend) {
     const lot = colMap.lot !== undefined ? String(row[colMap.lot] || "").trim() : "";
     const container = colMap.containerNo !== undefined ? String(row[colMap.containerNo] || "").trim() : "";
     const caseNo = colMap.caseNo !== undefined ? String(row[colMap.caseNo] || "").trim() : "";
+    const orderNo = colMap.orderNo !== undefined ? String(row[colMap.orderNo] || "").trim() : "";
     const description = colMap.description !== undefined ? String(row[colMap.description] || "").trim() : "";
     const grossVal = colMap.grossWeight !== undefined && row[colMap.grossWeight] !== "" && row[colMap.grossWeight] != null ? plNum(row[colMap.grossWeight]) : null;
     const netVal = colMap.netWeight !== undefined && row[colMap.netWeight] !== "" && row[colMap.netWeight] != null ? plNum(row[colMap.netWeight]) : null;
@@ -517,14 +519,30 @@ function parsePackingListSheet(rows, legend) {
     if (lot) lastLot = lot;
     if (container) lastContainer = container;
     if (caseNo) lastCase = caseNo;
+    if (orderNo) lastOrderNo = orderNo;
     if (!description) continue;
 
     const key = translateLot(lastLot) || "UNSPECIFIED";
     if (!groups[key]) { groups[key] = { lot: key, packages: [], containers: new Set(), totalWeight: 0, totalCbm: 0 }; order.push(key); }
-    groups[key].packages.push({ code: lastCase || String(groups[key].packages.length + 1), description, weightKg: weight ? String(weight) : "", cbm: cbm ? String(cbm) : "" });
+    groups[key].packages.push({ code: lastCase || String(groups[key].packages.length + 1), orderNo: lastOrderNo, description, weightKg: weight ? String(weight) : "", cbm: cbm ? String(cbm) : "" });
     if (lastContainer) groups[key].containers.add(lastContainer);
     groups[key].totalWeight += weight;
     groups[key].totalCbm += cbm;
+  }
+  // A single lot can combine multiple separate order numbers, each restarting its own case
+  // numbering (e.g. two different orders both having a case "1/1") - disambiguate any case
+  // code that collides within the same lot so every package has a genuinely unique code.
+  for (const key of order) {
+    const pkgs = groups[key].packages;
+    const counts = {};
+    pkgs.forEach((p) => { counts[p.code] = (counts[p.code] || 0) + 1; });
+    const seen = {};
+    for (const p of pkgs) {
+      if (counts[p.code] > 1 && p.orderNo) {
+        seen[p.code] = (seen[p.code] || 0) + 1;
+        p.code = `${p.orderNo}/${p.code}`;
+      }
+    }
   }
   return { groups: order.map((k) => ({ ...groups[k], containers: [...groups[k].containers] })), hasLotColumn: colMap.lot !== undefined };
 }
@@ -3890,6 +3908,18 @@ function sitesLooselyMatch(enA, zhA, enB, zhB) {
   if (aZh && bZh && (aZh.includes(bZh) || bZh.includes(aZh))) return true;
   return false;
 }
+function groupPackagesByOrder(pkgs) {
+  const hasAnyOrderNo = pkgs.some((p) => p.orderNo);
+  if (!hasAnyOrderNo) return [{ orderNo: "", packages: pkgs }];
+  const order = [];
+  const groups = {};
+  for (const p of pkgs) {
+    const key = p.orderNo || "";
+    if (!groups[key]) { groups[key] = []; order.push(key); }
+    groups[key].push(p);
+  }
+  return order.map((k) => ({ orderNo: k, packages: groups[k] }));
+}
 function LegacyUploadRow({ row, onChange, onRemove, incoming, items, colors, t, lang }) {
   const inputStyle = inputStyleFor(colors);
   const set = (k) => (e) => onChange({ ...row, [k]: e.target.value });
@@ -3996,6 +4026,9 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, colors, t, 
                 <Field label={t.fReference} hint={t.fReferenceHint} colors={colors}>
                   <input className={inputClass} style={inputStyle} value={row.shkNumber} onChange={set("shkNumber")} />
                 </Field>
+                <Field label={t.fJobRef} hint={t.fJobRefHint} colors={colors}>
+                  <input className={inputClass} style={inputStyle} value={row.jobRef} onChange={set("jobRef")} />
+                </Field>
                 <div className="col-span-2 md:col-span-3">
                   <Field label={t.fSsDoNo} colors={colors}>
                     <input className={inputClass} style={inputStyle} value={row.ssDoNo} onChange={set("ssDoNo")} placeholder={'ex ss."SHIP" V.___; CONTAINERS NO. ___'} />
@@ -4041,22 +4074,33 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, colors, t, 
                     </div>
                     <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => selectAllIncoming(inc.id, remainingPkgs)}>{t.selectAllBtn}</button>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {remainingPkgs.map((p) => (
-                      <button
-                        key={p.code}
-                        type="button"
-                        onClick={() => toggleIncomingCode(inc.id, p.code)}
-                        className="px-2.5 py-1.5 rounded text-xs font-semibold text-left"
-                        style={{
-                          border: `1px solid ${selectedCodes.includes(p.code) ? colors.amber : colors.line}`,
-                          background: selectedCodes.includes(p.code) ? colors.amberSoft : colors.surface,
-                          color: selectedCodes.includes(p.code) ? colors.amberText : colors.ink,
-                        }}
-                        title={p.description}
-                      >
-                        {p.code}{p.description ? ` \u2014 ${p.description}` : ""}
-                      </button>
+                  <div className="flex flex-col gap-3">
+                    {groupPackagesByOrder(remainingPkgs).map((grp) => (
+                      <div key={grp.orderNo || "_"}>
+                        {grp.orderNo && (
+                          <div className="text-xs font-semibold mb-1.5" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
+                            {grp.orderNo}{inc.unitCode ? ` / ${inc.unitCode}` : ""}
+                          </div>
+                        )}
+                        <div className="flex flex-wrap gap-2">
+                          {grp.packages.map((p) => (
+                            <button
+                              key={p.code}
+                              type="button"
+                              onClick={() => toggleIncomingCode(inc.id, p.code)}
+                              className="px-2.5 py-1.5 rounded text-xs font-semibold text-left"
+                              style={{
+                                border: `1px solid ${selectedCodes.includes(p.code) ? colors.amber : colors.line}`,
+                                background: selectedCodes.includes(p.code) ? colors.amberSoft : colors.surface,
+                                color: selectedCodes.includes(p.code) ? colors.amberText : colors.ink,
+                              }}
+                              title={p.description}
+                            >
+                              {p.code}{p.description ? ` \u2014 ${p.description}` : ""}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -4261,22 +4305,33 @@ function IncomingPanel({ incoming, setIncoming, items, directory, onCheckIn, col
                           <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{t.incomingSelectCasesLabel}</div>
                           <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => selectAll(inc)}>{t.selectAllBtn}</button>
                         </div>
-                        <div className="flex flex-wrap gap-2">
-                          {remaining.map((p) => (
-                            <button
-                              key={p.code}
-                              type="button"
-                              onClick={() => toggleCode(inc.id, p.code)}
-                              className="px-2.5 py-1.5 rounded text-xs font-semibold text-left"
-                              style={{
-                                border: `1px solid ${sel.includes(p.code) ? colors.amber : colors.line}`,
-                                background: sel.includes(p.code) ? colors.amberSoft : colors.surface,
-                                color: sel.includes(p.code) ? colors.amberText : colors.ink,
-                              }}
-                              title={p.description}
-                            >
-                              {p.code}{p.description ? ` \u2014 ${p.description}` : ""}
-                            </button>
+                        <div className="flex flex-col gap-3">
+                          {groupPackagesByOrder(remaining).map((grp) => (
+                            <div key={grp.orderNo || "_"}>
+                              {grp.orderNo && (
+                                <div className="text-xs font-semibold mb-1.5" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
+                                  {grp.orderNo}{inc.unitCode ? ` / ${inc.unitCode}` : ""}
+                                </div>
+                              )}
+                              <div className="flex flex-wrap gap-2">
+                                {grp.packages.map((p) => (
+                                  <button
+                                    key={p.code}
+                                    type="button"
+                                    onClick={() => toggleCode(inc.id, p.code)}
+                                    className="px-2.5 py-1.5 rounded text-xs font-semibold text-left"
+                                    style={{
+                                      border: `1px solid ${sel.includes(p.code) ? colors.amber : colors.line}`,
+                                      background: sel.includes(p.code) ? colors.amberSoft : colors.surface,
+                                      color: sel.includes(p.code) ? colors.amberText : colors.ink,
+                                    }}
+                                    title={p.description}
+                                  >
+                                    {p.code}{p.description ? ` \u2014 ${p.description}` : ""}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
                           ))}
                         </div>
                       </div>
@@ -4367,6 +4422,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
         volumeCbm: "",
         ssDoNo: "",
         shkNumber: "",
+        jobRef: "",
         referJobNumber: "",
         referDate: "",
         autoDetected: false,
@@ -4389,6 +4445,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
             weightKg: guessed.weightKg || base.weightKg,
             volumeCbm: guessed.volumeCbm || base.volumeCbm,
             ssDoNo: guessed.ssDoNo || base.ssDoNo,
+            jobRef: guessed.jobRef || base.jobRef,
             referJobNumber: guessed.referJobNumber || base.referJobNumber,
             referDate: guessed.referDate || base.referDate,
             autoDetected: true,
@@ -4472,6 +4529,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
                 date: row.date,
                 ssDoNo: row.ssDoNo,
                 shkNumber: row.shkNumber,
+                jobRef: row.jobRef,
               },
               archiveEntry,
             });
@@ -4487,6 +4545,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
           const patch = {};
           if (!existingByJobNo.ssDoNo && row.ssDoNo) patch.ssDoNo = row.ssDoNo;
           if (!existingByJobNo.shkNumber && row.shkNumber) patch.shkNumber = row.shkNumber;
+          if (!existingByJobNo.jobRef && row.jobRef) patch.jobRef = row.jobRef;
           if (!existingByJobNo.project && row.projectEn) patch.project = row.projectEn;
           if (!existingByJobNo.constructionSite && row.projectZh) patch.constructionSite = row.projectZh;
           if (!existingByJobNo.depotArrivalDate && row.date) patch.depotArrivalDate = row.date;
@@ -4504,6 +4563,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
             project: row.projectEn || (dirMatch ? dirMatch.siteEn : ""),
             constructionSite: row.projectZh || (dirMatch ? dirMatch.siteZh : ""),
             jobNumber: row.jobNumber,
+            jobRef: row.jobRef || "",
             depotArrivalDate: row.date,
             unitCode: row.unitCode,
             packageCount: row.packageCount || "",
@@ -5957,7 +6017,7 @@ export default function FarspeedInventory() {
         const newItem = {
           ...emptyForm(),
           client: inc.client, project: inc.project, constructionSite: inc.constructionSite || "",
-          jobRef: inc.jobRef || "", orderedBy: inc.orderedBy || "", directoryId: inc.directoryId || "",
+          jobRef: op.jobRef || inc.jobRef || "", orderedBy: inc.orderedBy || "", directoryId: inc.directoryId || "",
           itemType: "Separate Items", unitCode: inc.unitCode || "",
           depot: op.depot, depotArrivalDate: op.date, arrivingType: op.type, jobNumber: op.jobNumber,
           ssDoNo: op.type === "Devan" ? (op.ssDoNo || "") : "",
