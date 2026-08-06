@@ -1299,6 +1299,7 @@ const TEXT = {
     legacyReferJobNoLabel: "Refers to Arrival Job No.",
     legacyEnrichedNote: (name) => `Enriched from legacy file: ${name}`,
     legacyMatchedIncoming: (id) => `Matched to Incoming ${id} \u2014 select which of its cases arrived in this file`,
+    legacyMatchedIncomingCount: (n) => `Matched ${n} Incoming shipment${n === 1 ? "" : "s"} at this site \u2014 select which cases from each arrived in this file`,
     legacyArrivalStaysOpenHint: "Stays open at the depot until a matching Delivery file is uploaded (or you record a delivery for it normally).",
     legacyNoReferralHint: "No \"Ref Job no.\" line detected \u2014 enter the arrival's job number manually, or this file will only be archived.",
   },
@@ -1811,6 +1812,7 @@ const TEXT = {
     legacyReferJobNoLabel: "指向到倉工單號",
     legacyEnrichedNote: (name) => `由舊資料檔案補充資料：${name}`,
     legacyMatchedIncoming: (id) => `已配對至待到倉 ${id} \u2014 請選擇此檔案中已到達的件號`,
+    legacyMatchedIncomingCount: (n) => `此地盤配對到 ${n} 項待到倉貨件 \u2014 請分別選擇此檔案中已到達的件號`,
     legacyArrivalStaysOpenHint: "此記錄會保持在倉狀態，直至上載對應的送貨檔案（或日後手動記錄送貨）為止。",
     legacyNoReferralHint: "未有偵測到「Ref Job no.」字句 — 請手動輸入到倉工單號，否則此檔案只會被存檔。",
   },
@@ -3874,21 +3876,23 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, colors, t, lang })
   const set = (k) => (e) => onChange({ ...row, [k]: e.target.value });
   const itemized = JOB_SHEET_ITEMIZED.includes(row.docType);
   const canMatchIncoming = row.docType === "Devan" || row.docType === "CFS";
-  const matchedIncoming = canMatchIncoming && row.client && (row.projectEn || row.projectZh)
-    ? (incoming || []).find((inc) => {
+  const matchedIncomings = canMatchIncoming && row.client && (row.projectEn || row.projectZh)
+    ? (incoming || []).filter((inc) => {
         if (inc.client !== row.client) return false;
         const done = new Set(inc.checkedInCodes || []);
         const remaining = (inc.packages || []).filter((p) => !done.has(p.code));
         if (remaining.length === 0) return false;
         return sitesLooselyMatch(row.projectEn, row.projectZh, inc.project, inc.constructionSite);
       })
-    : null;
-  const selectedCodes = row.selectedIncomingCodes || [];
-  function toggleIncomingCode(code) {
-    onChange({ ...row, selectedIncomingCodes: selectedCodes.includes(code) ? selectedCodes.filter((c) => c !== code) : [...selectedCodes, code] });
+    : [];
+  const selectedByIncoming = row.selectedByIncoming || {};
+  function toggleIncomingCode(incId, code) {
+    const cur = selectedByIncoming[incId] || [];
+    const next = cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code];
+    onChange({ ...row, selectedByIncoming: { ...selectedByIncoming, [incId]: next } });
   }
-  function selectAllIncoming(remainingPkgs) {
-    onChange({ ...row, selectedIncomingCodes: remainingPkgs.map((p) => p.code) });
+  function selectAllIncoming(incId, remainingPkgs) {
+    onChange({ ...row, selectedByIncoming: { ...selectedByIncoming, [incId]: remainingPkgs.map((p) => p.code) } });
   }
   return (
     <div className="rounded p-3 flex flex-col gap-3" style={{ border: `1px solid ${colors.line}`, background: colors.surface }}>
@@ -3927,12 +3931,12 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, colors, t, lang })
         </Field>
         {itemized && (
           <>
-            {matchedIncoming ? null : (
+            {matchedIncomings.length > 0 ? null : (
               <Field label={t.legacyUnitCode} colors={colors}>
                 <input className={inputClass} style={inputStyle} value={row.unitCode} onChange={set("unitCode")} />
               </Field>
             )}
-            {matchedIncoming ? null : (
+            {matchedIncomings.length > 0 ? null : (
               <>
                 <Field label={t.legacyPkgs} colors={colors}>
                   <input type="number" min="0" className={inputClass} style={inputStyle} value={row.packageCount} onChange={set("packageCount")} />
@@ -3960,46 +3964,55 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, colors, t, lang })
           </>
         )}
       </div>
-      {matchedIncoming && (() => {
-        const done = new Set(matchedIncoming.checkedInCodes || []);
-        const remainingPkgs = (matchedIncoming.packages || []).filter((p) => !done.has(p.code));
-        return (
-          <div className="rounded p-3" style={{ background: colors.greenSoft, border: `1px solid ${colors.green}` }}>
-            <div className="text-sm font-semibold mb-2" style={{ color: colors.green }}>
-              {t.legacyMatchedIncoming(matchedIncoming.id)}
-            </div>
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{t.incomingSelectCasesLabel}</div>
-              <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => selectAllIncoming(remainingPkgs)}>{t.selectAllBtn}</button>
-            </div>
-            <div className="mb-3 max-w-xs">
-              <Field label={t.packingListApplyDepot} colors={colors}>
-                <select className={inputClass} style={inputStyle} value={row.depot || DEPOTS[0]} onChange={set("depot")}>
-                  {DEPOTS.map((d) => <option key={d} value={d}>{depotLabel(d, lang)}</option>)}
-                </select>
-              </Field>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {remainingPkgs.map((p) => (
-                <button
-                  key={p.code}
-                  type="button"
-                  onClick={() => toggleIncomingCode(p.code)}
-                  className="px-2.5 py-1.5 rounded text-xs font-semibold text-left"
-                  style={{
-                    border: `1px solid ${selectedCodes.includes(p.code) ? colors.amber : colors.line}`,
-                    background: selectedCodes.includes(p.code) ? colors.amberSoft : colors.surface,
-                    color: selectedCodes.includes(p.code) ? colors.amberText : colors.ink,
-                  }}
-                  title={p.description}
-                >
-                  {p.code}{p.description ? ` \u2014 ${p.description}` : ""}
-                </button>
-              ))}
-            </div>
+      {matchedIncomings.length > 0 && (
+        <div className="rounded p-3" style={{ background: colors.greenSoft, border: `1px solid ${colors.green}` }}>
+          <div className="text-sm font-semibold mb-2" style={{ color: colors.green }}>
+            {t.legacyMatchedIncomingCount(matchedIncomings.length)}
           </div>
-        );
-      })()}
+          <div className="mb-3 max-w-xs">
+            <Field label={t.packingListApplyDepot} colors={colors}>
+              <select className={inputClass} style={inputStyle} value={row.depot || DEPOTS[0]} onChange={set("depot")}>
+                {DEPOTS.map((d) => <option key={d} value={d}>{depotLabel(d, lang)}</option>)}
+              </select>
+            </Field>
+          </div>
+          <div className="flex flex-col gap-4">
+            {matchedIncomings.map((inc) => {
+              const done = new Set(inc.checkedInCodes || []);
+              const remainingPkgs = (inc.packages || []).filter((p) => !done.has(p.code));
+              const selectedCodes = selectedByIncoming[inc.id] || [];
+              return (
+                <div key={inc.id} style={{ borderTop: `1px solid ${colors.green}`, paddingTop: 10 }}>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-xs font-semibold" style={{ color: colors.green, fontFamily: FONT_DISPLAY }}>
+                      {t.legacyMatchedIncoming(inc.id)}{inc.unitCode ? ` \u00b7 ${inc.unitCode}` : ""}
+                    </div>
+                    <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => selectAllIncoming(inc.id, remainingPkgs)}>{t.selectAllBtn}</button>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {remainingPkgs.map((p) => (
+                      <button
+                        key={p.code}
+                        type="button"
+                        onClick={() => toggleIncomingCode(inc.id, p.code)}
+                        className="px-2.5 py-1.5 rounded text-xs font-semibold text-left"
+                        style={{
+                          border: `1px solid ${selectedCodes.includes(p.code) ? colors.amber : colors.line}`,
+                          background: selectedCodes.includes(p.code) ? colors.amberSoft : colors.surface,
+                          color: selectedCodes.includes(p.code) ? colors.amberText : colors.ink,
+                        }}
+                        title={p.description}
+                      >
+                        {p.code}{p.description ? ` \u2014 ${p.description}` : ""}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       {!row.projectEn && !row.projectZh && (
         <div className="px-2 py-1.5 rounded text-xs" style={{ background: colors.redSoft, color: colors.red }}>
           {t.legacySiteRequiredMsg}
@@ -4318,39 +4331,46 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
       const hasSite = !!(row.projectEn || row.projectZh);
       let linkedItemIndex = null;
       let enrichTargetId = null;
-      const matchedIncoming = (row.docType === "Devan" || row.docType === "CFS") && row.client && hasSite
-        ? (incoming || []).find((inc) => {
+      const matchedIncomings = (row.docType === "Devan" || row.docType === "CFS") && row.client && hasSite
+        ? (incoming || []).filter((inc) => {
             if (inc.client !== row.client) return false;
             const done = new Set(inc.checkedInCodes || []);
             if ((inc.packages || []).filter((p) => !done.has(p.code)).length === 0) return false;
             return sitesLooselyMatch(row.projectEn, row.projectZh, inc.project, inc.constructionSite);
           })
-        : null;
+        : [];
+      const selectedByIncoming = row.selectedByIncoming || {};
+      const hasAnyIncomingSelection = matchedIncomings.some((inc) => (selectedByIncoming[inc.id] || []).length > 0);
       const archiveEntry = {
         id, rowIndex: i, fileName: row.file.name, docType: row.docType, client: row.client,
         project: [row.projectEn, row.projectZh].filter(Boolean).join(" / "),
         jobNumber: row.jobNumber, date: row.date, uploadedAt: todayStr(), hasFile: !!fileUri,
-        linkedItemId: null, __linkedItemIndex: null,
+        linkedItemId: null, linkedItemIds: [], __linkedItemIndex: null,
       };
       archiveEntries.push(archiveEntry);
 
       if (row.docType !== "Delivery" && row.client && hasSite) {
-        if (matchedIncoming && (row.selectedIncomingCodes || []).length > 0 && onLegacyCheckInBatch) {
-          // Matched to a real Incoming shipment with cases selected - queue it for a real
-          // check-in (creates or extends the linked inventory item, same as the Incoming
-          // tab), resolved together with any other rows' check-ins after this loop.
-          checkInOps.push({
-            op: {
-              incomingId: matchedIncoming.id,
-              codes: row.selectedIncomingCodes,
-              type: row.docType,
-              depot: row.depot || DEPOTS[0],
-              jobNumber: row.jobNumber,
-              date: row.date,
-              ssDoNo: row.ssDoNo,
-            },
-            archiveEntry,
-          });
+        if (hasAnyIncomingSelection && onLegacyCheckInBatch) {
+          // Matched to one or more real Incoming shipments with cases selected - queue a
+          // check-in for each one (creates or extends its linked inventory item, same as
+          // the Incoming tab), resolved together with every other row's check-ins after
+          // this loop.
+          for (const inc of matchedIncomings) {
+            const codes = selectedByIncoming[inc.id] || [];
+            if (codes.length === 0) continue;
+            checkInOps.push({
+              op: {
+                incomingId: inc.id,
+                codes,
+                type: row.docType,
+                depot: row.depot || DEPOTS[0],
+                jobNumber: row.jobNumber,
+                date: row.date,
+                ssDoNo: row.ssDoNo,
+              },
+              archiveEntry,
+            });
+          }
         } else {
         const jobNoTrim = String(row.jobNumber || "").trim();
         const existingByJobNo = jobNoTrim ? items.find((it) => String(it.jobNumber || "").trim() === jobNoTrim) : null;
@@ -4400,7 +4420,12 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
 
     if (checkInOps.length > 0 && onLegacyCheckInBatch) {
       const results = onLegacyCheckInBatch(checkInOps.map((c) => c.op));
-      results.forEach((itemId, idx) => { checkInOps[idx].archiveEntry.linkedItemId = itemId; });
+      results.forEach((itemId, idx) => {
+        if (!itemId) return;
+        const entry = checkInOps[idx].archiveEntry;
+        if (!entry.linkedItemIds.includes(itemId)) entry.linkedItemIds.push(itemId);
+        entry.linkedItemId = entry.linkedItemIds.join(", ");
+      });
     }
 
     // Pass 2: Delivery = subtract from storage. Link each Delivery row to the arrival it
