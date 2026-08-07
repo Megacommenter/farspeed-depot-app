@@ -1337,6 +1337,7 @@ const TEXT = {
     legacyMatchedItem: (id) => `Delivering from ${id}`,
     legacyArrivalStaysOpenHint: "Stays open at the depot until a matching Delivery file is uploaded (or you record a delivery for it normally).",
     legacyNoReferralHint: "No \"Ref Job no.\" line detected \u2014 enter the arrival's job number manually, or this file will only be archived.",
+    legacyNoArrivalFoundHint: (job) => `No inventory entry found with job number ${job} \u2014 check the number is correct, or upload that Devan/CFS file first. This file will still be archived, but no delivery will be recorded against it.`,
   },
   zh: {
     appSubtitle: "倉庫及貨物存倉表",
@@ -1862,6 +1863,7 @@ const TEXT = {
     legacyMatchedItem: (id) => `送出自 ${id}`,
     legacyArrivalStaysOpenHint: "此記錄會保持在倉狀態，直至上載對應的送貨檔案（或日後手動記錄送貨）為止。",
     legacyNoReferralHint: "未有偵測到「Ref Job no.」字句 — 請手動輸入到倉工單號，否則此檔案只會被存檔。",
+    legacyNoArrivalFoundHint: (job) => `找不到工單號 ${job} 的存倉記錄 \u2014 請檢查號碼是否正確，或先上載該拆櫃/CFS檔案。此檔案仍會被存檔，但不會記錄任何送貨。`,
   },
 };
 
@@ -4192,8 +4194,8 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, colors, t, 
         <div className="text-xs" style={{ color: colors.inkFaint }}>{t.legacyArrivalStaysOpenHint}</div>
       )}
       {row.docType === "Delivery" && matchedItems.length === 0 && (
-        <div className="text-xs" style={{ color: row.referJobNumber ? colors.inkFaint : colors.amberText }}>
-          {row.referJobNumber ? t.legacyReferLine(row.referJobNumber, row.referDate ? fmt(row.referDate) : "?") : t.legacyNoReferralHint}
+        <div className="px-2 py-1.5 rounded text-xs" style={{ background: colors.redSoft, color: colors.red }}>
+          {row.referJobNumber ? t.legacyNoArrivalFoundHint(row.referJobNumber) : t.legacyNoReferralHint}
         </div>
       )}
     </div>
