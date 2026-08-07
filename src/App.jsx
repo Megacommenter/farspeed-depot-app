@@ -868,6 +868,8 @@ const TEXT = {
     titleEdit: "Edit Manifest Entry",
     fClient: "Client",
     fProject: "Project",
+    fProjectEn: "Project / Site (English)",
+    fProjectZh: "Project / Site (Chinese)",
     fProjectPlaceholder: "e.g. MTR Yau Tong Station MOD",
     fInvoiceNo: "Invoice No.",
     fInvoiceHint: "Fill in once invoiced",
@@ -1182,6 +1184,9 @@ const TEXT = {
     navIncoming: "Incoming",
     incomingTitle: "Incoming",
     incomingDesc: "Cases from uploaded packing lists that haven't been checked into the depot yet. Select which cases arrived via Devan or CFS and when \u2014 this creates or updates the real inventory entry.",
+    incomingUploadToggle: "Upload Packing List",
+    incomingUploadShow: "Show",
+    incomingUploadHide: "Hide",
     incomingShowCompleted: "Show fully checked-in shipments",
     incomingNoneMsg: "Nothing incoming right now \u2014 upload a packing list to add cases here.",
     incomingCaseCount: (n) => `${n} case${n === 1 ? "" : "s"} on packing list`,
@@ -1218,6 +1223,10 @@ const TEXT = {
     billingEstimatedNote: "* CBM split estimated from package count share (no per-case CBM available for the delivered/remaining split).",
     billingGrandTotal: "Grand Total",
     billingFootnote: "Ongoing rows are calculated up to today and will keep growing until the goods are marked delivered. Rates are set in Directory → CBM Pricing.",
+    billingDeleteItemBtn: "Delete this entry (admin password required)",
+    adminConfirmTitle: "Confirm Admin Action",
+    adminConfirmDesc: (name) => `Re-enter ${name || "your"}'s password to continue. This permanently deletes the underlying inventory entry, not just this billing row.`,
+    adminConfirmBtn: "Delete Permanently",
     billingModeSearch: "Search",
     billingModeMonthly: "Monthly Summary",
     billingMonthLabel: "Month",
@@ -1384,6 +1393,8 @@ const TEXT = {
     titleEdit: "編輯倉存記錄",
     fClient: "客戶",
     fProject: "項目",
+    fProjectEn: "項目／地盤（英文）",
+    fProjectZh: "項目／地盤（中文）",
     fProjectPlaceholder: "例如：港鐵油塘站現代化工程",
     fInvoiceNo: "發票編號",
     fInvoiceHint: "開發票後填寫",
@@ -1698,6 +1709,9 @@ const TEXT = {
     navIncoming: "待到倉",
     incomingTitle: "待到倉",
     incomingDesc: "已上載裝箱單但尚未辦理到倉手續的貨件。選擇哪些件號經拆櫃或CFS到倉及日期 \u2014 系統會建立或更新相應的存倉記錄。",
+    incomingUploadToggle: "上載裝箱單",
+    incomingUploadShow: "顯示",
+    incomingUploadHide: "收起",
     incomingShowCompleted: "顯示已全部到倉的貨件",
     incomingNoneMsg: "目前沒有待到倉貨件 \u2014 上載裝箱單以新增。",
     incomingCaseCount: (n) => `裝箱單共 ${n} 件`,
@@ -1734,6 +1748,10 @@ const TEXT = {
     billingEstimatedNote: "＊按件數比例估算已送/餘下CBM分配（此記錄沒有逐件CBM資料）。",
     billingGrandTotal: "總計",
     billingFootnote: "計算中的項目按至今日計算，直至貨物標記為已送出才會停止累加。收費可於 目錄 → CBM 收費 設定。",
+    billingDeleteItemBtn: "刪除此記錄（需要管理密碼）",
+    adminConfirmTitle: "確認管理員操作",
+    adminConfirmDesc: (name) => `請重新輸入 ${name || "您"} 的密碼以繼續。此操作會永久刪除相關的存倉記錄，不只是這一行帳單。`,
+    adminConfirmBtn: "永久刪除",
     billingModeSearch: "搜尋",
     billingModeMonthly: "每月總覽",
     billingMonthLabel: "月份",
@@ -2059,26 +2077,18 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, directory, emplo
             {CLIENTS.map((c) => <option key={c}>{c}</option>)}
           </select>
         </Field>
-        <Field label={t.fProject} colors={colors}>
+        <Field label={t.fProjectEn} colors={colors}>
           <input list="itemform-site-suggestions" className={inputClass} style={inputStyle} placeholder={t.fProjectPlaceholder} value={form.project} onChange={set("project")} />
           <datalist id="itemform-site-suggestions">
             {siteSuggestions.map((s) => <option key={s} value={s} />)}
           </datalist>
         </Field>
+        <Field label={t.fProjectZh} colors={colors}>
+          <input className={inputClass} style={inputStyle} value={form.constructionSite} onChange={set("constructionSite")} />
+        </Field>
         <Field label={t.fInvoiceNo} hint={t.fInvoiceHint} colors={colors}>
           <input className={inputClass} style={inputStyle} value={form.invoiceNumber} onChange={set("invoiceNumber")} />
         </Field>
-      </div>
-
-      <div className="text-xs font-semibold uppercase tracking-wider mt-5 mb-2 pb-1" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY, borderBottom: `1px solid ${colors.surfaceDim}` }}>
-        {t.sectionSite}
-      </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-        <div className="col-span-2 md:col-span-3">
-          <Field label={t.fSiteName} hint={t.fSiteHint} colors={colors}>
-            <input className={inputClass} style={inputStyle} placeholder={t.fSitePlaceholder} value={form.constructionSite} onChange={set("constructionSite")} />
-          </Field>
-        </div>
       </div>
 
       <div className="text-xs font-semibold uppercase tracking-wider mt-5 mb-2 pb-1" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY, borderBottom: `1px solid ${colors.surfaceDim}` }}>
@@ -3420,7 +3430,7 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
   );
 }
 
-function BillingPanel({ items, colors, t, lang }) {
+function BillingPanel({ items, onDeleteItem, authUser, colors, t, lang }) {
   const now = new Date();
   const [mode, setMode] = useState("search");
   const [search, setSearch] = useState("");
@@ -3431,6 +3441,7 @@ function BillingPanel({ items, colors, t, lang }) {
   const [summaryYear, setSummaryYear] = useState(now.getFullYear());
   const [summaryMonth, setSummaryMonth] = useState(now.getMonth());
   const [expandedClient, setExpandedClient] = useState(null);
+  const [pendingDeleteItem, setPendingDeleteItem] = useState(null);
 
   const allRows = useMemo(() => {
     const rows = [];
@@ -3613,8 +3624,8 @@ function BillingPanel({ items, colors, t, lang }) {
         <table className="w-full text-sm" style={{ background: colors.surface }}>
           <thead>
             <tr style={{ background: colors.surfaceDim }}>
-              {[t.billingColClient, t.billingColProject, t.billingColJobNo, t.billingColBatchDate, t.billingColCbm, t.billingColRate, t.billingColStatus, t.billingColTotal, ""].map((h) => (
-                <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
+              {[t.billingColClient, t.billingColProject, t.billingColJobNo, t.billingColBatchDate, t.billingColCbm, t.billingColRate, t.billingColStatus, t.billingColTotal, "", ""].map((h, idx) => (
+                <th key={idx} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -3639,10 +3650,22 @@ function BillingPanel({ items, colors, t, lang }) {
                     </td>
                     <td className="px-3 py-2 font-semibold">{money(r.total)}</td>
                     <td className="px-3 py-2 text-right text-xs" style={{ color: colors.amberText }}>{isOpen ? t.billingHideBtn : t.billingShowBtn}</td>
+                    <td className="px-3 py-2 text-right">
+                      <button
+                        type="button"
+                        title={t.billingDeleteItemBtn}
+                        aria-label={t.billingDeleteItemBtn}
+                        className="w-6 h-6 rounded-full inline-flex items-center justify-center font-bold"
+                        style={{ background: colors.redSoft, color: colors.red, lineHeight: 1 }}
+                        onClick={(e) => { e.stopPropagation(); setPendingDeleteItem(r.item); }}
+                      >
+                        &minus;
+                      </button>
+                    </td>
                   </tr>
                   {isOpen && (
                     <tr style={{ background: colors.surfaceDim }}>
-                      <td colSpan={9} className="px-4 py-3">
+                      <td colSpan={10} className="px-4 py-3">
                         <div className="text-xs mb-2" style={{ color: colors.inkFaint }}>
                           {t.billingFreeDaysNote(r.freeDays)}{r.codes && r.codes.length > 0 ? ` · ${t.billingCasesLabel}: ${r.codes.join(", ")}` : ""}
                         </div>
@@ -3671,6 +3694,7 @@ function BillingPanel({ items, colors, t, lang }) {
                 <td colSpan={7} className="px-3 py-2 text-right font-semibold" style={{ color: colors.ink, fontFamily: FONT_DISPLAY }}>{t.billingGrandTotal}</td>
                 <td className="px-3 py-2 font-bold" style={{ color: colors.ink }}>{money(grandTotal)}</td>
                 <td></td>
+                <td></td>
               </tr>
             </tfoot>
           )}
@@ -3678,6 +3702,15 @@ function BillingPanel({ items, colors, t, lang }) {
         </div>
         <div className="text-xs" style={{ color: colors.inkFaint }}>{t.billingFootnote}</div>
       </>
+      )}
+      {pendingDeleteItem && (
+        <AdminConfirmModal
+          authUser={authUser}
+          onConfirm={() => { onDeleteItem(pendingDeleteItem.id); setPendingDeleteItem(null); }}
+          onClose={() => setPendingDeleteItem(null)}
+          colors={colors}
+          t={t}
+        />
       )}
     </div>
   );
@@ -4167,7 +4200,7 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, colors, t, 
   );
 }
 
-function IncomingPanel({ incoming, setIncoming, items, directory, onCheckIn, colors, t, lang }) {
+function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, onCheckIn, onAddIncoming, colors, t, lang }) {
   const [search, setSearch] = useState("");
   const [filterClient, setFilterClient] = useState("All");
   const [showCompleted, setShowCompleted] = useState(false);
@@ -4220,9 +4253,28 @@ function IncomingPanel({ incoming, setIncoming, items, directory, onCheckIn, col
     setSelectedByShipment((prev) => ({ ...prev, [inc.id]: [] }));
     setFormByShipment((prev) => ({ ...prev, [inc.id]: { ...getForm(inc.id), jobNumber: "" } }));
   }
+  const [showUpload, setShowUpload] = useState(false);
 
   return (
     <div className="flex flex-col gap-4">
+      <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+        <button
+          type="button"
+          onClick={() => setShowUpload((s) => !s)}
+          className="w-full flex items-center justify-between px-5 py-4 text-left"
+          style={{ background: colors.surface }}
+        >
+          <span className="text-lg font-bold" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.incomingUploadToggle}</span>
+          <span className="text-sm font-semibold" style={{ color: colors.amberText, fontFamily: FONT_DISPLAY }}>{showUpload ? t.incomingUploadHide : t.incomingUploadShow}</span>
+        </button>
+        {showUpload && (
+          <div className="px-5 pb-5" style={{ background: colors.surface, borderTop: `1px solid ${colors.line}` }}>
+            <div className="pt-4">
+              <ImportPanel onImportRows={() => {}} onAddIncoming={onAddIncoming} existingItems={items} directory={directory} setDirectory={setDirectory} colors={colors} t={t} lang={lang} hideExcelMode />
+            </div>
+          </div>
+        )}
+      </div>
       <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
         <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.incomingTitle}</h3>
         <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.incomingDesc}</p>
@@ -5189,7 +5241,7 @@ function exportToExcel(items) {
   XLSX.writeFile(wb, `farspeed-depot-export-${todayStr()}.xlsx`);
 }
 
-function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, setDirectory, colors, t, lang }) {
+function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, setDirectory, colors, t, lang, hideExcelMode }) {
   const [mode, setMode] = useState("packinglist");
   const [excelPreview, setExcelPreview] = useState(null);
   const [included, setIncluded] = useState([]);
@@ -5407,7 +5459,7 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
   return (
     <div className="flex flex-col gap-4">
       <div className="flex gap-1 rounded-lg p-1 w-fit" style={{ background: colors.surfaceDim }}>
-        {[["packinglist", t.tabPackingList], ["pdf", t.tabPdf], ["excel", t.tabExcel]].map(([k, label]) => (
+        {[["packinglist", t.tabPackingList], ["pdf", t.tabPdf], ...(hideExcelMode ? [] : [["excel", t.tabExcel]])].map(([k, label]) => (
           <button key={k} onClick={() => setMode(k)} className="px-3 py-1.5 rounded text-sm font-semibold"
             style={{ fontFamily: FONT_DISPLAY, background: mode === k ? colors.surface : "transparent", color: colors.ink }}>
             {label}
@@ -5737,6 +5789,59 @@ function LoginScreen({ onLoggedIn, colors, t, lang }) {
         </button>
         <div className="text-xs mt-4 text-center" style={{ color: colors.inkFaint }}>{t.loginDefaultPwHint}</div>
       </form>
+    </div>
+  );
+}
+
+// Simple "admin privilege" gate: re-enter the current user's own password before a
+// destructive action is allowed to proceed. Not a separate admin role for now - just a
+// friction check, per current requirements (may become a real permission later).
+function AdminConfirmModal({ authUser, onConfirm, onClose, colors, t }) {
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const inputStyle = inputStyleFor(colors);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError("");
+    setBusy(true);
+    try {
+      const accts = await ensureUserAccountsSeeded();
+      const acct = accts.find((a) => a.name === authUser);
+      const hash = await hashPassword(password);
+      if (!acct || acct.passwordHash !== hash) {
+        setError(t.loginErrorWrong);
+        setBusy(false);
+        return;
+      }
+      onConfirm();
+    } catch (e2) {
+      setError(t.loginErrorWrong);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-6" style={{ background: "rgba(0,0,0,0.5)" }}>
+      <div className="w-full max-w-sm rounded-lg p-6" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+        <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.adminConfirmTitle}</h3>
+        <p className="text-sm mb-4" style={{ color: colors.inkFaint }}>{t.adminConfirmDesc(authUser)}</p>
+        <form onSubmit={handleSubmit}>
+          <Field label={t.loginPasswordLabel} colors={colors}>
+            <input type="password" autoFocus className={inputClass} style={inputStyle} value={password} onChange={(e) => setPassword(e.target.value)} required />
+          </Field>
+          {error && <div className="mt-3 px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>{error}</div>}
+          <div className="flex gap-2 mt-4">
+            <button type="submit" className="px-4 py-2 rounded text-sm font-semibold" style={{ background: colors.red, color: "#fff", fontFamily: FONT_DISPLAY, opacity: busy ? 0.6 : 1 }} disabled={busy}>
+              {busy ? t.loginBusyMsg : t.adminConfirmBtn}
+            </button>
+            <button type="button" className="px-4 py-2 rounded text-sm font-semibold" style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY }} onClick={onClose}>
+              {t.closeBtn}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
@@ -6401,37 +6506,16 @@ export default function FarspeedInventory() {
               </button>
             ))}
 
-            <div className="relative">
-              <button
-                onClick={() => { setNewEntryMenuOpen((o) => !o); setSettingsOpen(false); }}
-                className="px-3 py-1.5 rounded text-sm font-semibold"
-                style={{ fontFamily: FONT_DISPLAY, background: ["add", "import"].includes(view) ? colors.amber : "transparent", color: ["add", "import"].includes(view) ? colors.ink : colors.onDark }}
-              >
-                {t.navNewEntry} ▾
-              </button>
-              {newEntryMenuOpen && (
-                <div className="absolute left-0 mt-1 rounded-lg overflow-hidden z-20" style={{ background: colors.surface, border: `1px solid ${colors.line}`, minWidth: 140 }}>
-                  <button
-                    className="block w-full text-left px-3 py-2 text-sm font-semibold"
-                    style={{ color: colors.ink, fontFamily: FONT_DISPLAY }}
-                    onClick={() => { setEditing(null); setView("add"); setNewEntryMenuOpen(false); }}
-                  >
-                    {t.newEntryManual}
-                  </button>
-                  <button
-                    className="block w-full text-left px-3 py-2 text-sm font-semibold"
-                    style={{ color: colors.ink, fontFamily: FONT_DISPLAY, borderTop: `1px solid ${colors.surfaceDim}` }}
-                    onClick={() => { setView("import"); setNewEntryMenuOpen(false); }}
-                  >
-                    {t.newEntryImport}
-                  </button>
-                </div>
-              )}
-            </div>
+            <button
+              onClick={() => { setEditing(null); setSettingsOpen(false); setView("add"); }}
+              className="px-3 py-1.5 rounded text-sm font-semibold"
+              style={{ fontFamily: FONT_DISPLAY, background: view === "add" ? colors.amber : "transparent", color: view === "add" ? colors.ink : colors.onDark }}
+            >
+              {t.navNewEntry}
+            </button>
 
             {[
               ["incoming", t.navIncoming],
-              ["exit", t.navDeliveries],
               ["billing", t.navBilling],
               ["directory", t.navDirectory],
               ["joblog", t.navJobLog],
@@ -6504,10 +6588,8 @@ export default function FarspeedInventory() {
           {[
             ["dashboard", t.navDashboard],
             ["inventory", t.navInventory],
-            ["add", t.newEntryManual],
-            ["import", t.newEntryImport],
+            ["add", t.navNewEntry],
             ["incoming", t.navIncoming],
-            ["exit", t.navDeliveries],
             ["billing", t.navBilling],
             ["directory", t.navDirectory],
             ["joblog", t.navJobLog],
@@ -6656,6 +6738,15 @@ export default function FarspeedInventory() {
 
         {view === "inventory" && (
           <div className="flex flex-col gap-4">
+            <div className="flex justify-end">
+              <button
+                onClick={() => { setEditing(null); setExitingItems([]); setDeliveryPickerSelection([]); setView("exit"); }}
+                className="px-4 py-2 rounded text-sm font-semibold"
+                style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}
+              >
+                {t.navDeliveries} &rarr;
+              </button>
+            </div>
             <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}` }}>
               <div
                 className="px-4 py-2 flex items-center justify-between cursor-pointer"
@@ -6996,16 +7087,12 @@ export default function FarspeedInventory() {
           </div>
         )}
 
-        {view === "import" && (
-          <ImportPanel onImportRows={handleImportRows} onAddIncoming={handleAddIncoming} existingItems={items} directory={directory} setDirectory={setDirectory} colors={colors} t={t} lang={lang} />
-        )}
-
         {view === "incoming" && (
-          <IncomingPanel incoming={incoming} setIncoming={setIncoming} items={items} directory={directory} onCheckIn={handleCheckIn} colors={colors} t={t} lang={lang} />
+          <IncomingPanel incoming={incoming} setIncoming={setIncoming} items={items} directory={directory} setDirectory={setDirectory} onCheckIn={handleCheckIn} onAddIncoming={handleAddIncoming} colors={colors} t={t} lang={lang} />
         )}
 
         {view === "billing" && (
-          <BillingPanel items={items} colors={colors} t={t} lang={lang} />
+          <BillingPanel items={items} onDeleteItem={handleDelete} authUser={authUser} colors={colors} t={t} lang={lang} />
         )}
 
         {view === "directory" && (
