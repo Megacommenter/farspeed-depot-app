@@ -1338,6 +1338,10 @@ const TEXT = {
     legacyMatchedIncomingCount: (n) => `Matched ${n} Incoming shipment${n === 1 ? "" : "s"} at this site \u2014 select which cases from each arrived in this file`,
     legacyReferJobNoHint: "Optional \u2014 narrows the match to one specific arrival job number. Leave blank to match by client + site instead (can find several).",
     legacyMatchedItemsCount: (n) => `Matched ${n} inventory ${n === 1 ? "entry" : "entries"} with cases still at the depot \u2014 select which left in this delivery`,
+    legacyTypeSelectPlaceholder: "e.g. 1,3-5,7",
+    legacyTypeSelectBtn: "Add",
+    legacySelectedTotals: (count, kg, cbm) => `Selected: ${count} pkg${count === 1 ? "" : "s"} \u00b7 ${kg} kg \u00b7 ${cbm} cbm`,
+    legacySelectedTotalsGrand: (count, kg, cbm) => `Total selected across all entries: ${count} pkg${count === 1 ? "" : "s"} \u00b7 ${kg} kg \u00b7 ${cbm} cbm`,
     legacyMatchedItem: (id) => `Delivering from ${id}`,
     legacyArrivalStaysOpenHint: "Stays open at the depot until a matching Delivery file is uploaded (or you record a delivery for it normally).",
     legacyNoReferralHint: "No \"Ref Job no.\" line detected \u2014 enter the arrival's job number manually, or this file will only be archived.",
@@ -1868,6 +1872,10 @@ const TEXT = {
     legacyMatchedIncomingCount: (n) => `此地盤配對到 ${n} 項待到倉貨件 \u2014 請分別選擇此檔案中已到達的件號`,
     legacyReferJobNoHint: "可選填 \u2014 填寫後只會配對該工單號的到倉記錄；留空則按客戶＋地盤配對（可能配對多項）。",
     legacyMatchedItemsCount: (n) => `配對到 ${n} 項倉內仍有貨件的存倉記錄 \u2014 請選擇此次送貨送出的件號`,
+    legacyTypeSelectPlaceholder: "例如 1,3-5,7",
+    legacyTypeSelectBtn: "加入",
+    legacySelectedTotals: (count, kg, cbm) => `已選：${count} 件 \u00b7 ${kg} kg \u00b7 ${cbm} cbm`,
+    legacySelectedTotalsGrand: (count, kg, cbm) => `全部已選（合計）：${count} 件 \u00b7 ${kg} kg \u00b7 ${cbm} cbm`,
     legacyMatchedItem: (id) => `送出自 ${id}`,
     legacyArrivalStaysOpenHint: "此記錄會保持在倉狀態，直至上載對應的送貨檔案（或日後手動記錄送貨）為止。",
     legacyNoReferralHint: "未有偵測到「Ref Job no.」字句 — 請手動輸入到倉工單號，否則此檔案只會被存檔。",
@@ -3930,11 +3938,12 @@ function guessFieldsFromWorkbook(wb) {
     }
   }
 
-  const referMatch = flatText.match(/ref(?:er)?\.?\s*(?:to\s+)?job\s*no\.?\s*([A-Za-z0-9\-]+)\s*(?:on\s*([\d\/\.\- ]+\d))?/i);
-  if (referMatch) {
-    out.referJobNumber = referMatch[1].trim();
-    if (referMatch[2]) {
-      const d = new Date(referMatch[2].trim());
+  const referMatches = [...flatText.matchAll(/ref(?:er)?\.?\s*(?:to\s+)?job\s*no\.?\s*([A-Za-z0-9\-]+)\s*(?:on\s*([\d\/\.\- ]+\d))?/gi)];
+  if (referMatches.length) {
+    out.referJobNumber = [...new Set(referMatches.map((m) => m[1].trim()))].join(", ");
+    const firstWithDate = referMatches.find((m) => m[2]);
+    if (firstWithDate) {
+      const d = new Date(firstWithDate[2].trim());
       if (!isNaN(d)) out.referDate = dateToLocalISO(d);
     }
   }
@@ -3987,6 +3996,36 @@ function sitesLooselyMatch(enA, zhA, enB, zhB) {
   if (aZh && bZh && (aZh.includes(bZh) || bZh.includes(aZh))) return true;
   return false;
 }
+// Parses typed case-number input like "1,3-5,7" into a Set of integers, supporting
+// both single numbers and ranges.
+function parseRangeInput(text) {
+  const nums = new Set();
+  for (const part of String(text || "").split(",").map((s) => s.trim()).filter(Boolean)) {
+    const rangeMatch = part.match(/^(\d+)\s*-\s*(\d+)$/);
+    if (rangeMatch) {
+      const a = Number(rangeMatch[1]), b = Number(rangeMatch[2]);
+      for (let n = Math.min(a, b); n <= Math.max(a, b); n++) nums.add(n);
+    } else if (/^\d+$/.test(part)) {
+      nums.add(Number(part));
+    }
+  }
+  return nums;
+}
+// Extracts the leading case number from a code like "26/40" -> 26, so typed numbers can
+// be matched against it regardless of the "/total" suffix.
+function codeLeadingNumber(code) {
+  const m = String(code).match(/^\d+/);
+  return m ? Number(m[0]) : null;
+}
+function sumSelectedPackages(packages, codes) {
+  const set = new Set(codes);
+  const matched = (packages || []).filter((p) => set.has(p.code));
+  return {
+    count: matched.length,
+    weight: matched.reduce((s, p) => s + (Number(p.weightKg) || 0), 0),
+    cbm: matched.reduce((s, p) => s + (Number(p.cbm) || 0), 0),
+  };
+}
 function groupPackagesByOrder(pkgs) {
   const hasAnyOrderNo = pkgs.some((p) => p.orderNo);
   if (!hasAnyOrderNo) return [{ orderNo: "", packages: pkgs }];
@@ -3999,7 +4038,7 @@ function groupPackagesByOrder(pkgs) {
   }
   return order.map((k) => ({ orderNo: k, packages: groups[k] }));
 }
-function LegacyUploadRow({ row, onChange, onRemove, incoming, items, colors, t, lang }) {
+function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAll, processing, processDisabled, colors, t, lang }) {
   const inputStyle = inputStyleFor(colors);
   const set = (k) => (e) => onChange({ ...row, [k]: e.target.value });
   const itemized = JOB_SHEET_ITEMIZED.includes(row.docType);
@@ -4031,8 +4070,8 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, colors, t, 
         if (it.client !== row.client) return false;
         if (!(it.packages || []).length) return false;
         if (remainingPackages(it).length === 0) return false;
-        const refNo = String(row.referJobNumber || "").trim();
-        if (refNo) return String(it.jobNumber || "").trim() === refNo;
+        const refNos = String(row.referJobNumber || "").split(",").map((s) => s.trim()).filter(Boolean);
+        if (refNos.length) return refNos.includes(String(it.jobNumber || "").trim());
         return (row.projectEn || row.projectZh) && sitesLooselyMatch(row.projectEn, row.projectZh, it.project, it.constructionSite);
       })
     : [];
@@ -4044,6 +4083,23 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, colors, t, 
   }
   function selectAllItem(itemId, remainingPkgs) {
     onChange({ ...row, selectedByItem: { ...selectedByItem, [itemId]: remainingPkgs.map((p) => p.code) } });
+  }
+  const [typeSelectText, setTypeSelectText] = useState({});
+  function applyTypeSelectItem(itemId, remainingPkgs) {
+    const nums = parseRangeInput(typeSelectText[itemId]);
+    if (nums.size === 0) return;
+    const matchingCodes = remainingPkgs.filter((p) => nums.has(codeLeadingNumber(p.code))).map((p) => p.code);
+    const cur = selectedByItem[itemId] || [];
+    onChange({ ...row, selectedByItem: { ...selectedByItem, [itemId]: [...new Set([...cur, ...matchingCodes])] } });
+    setTypeSelectText((prev) => ({ ...prev, [itemId]: "" }));
+  }
+  function applyTypeSelectIncoming(incId, remainingPkgs) {
+    const nums = parseRangeInput(typeSelectText[incId]);
+    if (nums.size === 0) return;
+    const matchingCodes = remainingPkgs.filter((p) => nums.has(codeLeadingNumber(p.code))).map((p) => p.code);
+    const cur = selectedByIncoming[incId] || [];
+    onChange({ ...row, selectedByIncoming: { ...selectedByIncoming, [incId]: [...new Set([...cur, ...matchingCodes])] } });
+    setTypeSelectText((prev) => ({ ...prev, [incId]: "" }));
   }
   return (
     <div className="rounded p-3 flex flex-col gap-3" style={{ border: `1px solid ${colors.line}`, background: colors.surface }}>
@@ -4128,6 +4184,17 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, colors, t, 
           </>
         )}
       </div>
+      {onProcessAll && (matchedIncomings.length > 0 || matchedItems.length > 0) && (
+        <button
+          type="button"
+          className="px-4 py-2 rounded text-sm font-semibold w-fit"
+          style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY, opacity: processDisabled ? 0.5 : 1 }}
+          disabled={processDisabled}
+          onClick={onProcessAll}
+        >
+          {processing ? t.legacyProcessingMsg : t.saveBtn}
+        </button>
+      )}
       {matchedIncomings.length > 0 && (
         <div className="rounded p-3" style={{ background: colors.greenSoft, border: `1px solid ${colors.green}` }}>
           <div className="text-sm font-semibold mb-2" style={{ color: colors.green }}>
@@ -4145,14 +4212,31 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, colors, t, 
               const done = new Set(inc.checkedInCodes || []);
               const remainingPkgs = (inc.packages || []).filter((p) => !done.has(p.code));
               const selectedCodes = selectedByIncoming[inc.id] || [];
+              const totals = sumSelectedPackages(inc.packages, selectedCodes);
               return (
                 <div key={inc.id} style={{ borderTop: `1px solid ${colors.green}`, paddingTop: 10 }}>
-                  <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
                     <div className="text-xs font-semibold" style={{ color: colors.green, fontFamily: FONT_DISPLAY }}>
                       {t.legacyMatchedIncoming(inc.id)}{inc.unitCode ? ` \u00b7 ${inc.unitCode}` : ""}
                     </div>
-                    <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => selectAllIncoming(inc.id, remainingPkgs)}>{t.selectAllBtn}</button>
+                    <div className="flex items-center gap-2">
+                      <input
+                        className={inputClass}
+                        style={{ ...inputStyleFor(colors), width: 140, fontSize: 12, padding: "4px 8px" }}
+                        placeholder={t.legacyTypeSelectPlaceholder}
+                        value={typeSelectText[inc.id] || ""}
+                        onChange={(e) => setTypeSelectText((prev) => ({ ...prev, [inc.id]: e.target.value }))}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); applyTypeSelectIncoming(inc.id, remainingPkgs); } }}
+                      />
+                      <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => applyTypeSelectIncoming(inc.id, remainingPkgs)}>{t.legacyTypeSelectBtn}</button>
+                      <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => selectAllIncoming(inc.id, remainingPkgs)}>{t.selectAllBtn}</button>
+                    </div>
                   </div>
+                  {selectedCodes.length > 0 && (
+                    <div className="text-xs mb-2 font-semibold" style={{ color: colors.ink }}>
+                      {t.legacySelectedTotals(totals.count, Math.round(totals.weight * 10) / 10, Math.round(totals.cbm * 1000) / 1000)}
+                    </div>
+                  )}
                   <div className="flex flex-col gap-3">
                     {groupPackagesByOrder(remainingPkgs).map((grp) => (
                       <div key={grp.orderNo || "_"}>
@@ -4193,18 +4277,46 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, colors, t, 
           <div className="text-sm font-semibold mb-2" style={{ color: colors.green }}>
             {t.legacyMatchedItemsCount(matchedItems.length)}
           </div>
+          {(() => {
+            const grand = matchedItems.reduce((acc, it) => {
+              const s = sumSelectedPackages(it.packages, selectedByItem[it.id] || []);
+              return { count: acc.count + s.count, weight: acc.weight + s.weight, cbm: acc.cbm + s.cbm };
+            }, { count: 0, weight: 0, cbm: 0 });
+            return grand.count > 0 ? (
+              <div className="text-xs mb-3 font-semibold px-2 py-1.5 rounded" style={{ color: colors.ink, background: colors.surface, width: "fit-content" }}>
+                {t.legacySelectedTotalsGrand(grand.count, Math.round(grand.weight * 10) / 10, Math.round(grand.cbm * 1000) / 1000)}
+              </div>
+            ) : null;
+          })()}
           <div className="flex flex-col gap-4">
             {matchedItems.map((it) => {
               const remainingPkgs = remainingPackages(it);
               const selectedCodes = selectedByItem[it.id] || [];
+              const totals = sumSelectedPackages(it.packages, selectedCodes);
               return (
                 <div key={it.id} style={{ borderTop: `1px solid ${colors.green}`, paddingTop: 10 }}>
-                  <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
                     <div className="text-xs font-semibold" style={{ color: colors.green, fontFamily: FONT_DISPLAY }}>
                       {t.legacyMatchedItem(it.id)}{it.unitCode ? ` \u00b7 ${it.unitCode}` : ""}{it.jobNumber ? ` \u00b7 ${t.fJobNumber}: ${it.jobNumber}` : ""}
                     </div>
-                    <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => selectAllItem(it.id, remainingPkgs)}>{t.selectAllBtn}</button>
+                    <div className="flex items-center gap-2">
+                      <input
+                        className={inputClass}
+                        style={{ ...inputStyleFor(colors), width: 140, fontSize: 12, padding: "4px 8px" }}
+                        placeholder={t.legacyTypeSelectPlaceholder}
+                        value={typeSelectText[it.id] || ""}
+                        onChange={(e) => setTypeSelectText((prev) => ({ ...prev, [it.id]: e.target.value }))}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); applyTypeSelectItem(it.id, remainingPkgs); } }}
+                      />
+                      <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => applyTypeSelectItem(it.id, remainingPkgs)}>{t.legacyTypeSelectBtn}</button>
+                      <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => selectAllItem(it.id, remainingPkgs)}>{t.selectAllBtn}</button>
+                    </div>
                   </div>
+                  {selectedCodes.length > 0 && (
+                    <div className="text-xs mb-2 font-semibold" style={{ color: colors.ink }}>
+                      {t.legacySelectedTotals(totals.count, Math.round(totals.weight * 10) / 10, Math.round(totals.cbm * 1000) / 1000)}
+                    </div>
+                  )}
                   <div className="flex flex-wrap gap-2">
                     {remainingPkgs.map((p) => (
                       <button
@@ -4705,23 +4817,28 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
         continue;
       }
 
-      const refNo = String(row.referJobNumber || "").trim();
-      if (!refNo) continue;
-      const sameBatchIdx = jobNoToImportIdx.get(refNo);
+      const refNos = String(row.referJobNumber || "").split(",").map((s) => s.trim()).filter(Boolean);
+      if (!refNos.length) continue;
       const deliveryRecord = {
         date: row.date || todayStr(), deliveredTo: row.projectEn || row.projectZh, receivedBy: "",
         jobNumber: row.jobNumber, recordedBy: "", notes: t.legacyImportedNote(row.file.name),
         shkNumber: row.shkNumber || "",
         packageCount: row.packageCount || 1,
       };
-      if (sameBatchIdx != null) {
-        importRows[sameBatchIdx].deliveries = [...(importRows[sameBatchIdx].deliveries || []), { ...deliveryRecord, id: `D${Date.now()}${i}` }];
-        archiveEntry.__linkedItemIndex = sameBatchIdx;
-        sameBatchDeliveryCount++;
-      } else {
+      let anyRefMatched = false;
+      for (const refNo of refNos) {
+        const sameBatchIdx = jobNoToImportIdx.get(refNo);
+        if (sameBatchIdx != null) {
+          importRows[sameBatchIdx].deliveries = [...(importRows[sameBatchIdx].deliveries || []), { ...deliveryRecord, id: `D${Date.now()}${i}` }];
+          archiveEntry.__linkedItemIndex = sameBatchIdx;
+          sameBatchDeliveryCount++;
+          anyRefMatched = true;
+          continue;
+        }
         const existing = items.find((it) => String(it.jobNumber || "").trim() === refNo);
         if (existing) {
           existingDeliveryEntries.push({ itemId: existing.id, delivery: deliveryRecord, archiveEntry });
+          anyRefMatched = true;
         } else {
           archiveEntry.unmatchedReferral = refNo;
         }
@@ -4794,7 +4911,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
       {rows.length > 0 && (
         <div className="flex flex-col gap-3">
           {rows.map((row, idx) => (
-            <LegacyUploadRow key={idx} row={row} onChange={(next) => updateRow(idx, next)} onRemove={() => removeRow(idx)} incoming={incoming} items={items} colors={colors} t={t} lang={lang} />
+            <LegacyUploadRow key={idx} row={row} onChange={(next) => updateRow(idx, next)} onRemove={() => removeRow(idx)} incoming={incoming} items={items} onProcessAll={processAll} processing={processing} processDisabled={processing || rows.some((r) => !r.projectEn && !r.projectZh) || rows.some((r) => !r.client)} colors={colors} t={t} lang={lang} />
           ))}
           {rows.some((r) => !r.client) && (
             <div className="px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>
