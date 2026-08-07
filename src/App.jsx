@@ -84,30 +84,30 @@ function computeStorageCharge(arrivalDateStr, endDateStr, freeDays, ratePerCbmMo
   billStart.setDate(billStart.getDate() + (freeDays || 0));
   const end = toDateOnly(endDateStr || todayStr());
   const breakdown = [];
-  if (end < billStart) return { billStart: billStart.toISOString().slice(0, 10), total: 0, breakdown };
+  if (end < billStart) return { billStart: dateToLocalISO(billStart), total: 0, breakdown };
   const firstMonthEnd = lastDayOfMonth(billStart);
   const daysInFirstMonth = daysInMonthOf(billStart);
   let total = 0;
   if (end <= firstMonthEnd) {
     const daysUsed = Math.round((end - billStart) / 86400000) + 1;
     const amt = ratePerCbmMonth * cbm * (daysUsed / daysInFirstMonth);
-    breakdown.push({ label: `${fmt(billStart.toISOString().slice(0, 10))} \u2013 ${fmt(end.toISOString().slice(0, 10))}`, detail: `pro-rata, ${daysUsed}/${daysInFirstMonth} days`, amount: amt, year: billStart.getFullYear(), month: billStart.getMonth() });
+    breakdown.push({ label: `${fmt(dateToLocalISO(billStart))} \u2013 ${fmt(dateToLocalISO(end))}`, detail: `pro-rata, ${daysUsed}/${daysInFirstMonth} days`, amount: amt, year: billStart.getFullYear(), month: billStart.getMonth() });
     total = amt;
   } else {
     const daysUsed = Math.round((firstMonthEnd - billStart) / 86400000) + 1;
     const amt1 = ratePerCbmMonth * cbm * (daysUsed / daysInFirstMonth);
-    breakdown.push({ label: `${fmt(billStart.toISOString().slice(0, 10))} \u2013 ${fmt(firstMonthEnd.toISOString().slice(0, 10))}`, detail: `pro-rata, ${daysUsed}/${daysInFirstMonth} days`, amount: amt1, year: billStart.getFullYear(), month: billStart.getMonth() });
+    breakdown.push({ label: `${fmt(dateToLocalISO(billStart))} \u2013 ${fmt(dateToLocalISO(firstMonthEnd))}`, detail: `pro-rata, ${daysUsed}/${daysInFirstMonth} days`, amount: amt1, year: billStart.getFullYear(), month: billStart.getMonth() });
     total += amt1;
     const numFullMonths = monthIndexOf(end) - monthIndexOf(billStart);
     for (let i = 1; i <= numFullMonths; i++) {
       const mDate = new Date(billStart.getFullYear(), billStart.getMonth() + i, 1);
       const isLast = i === numFullMonths;
       const label = mDate.toLocaleString("en-US", { month: "short", year: "numeric" });
-      breakdown.push({ label, detail: isLast && end < lastDayOfMonth(mDate) ? `full month \u2014 left ${fmt(end.toISOString().slice(0, 10))}` : "full month", amount: ratePerCbmMonth * cbm, year: mDate.getFullYear(), month: mDate.getMonth() });
+      breakdown.push({ label, detail: isLast && end < lastDayOfMonth(mDate) ? `full month \u2014 left ${fmt(dateToLocalISO(end))}` : "full month", amount: ratePerCbmMonth * cbm, year: mDate.getFullYear(), month: mDate.getMonth() });
       total += ratePerCbmMonth * cbm;
     }
   }
-  return { billStart: billStart.toISOString().slice(0, 10), total: Math.round(total * 100) / 100, breakdown };
+  return { billStart: dateToLocalISO(billStart), total: Math.round(total * 100) / 100, breakdown };
 }
 // Builds one billing row per arrival batch (or per whole item if no split arrivals were
 // used), further split by delivery date where a batch's cases left storage on different
@@ -588,7 +588,7 @@ function findDuplicateGroups(items) {
 }
 
 function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+  return dateToLocalISO(new Date());
 }
 function daysBetween(a, b) {
   if (!a || !b) return null;
@@ -600,7 +600,7 @@ function addDays(dateStr, n) {
   if (!dateStr) return null;
   const d = new Date(dateStr + "T00:00:00");
   d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
+  return dateToLocalISO(d);
 }
 function fmt(dateStr) {
   if (!dateStr) return "—";
@@ -3860,9 +3860,40 @@ function findAddressLines(rows, aliases, maxLines = 8) {
   }
   return { en: "", zh: "" };
 }
+// Converts a Date object to a plain YYYY-MM-DD string using its LOCAL calendar date,
+// not toISOString() (which converts through UTC and silently shifts the date backward
+// by a day for anyone in a timezone ahead of UTC, e.g. Hong Kong).
+function dateToLocalISO(d) {
+  const yr = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, "0");
+  const da = String(d.getDate()).padStart(2, "0");
+  return `${yr}-${mo}-${da}`;
+}
+// Reads the workbook's own Excel "Print Area" setting for a sheet, if one is defined.
+// Farspeed's rule: only rows within the printable A4 area count as actually arriving or
+// leaving - anything beyond that (e.g. extra case groups that overflowed onto a page that
+// was never actually printed/sent) is not part of this job. Returns the last row number
+// covered by the print area (1-indexed, matching Excel), or null if none is set.
+function getPrintAreaLastRow(wb, sheetIndex) {
+  try {
+    const names = wb.Workbook && wb.Workbook.Names;
+    if (!names) return null;
+    for (const n of names) {
+      if (!n || !n.Name || !/print_area/i.test(n.Name)) continue;
+      if (n.Sheet !== undefined && n.Sheet !== null && n.Sheet !== sheetIndex) continue;
+      const ref = String(n.Ref || "");
+      const m = ref.match(/!\$?[A-Za-z]+\$?(\d+)(?::\$?[A-Za-z]+\$?(\d+))?/);
+      if (m) return Math.max(Number(m[1]), Number(m[2] || m[1]));
+    }
+  } catch (e) { /* fall back to using the whole sheet */ }
+  return null;
+}
 function guessFieldsFromWorkbook(wb) {
-  const sheet = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false });
+  const sheetIndex = 0;
+  const sheet = wb.Sheets[wb.SheetNames[sheetIndex]];
+  let rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false });
+  const printAreaLastRow = getPrintAreaLastRow(wb, sheetIndex);
+  if (printAreaLastRow) rows = rows.slice(0, printAreaLastRow);
   const flatText = rows.map((r) => r.join(" ")).join("\n");
 
   const siteBlock = findAddressLines(rows, JOBSHEET_LABEL_ALIASES.to);
@@ -3887,7 +3918,7 @@ function guessFieldsFromWorkbook(wb) {
   const rawDate = findLabelValue(rows, JOBSHEET_LABEL_ALIASES.date);
   if (rawDate) {
     const d = new Date(rawDate);
-    if (!isNaN(d)) out.date = d.toISOString().slice(0, 10);
+    if (!isNaN(d)) out.date = dateToLocalISO(d);
     else {
       const m = rawDate.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
       if (m) {
@@ -3902,7 +3933,7 @@ function guessFieldsFromWorkbook(wb) {
     out.referJobNumber = referMatch[1].trim();
     if (referMatch[2]) {
       const d = new Date(referMatch[2].trim());
-      if (!isNaN(d)) out.referDate = d.toISOString().slice(0, 10);
+      if (!isNaN(d)) out.referDate = dateToLocalISO(d);
     }
   }
 
@@ -3918,11 +3949,16 @@ function guessFieldsFromWorkbook(wb) {
     if (pairMatches.length) out.unitCode = [...new Set(pairMatches.map((m) => m[1]))].join(", ");
   }
 
-  const pkgsMatch = flatText.match(/(\d+)\s*PKGS?/i);
+  // Prefer the explicit "共:" / "Total:" line for aggregate totals - a job sheet with
+  // multiple case groups before the total would otherwise match the FIRST group's
+  // numbers instead of the actual total.
+  const totalLineMatch = flatText.match(/(?:^|\n)[^\n]*(?:共|total)[:\uff1a][^\n]*/i);
+  const totalsText = totalLineMatch ? totalLineMatch[0] : flatText;
+  const pkgsMatch = totalsText.match(/(\d+)\s*PKGS?/i) || flatText.match(/(\d+)\s*PKGS?/i);
   if (pkgsMatch) out.packageCount = pkgsMatch[1];
-  const kgsMatch = flatText.match(/([\d,]+(?:\.\d+)?)\s*KGS?/i);
+  const kgsMatch = totalsText.match(/([\d,]+(?:\.\d+)?)\s*KGS?/i) || flatText.match(/([\d,]+(?:\.\d+)?)\s*KGS?/i);
   if (kgsMatch) out.weightKg = kgsMatch[1].replace(/,/g, "");
-  const cbmMatch = flatText.match(/([\d,]+(?:\.\d+)?)\s*CBM/i);
+  const cbmMatch = totalsText.match(/([\d,]+(?:\.\d+)?)\s*CBM/i) || flatText.match(/([\d,]+(?:\.\d+)?)\s*CBM/i);
   if (cbmMatch) out.volumeCbm = cbmMatch[1].replace(/,/g, "");
 
   const ssShipMatch = flatText.match(/ex\s*ss\.?\s*"[^"]+"[^\n]*/i);
@@ -5385,7 +5421,7 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
         Object.entries(row).forEach(([header, value]) => {
           const key = matchField(header);
           if (!key) { if (String(value).trim() !== "") unmatched.add(header); return; }
-          item[key] = value instanceof Date ? value.toISOString().slice(0, 10) : String(value).trim();
+          item[key] = value instanceof Date ? dateToLocalISO(value) : String(value).trim();
         });
         return item;
       });
