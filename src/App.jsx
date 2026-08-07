@@ -4860,42 +4860,46 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
                 const d = backlogEditDraft;
                 return (
                   <tr key={r.id} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink, background: colors.amberSoft }}>
-                    <td className="px-3 py-2 max-w-[200px] truncate" title={r.fileName}>{r.fileName}</td>
-                    <td className="px-2 py-2">
-                      <select className={inputClass} style={inputStyle} value={d.docType} onChange={(e) => setBacklogEditDraft((p) => ({ ...p, docType: e.target.value }))}>
-                        {LEGACY_DOC_TYPES.map((tp) => <option key={tp}>{tp}</option>)}
-                      </select>
-                    </td>
-                    <td className="px-2 py-2">
-                      <select className={inputClass} style={inputStyle} value={d.client} onChange={(e) => setBacklogEditDraft((p) => ({ ...p, client: e.target.value }))}>
-                        {CLIENTS.map((c) => <option key={c}>{c}</option>)}
-                      </select>
-                    </td>
-                    <td className="px-2 py-2">
-                      <input className={inputClass} style={{ ...inputStyle, minWidth: 140 }} value={d.project} onChange={(e) => setBacklogEditDraft((p) => ({ ...p, project: e.target.value }))} />
-                    </td>
-                    <td className="px-2 py-2">
-                      <input className={inputClass} style={{ ...inputStyle, minWidth: 90 }} value={d.jobNumber} onChange={(e) => setBacklogEditDraft((p) => ({ ...p, jobNumber: e.target.value }))} />
-                    </td>
-                    <td className="px-2 py-2">
-                      <input type="date" className={inputClass} style={{ ...inputStyle, minWidth: 130 }} value={d.date} onChange={(e) => setBacklogEditDraft((p) => ({ ...p, date: e.target.value }))} />
-                    </td>
-                    <td className="px-3 py-2 text-xs" style={{ color: colors.inkFaint }}>{t.legacyEditLinkedHint}</td>
-                    <td className="px-3 py-2 text-right whitespace-nowrap">
-                      <button
-                        className="text-xs font-semibold mr-3"
-                        style={{ color: colors.green }}
-                        onClick={() => {
-                          setLegacyArchive((prev) => prev.map((row) => (row.id === r.id ? { ...row, ...backlogEditDraft } : row)));
-                          setEditingBacklogId(null);
-                          setBacklogEditDraft(null);
-                        }}
-                      >
-                        {t.saveBtn}
-                      </button>
-                      <button className="text-xs font-semibold" style={{ color: colors.inkFaint }} onClick={() => { setEditingBacklogId(null); setBacklogEditDraft(null); }}>
-                        {t.cancelBtn}
-                      </button>
+                    <td colSpan={8} className="px-3 py-3">
+                      <div className="text-xs font-semibold mb-2 truncate" style={{ color: colors.inkFaint }}>{r.fileName}</div>
+                      <div className="flex flex-wrap gap-3">
+                        <Field label={t.legacyDocType} colors={colors}>
+                          <select className={inputClass} style={inputStyle} value={d.docType} onChange={(e) => setBacklogEditDraft((p) => ({ ...p, docType: e.target.value }))}>
+                            {LEGACY_DOC_TYPES.map((tp) => <option key={tp}>{tp}</option>)}
+                          </select>
+                        </Field>
+                        <Field label={t.clientLabel} colors={colors}>
+                          <select className={inputClass} style={inputStyle} value={d.client} onChange={(e) => setBacklogEditDraft((p) => ({ ...p, client: e.target.value }))}>
+                            {CLIENTS.map((c) => <option key={c}>{c}</option>)}
+                          </select>
+                        </Field>
+                        <Field label={t.legacyProjectSite} colors={colors}>
+                          <input className={inputClass} style={inputStyle} value={d.project} onChange={(e) => setBacklogEditDraft((p) => ({ ...p, project: e.target.value }))} />
+                        </Field>
+                        <Field label={t.fJobNumber} colors={colors}>
+                          <input className={inputClass} style={inputStyle} value={d.jobNumber} onChange={(e) => setBacklogEditDraft((p) => ({ ...p, jobNumber: e.target.value }))} />
+                        </Field>
+                        <Field label={t.colDate} colors={colors}>
+                          <input type="date" className={inputClass} style={inputStyle} value={d.date} onChange={(e) => setBacklogEditDraft((p) => ({ ...p, date: e.target.value }))} />
+                        </Field>
+                      </div>
+                      <div className="text-xs mt-2" style={{ color: colors.inkFaint }}>{t.legacyEditLinkedHint}</div>
+                      <div className="mt-3">
+                        <button
+                          className="text-xs font-semibold mr-3"
+                          style={{ color: colors.green }}
+                          onClick={() => {
+                            setLegacyArchive((prev) => prev.map((row) => (row.id === r.id ? { ...row, ...backlogEditDraft } : row)));
+                            setEditingBacklogId(null);
+                            setBacklogEditDraft(null);
+                          }}
+                        >
+                          {t.saveBtn}
+                        </button>
+                        <button className="text-xs font-semibold" style={{ color: colors.inkFaint }} onClick={() => { setEditingBacklogId(null); setBacklogEditDraft(null); }}>
+                          {t.cancelBtn}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
