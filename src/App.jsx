@@ -1017,6 +1017,8 @@ const TEXT = {
     packagesCountSummary: (n) => `${n} itemized package(s)`,
     noPackagesMsg: "No itemized packages yet \u2014 using the plain count above instead.",
 
+    uploadModePackingList: "Packing List (Excel/PDF)",
+    uploadModeLegacy: "Legacy Upload (CFS/Devan/Delivery)",
     tabPackingList: "Packing List Import",
     packingListTitle: "Import a Client Packing List",
     packingListDesc: "Upload a client's packing list as-is (TK Elevator, Schindler, OTIS, etc. all use different layouts \u2014 this reads the columns automatically). Each distinct lift/lot found becomes its own manifest entry with its cases itemized.",
@@ -1181,6 +1183,7 @@ const TEXT = {
 
     navJobLog: "Job Log",
     navBilling: "Billing",
+    navUpload: "Upload",
     navIncoming: "Incoming",
     incomingTitle: "Incoming",
     incomingDesc: "Cases from uploaded packing lists that haven't been checked into the depot yet. Select which cases arrived via Devan or CFS and when \u2014 this creates or updates the real inventory entry.",
@@ -1543,6 +1546,8 @@ const TEXT = {
     packagesCountSummary: (n) => `已列出 ${n} 件`,
     noPackagesMsg: "尚未列出個別件號 — 將使用上方之總件數。",
 
+    uploadModePackingList: "裝箱單（Excel／PDF）",
+    uploadModeLegacy: "舊資料上載（CFS／拆櫃／送貨）",
     tabPackingList: "匯入客戶裝箱單",
     packingListTitle: "匯入客戶裝箱單",
     packingListDesc: "直接上載客戶原本的裝箱單（TK Elevator、Schindler、OTIS 等各自格式不同 — 系統會自動辨識欄位）。文件內每部升降機/每個批次將自動分成獨立記錄，並列出其貨物件號。",
@@ -1707,6 +1712,7 @@ const TEXT = {
 
     navJobLog: "單號記錄",
     navBilling: "帳單",
+    navUpload: "上載",
     navIncoming: "待到倉",
     incomingTitle: "待到倉",
     incomingDesc: "已上載裝箱單但尚未辦理到倉手續的貨件。選擇哪些件號經拆櫃或CFS到倉及日期 \u2014 系統會建立或更新相應的存倉記錄。",
@@ -4255,28 +4261,9 @@ function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, 
     setSelectedByShipment((prev) => ({ ...prev, [inc.id]: [] }));
     setFormByShipment((prev) => ({ ...prev, [inc.id]: { ...getForm(inc.id), jobNumber: "" } }));
   }
-  const [showUpload, setShowUpload] = useState(false);
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
-        <button
-          type="button"
-          onClick={() => setShowUpload((s) => !s)}
-          className="w-full flex items-center justify-between px-5 py-4 text-left"
-          style={{ background: colors.surface }}
-        >
-          <span className="text-lg font-bold" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.incomingUploadToggle}</span>
-          <span className="text-sm font-semibold" style={{ color: colors.amberText, fontFamily: FONT_DISPLAY }}>{showUpload ? t.incomingUploadHide : t.incomingUploadShow}</span>
-        </button>
-        {showUpload && (
-          <div className="px-5 pb-5" style={{ background: colors.surface, borderTop: `1px solid ${colors.line}` }}>
-            <div className="pt-4">
-              <ImportPanel onImportRows={() => {}} onAddIncoming={onAddIncoming} existingItems={items} directory={directory} setDirectory={setDirectory} colors={colors} t={t} lang={lang} hideExcelMode />
-            </div>
-          </div>
-        )}
-      </div>
       <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
         <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.incomingTitle}</h3>
         <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.incomingDesc}</p>
@@ -4922,7 +4909,7 @@ function DirectoryPanel({ directory, setDirectory, employees, setEmployees, free
   return (
     <div className="flex flex-col gap-4">
       <div className="flex gap-1 rounded-lg p-1 w-fit" style={{ background: colors.surfaceDim }}>
-        {[["sites", t.tabSitesAccounts], ["employees", t.tabEmployees], ["freedays", t.tabFreeStorage], ["pricing", t.tabPricing], ["legacy", t.tabLegacy]].map(([k, label]) => (
+        {[["sites", t.tabSitesAccounts], ["employees", t.tabEmployees], ["freedays", t.tabFreeStorage], ["pricing", t.tabPricing]].map(([k, label]) => (
           <button key={k} onClick={() => setMode(k)} className="px-3 py-1.5 rounded text-sm font-semibold"
             style={{ fontFamily: FONT_DISPLAY, background: mode === k ? colors.surface : "transparent", color: colors.ink }}>
             {label}
@@ -5029,10 +5016,6 @@ function DirectoryPanel({ directory, setDirectory, employees, setEmployees, free
             </table>
           </div>
         </div>
-      )}
-
-      {mode === "legacy" && (
-        <LegacyUploadsPanel legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} incoming={incoming} onLegacyCheckIn={onLegacyCheckIn} onLegacyCheckInBatch={onLegacyCheckInBatch} directory={directory} onLegacyImport={onLegacyImport} onLegacyDeliver={onLegacyDeliver} onLegacyEnrich={onLegacyEnrich} colors={colors} t={t} lang={lang} />
       )}
 
       {mode === "sites" && (
@@ -5241,6 +5224,28 @@ function exportToExcel(items) {
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(inventoryRows), "Inventory");
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(deliveryRows.length ? deliveryRows : [{ "Item ID": "", "Delivery Date": "", "Quantity Delivered": "" }]), "Deliveries");
   XLSX.writeFile(wb, `farspeed-depot-export-${todayStr()}.xlsx`);
+}
+
+function UploadPanel({ onImportRows, onAddIncoming, existingItems, directory, setDirectory, legacyArchive, setLegacyArchive, items, incoming, onLegacyImport, onLegacyCheckIn, onLegacyCheckInBatch, onLegacyDeliver, onLegacyEnrich, colors, t, lang }) {
+  const [mode, setMode] = useState("packinglist");
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex gap-1 rounded-lg p-1 w-fit" style={{ background: colors.surfaceDim }}>
+        {[["packinglist", t.uploadModePackingList], ["legacy", t.uploadModeLegacy]].map(([k, label]) => (
+          <button key={k} onClick={() => setMode(k)} className="px-3 py-1.5 rounded text-sm font-semibold"
+            style={{ fontFamily: FONT_DISPLAY, background: mode === k ? colors.surface : "transparent", color: colors.ink }}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {mode === "packinglist" && (
+        <ImportPanel onImportRows={onImportRows} onAddIncoming={onAddIncoming} existingItems={existingItems} directory={directory} setDirectory={setDirectory} colors={colors} t={t} lang={lang} hideExcelMode />
+      )}
+      {mode === "legacy" && (
+        <LegacyUploadsPanel legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} incoming={incoming} onLegacyCheckIn={onLegacyCheckIn} onLegacyCheckInBatch={onLegacyCheckInBatch} directory={directory} onLegacyImport={onLegacyImport} onLegacyDeliver={onLegacyDeliver} onLegacyEnrich={onLegacyEnrich} colors={colors} t={t} lang={lang} />
+      )}
+    </div>
+  );
 }
 
 function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, setDirectory, colors, t, lang, hideExcelMode }) {
@@ -6517,6 +6522,7 @@ export default function FarspeedInventory() {
             </button>
 
             {[
+              ["upload", t.navUpload],
               ["incoming", t.navIncoming],
               ["billing", t.navBilling],
               ["directory", t.navDirectory],
@@ -6591,6 +6597,7 @@ export default function FarspeedInventory() {
             ["dashboard", t.navDashboard],
             ["inventory", t.navInventory],
             ["add", t.navNewEntry],
+            ["upload", t.navUpload],
             ["incoming", t.navIncoming],
             ["billing", t.navBilling],
             ["directory", t.navDirectory],
@@ -7087,6 +7094,19 @@ export default function FarspeedInventory() {
               })
             )}
           </div>
+        )}
+
+        {view === "upload" && (
+          <UploadPanel
+            onImportRows={handleImportRows} onAddIncoming={handleAddIncoming} existingItems={items}
+            directory={directory} setDirectory={setDirectory}
+            legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive}
+            items={items} incoming={incoming}
+            onLegacyImport={handleLegacyImport}
+            onLegacyCheckIn={handleCheckIn} onLegacyCheckInBatch={handleCheckInBatch}
+            onLegacyDeliver={handleAddCombinedDelivery} onLegacyEnrich={handleLegacyEnrich}
+            colors={colors} t={t} lang={lang}
+          />
         )}
 
         {view === "incoming" && (
