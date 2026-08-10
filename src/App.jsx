@@ -326,7 +326,7 @@ function matchField(header) {
 // lift no. like "L8 Batch 1") so each lot becomes its own manifest entry.
 const PL_HEADER_ALIASES = {
   containerNo: ["container no.", "container no", "container"],
-  caseNo: ["case no.", "case no", "case\nno", "case", "cases discript", "cases     discript"],
+  caseNo: ["case no.", "case no", "case\nno", "case", "cases discript", "cases     discript", "pkg#", "pkg #", "pkg no.", "pkg no", "package no."],
   qty: ["qty", "quantity", "qyt = quantity", "qyt"],
   lot: ["project no.", "project no", "lift name", "lift no.", "lift no", "lift", "sap no.", "sap no", "sap"],
   orderNo: ["omc sales order no.", "omc sales order no", "sales order no.", "sales order no", "order no."],
@@ -335,6 +335,7 @@ const PL_HEADER_ALIASES = {
   netWeight: ["n.weight", "net weight", "net", "estimated  weight", "estimated weight", "n.w./kg", "n.w.", "n.w"],
   cbm: ["cbm", "volume(m3)", "volume (m3)", "volume"],
   dimension: ["dimension", "dimension (mm)", "dimensions", "size"],
+  dimensionCm: ["dim(cm)", "dim (cm)", "dimension(cm)", "dimension (cm)", "dimensions(cm)", "dimensions (cm)"],
 };
 const PL_CLIENT_HINTS = [
   ["otis", "OTIS"], ["schindler", "Schindler"], ["kone", "Kone"], ["tk elevator", "TK Elevator"],
@@ -352,11 +353,12 @@ function plNum(v) {
   const n = Number(cleaned);
   return isNaN(n) ? 0 : n;
 }
-function plCbmFromDimension(v) {
-  // Parses strings like "2000*850*600" or "2000 x 850 x 600" (mm) into m3.
+function plCbmFromDimension(v, unit) {
+  // Parses strings like "2000*850*600" (mm) or "140*90*96" (cm) into m3.
   const parts = String(v || "").split(/[x*×]/i).map((s) => Number(s.replace(/,/g, "").trim()));
   if (parts.length !== 3 || parts.some((n) => !n || isNaN(n))) return 0;
-  return (parts[0] * parts[1] * parts[2]) / 1e9;
+  const divisor = unit === "cm" ? 1e6 : 1e9;
+  return (parts[0] * parts[1] * parts[2]) / divisor;
 }
 function plScoreRow(row) {
   let score = 0;
@@ -508,7 +510,8 @@ function parsePackingListSheet(rows, legend) {
     // Use whichever weight is bigger - usually gross, but this doesn't assume it.
     const weight = grossVal != null && netVal != null ? Math.max(grossVal, netVal) : (grossVal != null ? grossVal : (netVal != null ? netVal : 0));
     let cbm = 0;
-    if (colMap.dimension !== undefined && row[colMap.dimension]) cbm = plCbmFromDimension(row[colMap.dimension]);
+    if (colMap.dimensionCm !== undefined && row[colMap.dimensionCm]) cbm = plCbmFromDimension(row[colMap.dimensionCm], "cm");
+    if (!cbm && colMap.dimension !== undefined && row[colMap.dimension]) cbm = plCbmFromDimension(row[colMap.dimension]);
     if (!cbm && colMap.cbm !== undefined && row[colMap.cbm] !== "" && row[colMap.cbm] != null) cbm = plNum(row[colMap.cbm]);
 
     // Many bilingual packing lists have a second header row directly below the first,
@@ -520,7 +523,10 @@ function parsePackingListSheet(rows, legend) {
     if (container) lastContainer = container;
     if (caseNo) lastCase = caseNo;
     if (orderNo) lastOrderNo = orderNo;
-    if (!description) continue;
+    // A description usually signals a real data row, but some packing lists (like ones
+    // that only list PKG#/dimensions/weight) have no description column at all - a case
+    // number paired with real weight or CBM is equally good evidence of a genuine row.
+    if (!description && !(caseNo && (weight || cbm))) continue;
 
     const key = translateLot(lastLot) || "UNSPECIFIED";
     if (!groups[key]) { groups[key] = { lot: key, packages: [], containers: new Set(), totalWeight: 0, totalCbm: 0 }; order.push(key); }
