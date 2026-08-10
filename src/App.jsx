@@ -965,6 +965,9 @@ const TEXT = {
 
     tabExcel: "Excel Upload",
     tabPdf: "PDF Scan",
+    tabManualPackingList: "Manual Entry",
+    manualPackingListDesc: "For older jobs with no packing list file, or one that's incomplete \u2014 type in the case list by hand. This creates one Incoming shipment the same way an uploaded file would, ready to check in via Devan/CFS.",
+    legacyManualEntryNote: "Manually entered \u2014 no packing list file on file for this shipment.",
     excelTitle: "Import from Excel",
     excelDesc: 'Column headers are matched against the depot\'s field names automatically (e.g. "Invoice No.", "Depot Arrival Date"). Unrecognized columns are skipped and listed below.',
     chooseFileBtn: "Choose File (.xlsx, .xls, .csv)",
@@ -1499,6 +1502,9 @@ const TEXT = {
 
     tabExcel: "上載Excel",
     tabPdf: "掃描PDF",
+    tabManualPackingList: "手動輸入",
+    manualPackingListDesc: "適用於較舊、沒有裝箱單檔案或資料不完整的工作 \u2014 直接手動輸入件號清單。此操作會建立一項待到倉貨件，效果與上載檔案相同，可於拆櫃/CFS辦理到倉。",
+    legacyManualEntryNote: "手動輸入 \u2014 此貨件沒有裝箱單檔案存檔。",
     excelTitle: "從Excel匯入",
     excelDesc: "系統會自動將欄位標題與倉存系統之欄位配對（例如「發票編號」、「抵倉日期」）。無法識別之欄位將被略過並於下方列出。",
     chooseFileBtn: "選擇檔案（.xlsx、.xls、.csv）",
@@ -5483,6 +5489,9 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
   const [plCommon, setPlCommon] = useState(null);
   const [pdfStatus, setPdfStatus] = useState("idle"); // idle | scanning
   const [pdfError, setPdfError] = useState("");
+  const [manualForm, setManualForm] = useState({
+    client: CLIENTS[0], project: "", constructionSite: "", orderedBy: "", jobRef: "", shkNumber: "", unitCode: "", directoryId: "", saveToDirectory: false, packages: [],
+  });
   const inputStyle = inputStyleFor(colors);
   const siteSuggestions = useMemo(() => {
     const fromDirectory = (directory || []).map((s) => s.siteEn).filter(Boolean);
@@ -5688,10 +5697,40 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
     setPlCommon(null);
   }
 
+  function addManualToIncoming() {
+    let effectiveDirectoryId = manualForm.directoryId || "";
+    if (manualForm.saveToDirectory && !manualForm.directoryId && manualForm.project) {
+      const newSite = {
+        id: `SITE${Date.now()}`,
+        siteEn: manualForm.project,
+        siteZh: manualForm.constructionSite && manualForm.constructionSite !== manualForm.project ? manualForm.constructionSite : "",
+        client: manualForm.client,
+        jobRef: manualForm.jobRef || "",
+        orderedBy: manualForm.orderedBy || "",
+        accountOfficer: "",
+      };
+      setDirectory((d) => [...d, newSite]);
+      effectiveDirectoryId = newSite.id;
+    }
+    onAddIncoming([{
+      client: manualForm.client,
+      project: manualForm.project,
+      constructionSite: manualForm.constructionSite || "",
+      jobRef: manualForm.jobRef || "",
+      orderedBy: manualForm.orderedBy || "",
+      shkNumber: manualForm.shkNumber || "",
+      directoryId: effectiveDirectoryId,
+      unitCode: manualForm.unitCode || "",
+      packages: manualForm.packages || [],
+      notes: t.legacyManualEntryNote,
+    }]);
+    setManualForm({ client: CLIENTS[0], project: "", constructionSite: "", orderedBy: "", jobRef: "", shkNumber: "", unitCode: "", directoryId: "", saveToDirectory: false, packages: [] });
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex gap-1 rounded-lg p-1 w-fit" style={{ background: colors.surfaceDim }}>
-        {[["packinglist", t.tabPackingList], ["pdf", t.tabPdf], ...(hideExcelMode ? [] : [["excel", t.tabExcel]])].map(([k, label]) => (
+        {[["packinglist", t.tabPackingList], ["pdf", t.tabPdf], ["manual", t.tabManualPackingList], ...(hideExcelMode ? [] : [["excel", t.tabExcel]])].map(([k, label]) => (
           <button key={k} onClick={() => setMode(k)} className="px-3 py-1.5 rounded text-sm font-semibold"
             style={{ fontFamily: FONT_DISPLAY, background: mode === k ? colors.surface : "transparent", color: colors.ink }}>
             {label}
@@ -5862,6 +5901,60 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                 </button>
               </div>
             </div>
+      )}
+
+      {mode === "manual" && (
+        <div className="flex flex-col gap-4">
+          <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+            <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.tabManualPackingList}</h3>
+            <p className="text-sm mb-4" style={{ color: colors.inkFaint }}>{t.manualPackingListDesc}</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+              <Field label={t.packingListApplyClient} colors={colors}>
+                <select className={inputClass} style={inputStyle} value={manualForm.client} onChange={(e) => setManualForm((f) => ({ ...f, client: e.target.value }))}>
+                  {CLIENTS.map((c) => <option key={c}>{c}</option>)}
+                </select>
+              </Field>
+              <Field label={t.legacyProjectSiteEn} colors={colors}>
+                <input list="manual-site-suggestions" className={inputClass} style={inputStyle} value={manualForm.project} onChange={(e) => setManualForm((f) => ({ ...f, project: e.target.value, directoryId: "" }))} />
+                <datalist id="manual-site-suggestions">
+                  {siteSuggestions.map((s) => <option key={s} value={s} />)}
+                </datalist>
+              </Field>
+              <Field label={t.legacyProjectSiteZh} colors={colors}>
+                <input className={inputClass} style={inputStyle} value={manualForm.constructionSite} onChange={(e) => setManualForm((f) => ({ ...f, constructionSite: e.target.value }))} />
+              </Field>
+              <Field label={t.fOrderedBy} colors={colors}>
+                <input className={inputClass} style={inputStyle} value={manualForm.orderedBy} onChange={(e) => setManualForm((f) => ({ ...f, orderedBy: e.target.value }))} />
+              </Field>
+              <Field label={t.fJobRef} hint={t.fJobRefHint} colors={colors}>
+                <input className={inputClass} style={inputStyle} value={manualForm.jobRef} onChange={(e) => setManualForm((f) => ({ ...f, jobRef: e.target.value }))} />
+              </Field>
+              <Field label={t.fReference} hint={t.fReferenceHint} colors={colors}>
+                <input className={inputClass} style={inputStyle} value={manualForm.shkNumber} onChange={(e) => setManualForm((f) => ({ ...f, shkNumber: e.target.value }))} />
+              </Field>
+              <Field label={t.legacyUnitCode} colors={colors}>
+                <input className={inputClass} style={inputStyle} value={manualForm.unitCode} onChange={(e) => setManualForm((f) => ({ ...f, unitCode: e.target.value }))} />
+              </Field>
+            </div>
+            {!manualForm.directoryId && manualForm.project && (
+              <label className="flex items-center gap-2 mt-4 text-sm" style={{ color: colors.inkFaint }}>
+                <input type="checkbox" checked={manualForm.saveToDirectory} onChange={(e) => setManualForm((f) => ({ ...f, saveToDirectory: e.target.checked }))} />
+                {t.saveNewSiteToDirectory(manualForm.project)}
+              </label>
+            )}
+            <PackagesEditor form={manualForm} setForm={setManualForm} colors={colors} t={t} />
+          </div>
+          <div className="flex gap-2">
+            <button
+              className="px-4 py-2 rounded text-sm font-semibold w-fit"
+              style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY, opacity: (!manualForm.client || !(manualForm.project || manualForm.constructionSite) || (manualForm.packages || []).length === 0) ? 0.5 : 1 }}
+              disabled={!manualForm.client || !(manualForm.project || manualForm.constructionSite) || (manualForm.packages || []).length === 0}
+              onClick={addManualToIncoming}
+            >
+              {t.packingListAddToIncomingBtn(1)}
+            </button>
+          </div>
+        </div>
       )}
 
       {mode === "excel" && (
