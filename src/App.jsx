@@ -1018,6 +1018,9 @@ const TEXT = {
     bulkAddLabel: "Quick add (comma or line separated)",
     bulkAddPlaceholder: "e.g. 1A, 2A, 3A, 12A, 13A",
     bulkAddBtn: "Add Codes",
+    packagesGenerateLabel: "How many packages?",
+    packagesGenerateBtn: "Generate Rows",
+    packagesTotalLabel: (n) => `Total: ${n} package${n === 1 ? "" : "s"}`,
     packageCodeCol: "Code",
     packageDescCol: "Description",
     packageWeightCol: "Weight (kg)",
@@ -1555,6 +1558,9 @@ const TEXT = {
     bulkAddLabel: "快速加入（以逗號或換行分隔）",
     bulkAddPlaceholder: "例如：1A, 2A, 3A, 12A, 13A",
     bulkAddBtn: "加入件號",
+    packagesGenerateLabel: "共有幾件？",
+    packagesGenerateBtn: "生成列數",
+    packagesTotalLabel: (n) => `合計：${n} 件`,
     packageCodeCol: "件號",
     packageDescCol: "描述",
     packageWeightCol: "重量（公斤）",
@@ -1971,6 +1977,7 @@ function Field({ label, children, hint, colors }) {
 
 function PackagesEditor({ form, setForm, colors, t }) {
   const [bulkText, setBulkText] = useState("");
+  const [genCount, setGenCount] = useState("");
   const inputStyle = inputStyleFor(colors);
   const packages = form.packages || [];
 
@@ -1981,6 +1988,15 @@ function PackagesEditor({ form, setForm, colors, t }) {
     const additions = codes.filter((c) => !existing.has(c)).map((c) => ({ code: c, description: "", weightKg: "", cbm: "" }));
     setForm((f) => ({ ...f, packages: [...(f.packages || []), ...additions] }));
     setBulkText("");
+  }
+
+  function generateRows() {
+    const n = parseInt(genCount, 10);
+    if (!n || n < 1) return;
+    const startAt = packages.length;
+    const additions = Array.from({ length: n }, (_, i) => ({ code: String(startAt + i + 1), description: "", weightKg: "", cbm: "" }));
+    setForm((f) => ({ ...f, packages: [...(f.packages || []), ...additions] }));
+    setGenCount("");
   }
 
   function updatePackage(idx, key, value) {
@@ -1995,12 +2011,37 @@ function PackagesEditor({ form, setForm, colors, t }) {
     setForm((f) => ({ ...f, packages: (f.packages || []).filter((_, i) => i !== idx) }));
   }
 
+  const totals = packages.reduce((acc, p) => ({
+    weight: acc.weight + (Number(p.weightKg) || 0),
+    cbm: acc.cbm + (Number(p.cbm) || 0),
+  }), { weight: 0, cbm: 0 });
+
   return (
     <div className="mt-2">
       <div className="text-xs font-semibold uppercase tracking-wider mt-5 mb-2 pb-1" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY, borderBottom: `1px solid ${colors.surfaceDim}` }}>
         {t.sectionPackages}
       </div>
       <p className="text-xs mb-3" style={{ color: colors.inkFaint }}>{t.packagesHint}</p>
+
+      <div className="flex flex-col sm:flex-row gap-2 mb-3 items-start sm:items-end">
+        <Field label={t.packagesGenerateLabel} colors={colors}>
+          <input
+            type="number" min="1"
+            className={inputClass}
+            style={{ ...inputStyle, width: 90 }}
+            value={genCount}
+            onChange={(e) => setGenCount(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); generateRows(); } }}
+          />
+        </Field>
+        <button
+          className="px-4 py-2 rounded text-sm font-semibold h-fit"
+          style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}
+          onClick={generateRows}
+        >
+          {t.packagesGenerateBtn}
+        </button>
+      </div>
 
       <div className="flex flex-col md:flex-row gap-2 mb-3">
         <textarea
@@ -2053,6 +2094,16 @@ function PackagesEditor({ form, setForm, colors, t }) {
                 </tr>
               ))}
             </tbody>
+            <tfoot>
+              <tr style={{ borderTop: `2px solid ${colors.line}`, background: colors.surfaceDim }}>
+                <td className="px-2 py-1.5 font-semibold" style={{ color: colors.ink }} colSpan={2}>
+                  {t.packagesTotalLabel(packages.length)}
+                </td>
+                <td className="px-2 py-1.5 font-semibold" style={{ color: colors.ink }}>{Math.round(totals.weight * 100) / 100}</td>
+                <td className="px-2 py-1.5 font-semibold" style={{ color: colors.ink }}>{Math.round(totals.cbm * 1000) / 1000}</td>
+                <td></td>
+              </tr>
+            </tfoot>
           </table>
         </div>
       )}
