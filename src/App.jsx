@@ -3684,6 +3684,8 @@ function BillingPanel({ items, onDeleteItem, authUser, colors, t, lang }) {
   const [summaryMonth, setSummaryMonth] = useState(now.getMonth());
   const [expandedClient, setExpandedClient] = useState(null);
   const [pendingDeleteItem, setPendingDeleteItem] = useState(null);
+  const [expandedHandlingClient, setExpandedHandlingClient] = useState(null);
+  const [expandedHandlingMonth, setExpandedHandlingMonth] = useState(null);
 
   const allRows = useMemo(() => {
     const rows = [];
@@ -3729,27 +3731,52 @@ function BillingPanel({ items, onDeleteItem, authUser, colors, t, lang }) {
 
   const grandTotal = Math.round(filtered.reduce((s, r) => s + r.total, 0) * 100) / 100;
 
+  const [handlingYear, setHandlingYear] = useState(now.getFullYear());
   const handlingRows = useMemo(() => {
     const rows = [];
     for (const item of items) {
       if (!HANDLING_TARIFFS[item.client]) continue;
       const hasArrival = (item.arrivals || []).length > 0 || item.depotArrivalDate;
       const hasDelivery = (item.deliveries || []).length > 0;
+      const arrivalDate = effectiveDepotArrivalDate(item);
       if (hasArrival) {
         const c = computeHandlingCharge(item, "devan");
-        if (c) rows.push({ item, jobType: "devan", ...c });
+        if (c) rows.push({ item, jobType: "devan", date: arrivalDate, ...c });
       }
       if (hasDelivery) {
         const c = computeHandlingCharge(item, "delivery");
-        if (c) rows.push({ item, jobType: "delivery", ...c });
+        if (c) rows.push({ item, jobType: "delivery", date: lastDeliveryDate(item), ...c });
       }
       const haul = computeContainerHaulageCharge(item);
-      if (haul) rows.push({ item, jobType: "haulage", ...haul });
+      if (haul) rows.push({ item, jobType: "haulage", date: arrivalDate, ...haul });
     }
     return rows;
   }, [items]);
   const handlingGrandTotal = Math.round(handlingRows.reduce((s, r) => s + (r.amount || 0), 0) * 100) / 100;
   const handlingNeedsQuoteCount = handlingRows.filter((r) => r.needsQuote).length;
+  const handlingYears = useMemo(() => {
+    const ys = new Set(handlingRows.filter((r) => r.date).map((r) => Number(r.date.slice(0, 4))));
+    ys.add(now.getFullYear());
+    return [...ys].sort((a, b) => b - a);
+  }, [handlingRows]);
+  // Groups this year's rows by client, then by month, with a yearly subtotal per client.
+  const handlingGrouped = useMemo(() => {
+    const byClient = new Map();
+    for (const r of handlingRows) {
+      if (!r.date || Number(r.date.slice(0, 4)) !== handlingYear) continue;
+      if (!byClient.has(r.item.client)) byClient.set(r.item.client, { client: r.item.client, yearTotal: 0, months: new Map() });
+      const g = byClient.get(r.item.client);
+      const monthIdx = Number(r.date.slice(5, 7)) - 1;
+      if (!g.months.has(monthIdx)) g.months.set(monthIdx, { monthIdx, total: 0, rows: [] });
+      const m = g.months.get(monthIdx);
+      m.rows.push(r);
+      if (r.amount) { m.total += r.amount; g.yearTotal += r.amount; }
+    }
+    return [...byClient.values()].map((g) => ({
+      ...g,
+      months: [...g.months.values()].sort((a, b) => b.monthIdx - a.monthIdx),
+    })).sort((a, b) => a.client.localeCompare(b.client));
+  }, [handlingRows, handlingYear]);
   const money = (n) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   return (
@@ -3975,43 +4002,92 @@ function BillingPanel({ items, onDeleteItem, authUser, colors, t, lang }) {
               {t.billingHandlingNeedsQuote(handlingNeedsQuoteCount)}
             </div>
           )}
+          <div className="flex items-end gap-3 mb-3">
+            <Field label={t.billingYearLabel} colors={colors}>
+              <select className={inputClass} style={inputStyleFor(colors)} value={handlingYear} onChange={(e) => { setHandlingYear(Number(e.target.value)); setExpandedHandlingClient(null); setExpandedHandlingMonth(null); }}>
+                {handlingYears.map((y) => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </Field>
+          </div>
           <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}` }}>
             <table className="w-full text-sm" style={{ background: colors.surface }}>
               <thead>
                 <tr style={{ background: colors.surfaceDim }}>
-                  {[t.billingColClient, t.billingColProject, t.billingColJobNo, t.billingHandlingColType, t.billingHandlingColBasis, t.billingHandlingColRate, t.billingColTotal].map((h) => (
+                  {[t.billingColClient, t.billingColTotal, ""].map((h) => (
                     <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {handlingRows.length === 0 && (
-                  <tr><td colSpan={7} className="px-3 py-6 text-center text-sm" style={{ color: colors.inkFaint }}>{t.billingHandlingNoneMsg}</td></tr>
+                {handlingGrouped.length === 0 && (
+                  <tr><td colSpan={3} className="px-3 py-6 text-center text-sm" style={{ color: colors.inkFaint }}>{t.billingHandlingNoneMsg}</td></tr>
                 )}
-                {handlingRows.map((r, idx) => (
-                  <tr key={idx} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
-                    <td className="px-3 py-2">{r.item.client}</td>
-                    <td className="px-3 py-2">{r.item.project || r.item.constructionSite || "—"}</td>
-                    <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{r.item.jobNumber || "—"}</td>
-                    <td className="px-3 py-2">
-                      {r.jobType === "devan" ? t.billingHandlingTypeDevan : r.jobType === "delivery" ? t.billingHandlingTypeDelivery : t.billingHandlingTypeHaulage}
-                      {r.oversizeMult > 1 && <span className="ml-1 text-xs" style={{ color: colors.amberText }}>{t.billingHandlingOversizeTag(r.oversizeMult)}</span>}
-                    </td>
-                    <td className="px-3 py-2 text-xs" style={{ color: colors.inkFaint }}>
-                      {r.jobType === "haulage"
-                        ? t.billingHandlingHaulageBasis(r.containers20, r.containers40)
-                        : `${Math.round((r.rTons || 0) * 1000) / 1000} R/Ton \u00b7 ${r.zone === "lantau" ? t.zoneLantau : t.zoneUrban} \u00b7 ${r.cargoType === "escalator" ? t.cargoTypeEscalator : t.cargoTypeElevator}`}
-                    </td>
-                    <td className="px-3 py-2 text-xs" style={{ color: colors.inkFaint }}>{r.jobType !== "haulage" && r.perRTonRate ? `$${r.perRTonRate}/R.Ton` : "—"}</td>
-                    <td className="px-3 py-2 font-semibold">{r.needsQuote ? <span style={{ color: colors.amberText }}>{t.billingHandlingQuoteBadge}</span> : money(r.amount)}</td>
-                  </tr>
-                ))}
+                {handlingGrouped.map((g) => {
+                  const isClientOpen = expandedHandlingClient === g.client;
+                  return (
+                    <React.Fragment key={g.client}>
+                      <tr style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink, cursor: "pointer" }} onClick={() => { setExpandedHandlingClient(isClientOpen ? null : g.client); setExpandedHandlingMonth(null); }}>
+                        <td className="px-3 py-2 font-semibold">{g.client}</td>
+                        <td className="px-3 py-2 font-semibold">{money(g.yearTotal)}</td>
+                        <td className="px-3 py-2 text-right text-xs" style={{ color: colors.amberText }}>{isClientOpen ? t.billingHideBtn : t.billingShowBtn}</td>
+                      </tr>
+                      {isClientOpen && g.months.map((m) => {
+                        const monthKey = `${g.client}-${m.monthIdx}`;
+                        const isMonthOpen = expandedHandlingMonth === monthKey;
+                        return (
+                          <React.Fragment key={monthKey}>
+                            <tr style={{ background: colors.surfaceDim, cursor: "pointer" }} onClick={() => setExpandedHandlingMonth(isMonthOpen ? null : monthKey)}>
+                              <td className="px-4 py-2 pl-8" style={{ color: colors.ink }}>{monthNames[m.monthIdx]}</td>
+                              <td className="px-4 py-2 font-semibold" style={{ color: colors.ink }}>{money(m.total)}</td>
+                              <td className="px-3 py-2 text-right text-xs" style={{ color: colors.amberText }}>{isMonthOpen ? t.billingHideBtn : t.billingShowBtn}</td>
+                            </tr>
+                            {isMonthOpen && (
+                              <tr>
+                                <td colSpan={3} className="px-4 py-3" style={{ background: colors.surfaceDim }}>
+                                  <table className="w-full text-xs" style={{ color: colors.ink }}>
+                                    <thead>
+                                      <tr>
+                                        {[t.billingColProject, t.billingColJobNo, t.billingHandlingColType, t.billingHandlingColBasis, t.billingHandlingColRate, ""].map((h) => (
+                                          <th key={h} className="text-left pr-4 pb-1 font-semibold" style={{ color: colors.inkFaint }}>{h}</th>
+                                        ))}
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {m.rows.map((r, idx) => (
+                                        <tr key={idx} style={{ borderTop: `1px solid ${colors.line}` }}>
+                                          <td className="pr-4 py-1">{r.item.project || r.item.constructionSite || "—"}</td>
+                                          <td className="pr-4 py-1" style={{ fontFamily: FONT_MONO }}>{r.item.jobNumber || "—"}</td>
+                                          <td className="pr-4 py-1">
+                                            {r.jobType === "devan" ? t.billingHandlingTypeDevan : r.jobType === "delivery" ? t.billingHandlingTypeDelivery : t.billingHandlingTypeHaulage}
+                                            {r.oversizeMult > 1 && <span className="ml-1" style={{ color: colors.amberText }}>{t.billingHandlingOversizeTag(r.oversizeMult)}</span>}
+                                          </td>
+                                          <td className="pr-4 py-1" style={{ color: colors.inkFaint }}>
+                                            {r.jobType === "haulage"
+                                              ? t.billingHandlingHaulageBasis(r.containers20, r.containers40)
+                                              : `${Math.round((r.rTons || 0) * 1000) / 1000} R/Ton \u00b7 ${r.zone === "lantau" ? t.zoneLantau : t.zoneUrban} \u00b7 ${r.cargoType === "escalator" ? t.cargoTypeEscalator : t.cargoTypeElevator}`}
+                                          </td>
+                                          <td className="pr-4 py-1" style={{ color: colors.inkFaint }}>{r.jobType !== "haulage" && r.perRTonRate ? `$${r.perRTonRate}/R.Ton` : "—"}</td>
+                                          <td className="py-1 text-right font-semibold">{r.needsQuote ? <span style={{ color: colors.amberText }}>{t.billingHandlingQuoteBadge}</span> : money(r.amount)}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                    </React.Fragment>
+                  );
+                })}
               </tbody>
-              {handlingRows.length > 0 && (
+              {handlingGrouped.length > 0 && (
                 <tfoot>
                   <tr style={{ borderTop: `2px solid ${colors.line}` }}>
-                    <td colSpan={6} className="px-3 py-2 text-right font-semibold" style={{ color: colors.ink, fontFamily: FONT_DISPLAY }}>{t.billingGrandTotal}</td>
-                    <td className="px-3 py-2 font-bold" style={{ color: colors.ink }}>{money(handlingGrandTotal)}</td>
+                    <td className="px-3 py-2 text-right font-semibold" style={{ color: colors.ink, fontFamily: FONT_DISPLAY }}>{t.billingGrandTotal}</td>
+                    <td className="px-3 py-2 font-bold" style={{ color: colors.ink }}>{money(Math.round(handlingGrouped.reduce((s, g) => s + g.yearTotal, 0) * 100) / 100)}</td>
+                    <td></td>
                   </tr>
                 </tfoot>
               )}
