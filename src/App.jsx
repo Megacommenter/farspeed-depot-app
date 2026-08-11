@@ -115,17 +115,25 @@ function computeStorageCharge(arrivalDateStr, endDateStr, freeDays, ratePerCbmMo
 function computeItemBillingRows(item) {
   const rate = cbmRateFor(item.client);
   if (!rate) return [];
+  const oversizeMultiplier = item.isOversize && item.oversizeCbm ? (oversizeTierFor(item.client, Number(item.oversizeCbm)) || 1) : 1;
+  const effectiveRate = rate * oversizeMultiplier;
   const freeDays = freeDaysFor(item);
   const rows = [];
   if (usesArrivalBatches(item)) {
     const deliveredAt = {};
     activeDeliveries(item).forEach((d) => (d.codes || []).forEach((c) => { deliveredAt[c] = d.date; }));
+    const totalPkgCount = (item.packages || []).length || 1;
+    const hasCbmData = (item.packages || []).some((p) => Number(p.cbm) > 0);
     activeArrivals(item).forEach((batch) => {
       if (!batch.date) return;
       const byEnd = new Map();
       (batch.codes || []).forEach((code) => {
         const pkg = (item.packages || []).find((p) => p.code === code);
-        const cbm = pkg ? Number(pkg.cbm) || 0 : 0;
+        let cbm = pkg ? Number(pkg.cbm) || 0 : 0;
+        // No per-case CBM on file (common for older Devan/CFS sheets that only declare an
+        // oversize total for the whole lot) - split the declared oversize CBM proportionally
+        // across the batch's cases instead of silently billing $0.
+        if (!hasCbmData && item.isOversize && item.oversizeCbm) cbm = Number(item.oversizeCbm) / totalPkgCount;
         const end = deliveredAt[code] || null;
         const key = end || "__ongoing__";
         if (!byEnd.has(key)) byEnd.set(key, { end, cbm: 0, codes: [] });
@@ -135,8 +143,8 @@ function computeItemBillingRows(item) {
       });
       for (const g of byEnd.values()) {
         if (!(g.cbm > 0)) continue;
-        const calc = computeStorageCharge(batch.date, g.end, freeDays, rate, g.cbm);
-        if (calc) rows.push({ item, rate, freeDays, batchDate: batch.date, batchType: batch.type, codes: g.codes, cbm: g.cbm, endDate: g.end, ongoing: !g.end, ...calc });
+        const calc = computeStorageCharge(batch.date, g.end, freeDays, effectiveRate, g.cbm);
+        if (calc) rows.push({ item, rate: effectiveRate, baseRate: rate, oversizeMultiplier, freeDays, batchDate: batch.date, batchType: batch.type, codes: g.codes, cbm: g.cbm, endDate: g.end, ongoing: !g.end, ...calc });
       }
     });
   } else {
@@ -147,8 +155,8 @@ function computeItemBillingRows(item) {
     const status = deriveStatus(item);
     if (status === "delivered") {
       const end = lastDeliveryDate(item);
-      const calc = computeStorageCharge(arrivalDate, end, freeDays, rate, cbmTotal);
-      if (calc) rows.push({ item, rate, freeDays, batchDate: arrivalDate, cbm: cbmTotal, endDate: end, ongoing: false, ...calc });
+      const calc = computeStorageCharge(arrivalDate, end, freeDays, effectiveRate, cbmTotal);
+      if (calc) rows.push({ item, rate: effectiveRate, baseRate: rate, oversizeMultiplier, freeDays, batchDate: arrivalDate, cbm: cbmTotal, endDate: end, ongoing: false, ...calc });
     } else if (status === "partial") {
       const delivered = new Set(deliveredCodes(item));
       const pkgs = item.packages || [];
@@ -166,16 +174,16 @@ function computeItemBillingRows(item) {
       }
       const lastDelEnd = lastDeliveryDate(item);
       if (deliveredCbm > 0) {
-        const c = computeStorageCharge(arrivalDate, lastDelEnd, freeDays, rate, deliveredCbm);
-        if (c) rows.push({ item, rate, freeDays, batchDate: arrivalDate, cbm: deliveredCbm, endDate: lastDelEnd, ongoing: false, estimated: !exact, ...c });
+        const c = computeStorageCharge(arrivalDate, lastDelEnd, freeDays, effectiveRate, deliveredCbm);
+        if (c) rows.push({ item, rate: effectiveRate, baseRate: rate, oversizeMultiplier, freeDays, batchDate: arrivalDate, cbm: deliveredCbm, endDate: lastDelEnd, ongoing: false, estimated: !exact, ...c });
       }
       if (remainingCbm > 0) {
-        const c = computeStorageCharge(arrivalDate, null, freeDays, rate, remainingCbm);
-        if (c) rows.push({ item, rate, freeDays, batchDate: arrivalDate, cbm: remainingCbm, endDate: null, ongoing: true, estimated: !exact, ...c });
+        const c = computeStorageCharge(arrivalDate, null, freeDays, effectiveRate, remainingCbm);
+        if (c) rows.push({ item, rate: effectiveRate, baseRate: rate, oversizeMultiplier, freeDays, batchDate: arrivalDate, cbm: remainingCbm, endDate: null, ongoing: true, estimated: !exact, ...c });
       }
     } else if (status === "at_depot") {
-      const c = computeStorageCharge(arrivalDate, null, freeDays, rate, cbmTotal);
-      if (c) rows.push({ item, rate, freeDays, batchDate: arrivalDate, cbm: cbmTotal, endDate: null, ongoing: true, ...c });
+      const c = computeStorageCharge(arrivalDate, null, freeDays, effectiveRate, cbmTotal);
+      if (c) rows.push({ item, rate: effectiveRate, baseRate: rate, oversizeMultiplier, freeDays, batchDate: arrivalDate, cbm: cbmTotal, endDate: null, ongoing: true, ...c });
     }
   }
   return rows;
@@ -1349,6 +1357,9 @@ const TEXT = {
     legacyMatchedIncoming: (id) => `Matched to Incoming ${id} \u2014 select which of its cases arrived in this file`,
     legacyMatchedIncomingCount: (n) => `Matched ${n} Incoming shipment${n === 1 ? "" : "s"} at this site \u2014 select which cases from each arrived in this file`,
     legacyReferJobNoHint: "Optional \u2014 narrows the match to one specific arrival job number. Leave blank to match by client + site instead (can find several).",
+    legacyOversizeLabel: "Oversize",
+    legacyOversizeCbmPlaceholder: "CBM",
+    legacyOversizeHint: "Bills at the oversize rate for this client, using this CBM as the basis.",
     legacyMatchedItemsCount: (n) => `Matched ${n} inventory ${n === 1 ? "entry" : "entries"} with cases still at the depot \u2014 select which left in this delivery`,
     legacyTypeSelectPlaceholder: "e.g. 1,3-5,7",
     legacyTypeSelectBtn: "Add",
@@ -1889,6 +1900,9 @@ const TEXT = {
     legacyMatchedIncoming: (id) => `已配對至待到倉 ${id} \u2014 請選擇此檔案中已到達的件號`,
     legacyMatchedIncomingCount: (n) => `此地盤配對到 ${n} 項待到倉貨件 \u2014 請分別選擇此檔案中已到達的件號`,
     legacyReferJobNoHint: "可選填 \u2014 填寫後只會配對該工單號的到倉記錄；留空則按客戶＋地盤配對（可能配對多項）。",
+    legacyOversizeLabel: "超大件",
+    legacyOversizeCbmPlaceholder: "CBM",
+    legacyOversizeHint: "將按此客戶的超大件收費標準計算，以此CBM為基礎。",
     legacyMatchedItemsCount: (n) => `配對到 ${n} 項倉內仍有貨件的存倉記錄 \u2014 請選擇此次送貨送出的件號`,
     legacyTypeSelectPlaceholder: "例如 1,3-5,7",
     legacyTypeSelectBtn: "加入",
@@ -4038,6 +4052,17 @@ function guessFieldsFromWorkbook(wb) {
   const ssShipMatch = flatText.match(/ex\s*ss\.?\s*"[^"]+"[^\n]*/i);
   if (ssShipMatch && !out.ssDoNo) out.ssDoNo = ssShipMatch[0].trim();
 
+  // Some Devan/CFS sheets declare oversize lots explicitly, e.g.
+  // "OVERSIZE CASES: L13@4.49CBM, L14@4.49CBM" - these lots have no per-case CBM data of
+  // their own, so this figure is the only CBM basis available for them, and oversize
+  // cargo bills at a higher rate.
+  out.oversizeByLot = {};
+  const oversizeSectionMatch = flatText.match(/oversize\s*cases?[:\uff1a]?\s*([\s\S]{0,400}?)(?:\n\s*\n|$)/i);
+  if (oversizeSectionMatch) {
+    const pairs = [...oversizeSectionMatch[1].matchAll(/([A-Za-z0-9\-]+)\s*@\s*([\d,]+(?:\.\d+)?)\s*CBM/gi)];
+    for (const p of pairs) out.oversizeByLot[p[1].trim()] = p[2].replace(/,/g, "");
+  }
+
   return out;
 }
 
@@ -4123,6 +4148,16 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
   }
   function selectAllIncoming(incId, remainingPkgs) {
     onChange({ ...row, selectedByIncoming: { ...selectedByIncoming, [incId]: remainingPkgs.map((p) => p.code) } });
+  }
+  const oversizeByIncoming = row.oversizeByIncoming || {};
+  function getOversizeFor(inc) {
+    if (oversizeByIncoming[inc.id] !== undefined) return oversizeByIncoming[inc.id];
+    const detectedCbm = (row.oversizeByLot || {})[inc.unitCode];
+    return { checked: !!detectedCbm, cbm: detectedCbm || "" };
+  }
+  function setOversizeFor(inc, patch) {
+    const cur = getOversizeFor(inc);
+    onChange({ ...row, oversizeByIncoming: { ...oversizeByIncoming, [inc.id]: { ...cur, ...patch } } });
   }
 
   // Delivery: match against real inventory items (itemized, with cases still remaining)
@@ -4276,6 +4311,7 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
               const remainingPkgs = (inc.packages || []).filter((p) => !done.has(p.code));
               const selectedCodes = selectedByIncoming[inc.id] || [];
               const totals = sumSelectedPackages(inc.packages, selectedCodes);
+              const oversize = getOversizeFor(inc);
               return (
                 <div key={inc.id} style={{ borderTop: `1px solid ${colors.green}`, paddingTop: 10 }}>
                   <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
@@ -4294,6 +4330,23 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
                       <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => applyTypeSelectIncoming(inc.id, remainingPkgs)}>{t.legacyTypeSelectBtn}</button>
                       <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => selectAllIncoming(inc.id, remainingPkgs)}>{t.selectAllBtn}</button>
                     </div>
+                  </div>
+                  <div className="flex items-center gap-2 mb-2 px-2 py-1.5 rounded" style={{ background: oversize.checked ? colors.amberSoft : "transparent" }}>
+                    <label className="flex items-center gap-1.5 text-xs font-semibold" style={{ color: oversize.checked ? colors.amberText : colors.inkFaint }}>
+                      <input type="checkbox" checked={oversize.checked} onChange={(e) => setOversizeFor(inc, { checked: e.target.checked })} />
+                      {t.legacyOversizeLabel}
+                    </label>
+                    {oversize.checked && (
+                      <input
+                        type="number" min="0" step="0.01"
+                        className={inputClass}
+                        style={{ ...inputStyleFor(colors), width: 90, fontSize: 12, padding: "4px 8px" }}
+                        placeholder={t.legacyOversizeCbmPlaceholder}
+                        value={oversize.cbm}
+                        onChange={(e) => setOversizeFor(inc, { cbm: e.target.value })}
+                      />
+                    )}
+                    {oversize.checked && <span className="text-xs" style={{ color: colors.inkFaint }}>{t.legacyOversizeHint}</span>}
                   </div>
                   {selectedCodes.length > 0 && (
                     <div className="text-xs mb-2 font-semibold" style={{ color: colors.ink }}>
@@ -4679,6 +4732,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
         ssDoNo: "",
         shkNumber: "",
         jobRef: "",
+        oversizeByLot: {},
         referJobNumber: "",
         referDate: "",
         autoDetected: false,
@@ -4702,6 +4756,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
             volumeCbm: guessed.volumeCbm || base.volumeCbm,
             ssDoNo: guessed.ssDoNo || base.ssDoNo,
             jobRef: guessed.jobRef || base.jobRef,
+            oversizeByLot: guessed.oversizeByLot && Object.keys(guessed.oversizeByLot).length ? guessed.oversizeByLot : base.oversizeByLot,
             referJobNumber: guessed.referJobNumber || base.referJobNumber,
             referDate: guessed.referDate || base.referDate,
             autoDetected: true,
@@ -4775,6 +4830,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
           for (const inc of matchedIncomings) {
             const codes = selectedByIncoming[inc.id] || [];
             if (codes.length === 0) continue;
+            const oversize = (row.oversizeByIncoming || {})[inc.id] || { checked: !!(row.oversizeByLot || {})[inc.unitCode], cbm: (row.oversizeByLot || {})[inc.unitCode] || "" };
             checkInOps.push({
               op: {
                 incomingId: inc.id,
@@ -4786,6 +4842,8 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
                 ssDoNo: row.ssDoNo,
                 shkNumber: row.shkNumber,
                 jobRef: row.jobRef,
+                isOversize: !!(oversize.checked && oversize.cbm),
+                oversizeCbm: oversize.checked ? oversize.cbm : "",
               },
               archiveEntry,
             });
@@ -6495,6 +6553,8 @@ export default function FarspeedInventory() {
         counter += 1;
         const totalWeight = inc.packages.reduce((s, p) => s + (Number(p.weightKg) || 0), 0);
         const totalCbm = inc.packages.reduce((s, p) => s + (Number(p.cbm) || 0), 0);
+        const oversizeCbmVal = op.isOversize ? Number(op.oversizeCbm) || 0 : 0;
+        const effectiveCbm = oversizeCbmVal > 0 ? oversizeCbmVal : totalCbm;
         const newItem = {
           ...emptyForm(),
           client: inc.client, project: inc.project, constructionSite: inc.constructionSite || "",
@@ -6504,7 +6564,9 @@ export default function FarspeedInventory() {
           ssDoNo: op.type === "Devan" ? (op.ssDoNo || "") : "",
           shkNumber: op.shkNumber || inc.shkNumber || "",
           weightKg: totalWeight ? String(Math.round(totalWeight * 10) / 10) : "",
-          volumeCbm: totalCbm ? String(Math.round(totalCbm * 1000) / 1000) : "",
+          volumeCbm: effectiveCbm ? String(Math.round(effectiveCbm * 1000) / 1000) : "",
+          isOversize: oversizeCbmVal > 0,
+          oversizeCbm: oversizeCbmVal > 0 ? String(oversizeCbmVal) : "",
           packages: inc.packages, arrivals: [batch], deliveries: [],
           notes: t.incomingCheckedInNote(inc.id), numericId: counter,
           id: `FS-${String(counter).padStart(4, "0")}`, createdAt: todayStr(),
