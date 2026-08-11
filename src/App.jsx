@@ -806,6 +806,8 @@ function emptyForm() {
     ssDoNo: "",
     containers20: "",
     containers40: "",
+    zone: "urban",
+    cargoType: "",
     arrivingType: ARRIVING_TYPES[0],
     terminalArrivalDate: "",
     terminalLFD: "",
@@ -903,6 +905,15 @@ const TEXT = {
     fWeight: "Weight (KG)",
     fVolume: "Volume (CBM)",
     f20: "No. of 20' Containers",
+    fZone: "Zone",
+    fZoneHint: "Affects the Devan/Delivery handling rate for clients with a tariff on file",
+    zoneUrban: "Urban Area",
+    zoneLantau: "Lantau / Tung Chung",
+    fCargoType: "Cargo Type",
+    fCargoTypeHint: "Leave on Auto to detect from the description",
+    cargoTypeAuto: "Auto-detect",
+    cargoTypeElevator: "Elevator",
+    cargoTypeEscalator: "Escalator",
     f40: "No. of 40' Containers",
     sectionArrival: "Arrival & Depot",
     fArrivingType: "Arriving Type",
@@ -1252,6 +1263,20 @@ const TEXT = {
     adminConfirmBtn: "Delete Permanently",
     billingModeSearch: "Search",
     billingModeMonthly: "Monthly Summary",
+    billingModeHandling: "Handling Charges",
+    billingHandlingDesc: "Devan/Delivery handling fees and container haulage, per the client tariff \u2014 separate from storage billing above. Only clients with a tariff on file (Chevalier, Schindler) are shown.",
+    billingHandlingNeedsQuote: (n) => `${n} ${n === 1 ? "job needs" : "jobs need"} a manual quote \u2014 the tariff doesn't give an automatic rate for that zone/cargo combination.`,
+    billingHandlingNoneMsg: "No handling charges yet \u2014 these appear once an item with a tariff-covered client has an arrival or delivery recorded.",
+    billingHandlingColType: "Job",
+    billingHandlingColBasis: "Basis",
+    billingHandlingColRate: "Rate",
+    billingHandlingTypeDevan: "Devan",
+    billingHandlingTypeDelivery: "Delivery",
+    billingHandlingTypeHaulage: "Container Haulage",
+    billingHandlingOversizeTag: (mult) => `oversize \u00d7${mult}`,
+    billingHandlingHaulageBasis: (c20, c40) => [c20 ? `${c20} \u00d7 20'` : "", c40 ? `${c40} \u00d7 40'` : ""].filter(Boolean).join(", "),
+    billingHandlingQuoteBadge: "Quote separately",
+    billingHandlingFootnote: "R/Ton = revenue ton = max(weight in tons, volume in CBM). Rates from the 2018 tariff sheets; zone and cargo type are set per item (edit in Manual Entry). Oversize multiplier reuses the same tiers shown on the printed job sheet.",
     billingMonthLabel: "Month",
     billingYearLabel: "Year",
     billingMonthNoneMsg: "No storage charges fall in this month.",
@@ -1446,6 +1471,15 @@ const TEXT = {
     fWeight: "重量（公斤）",
     fVolume: "體積（立方米）",
     f20: "20呎貨櫃數量",
+    fZone: "地區",
+    fZoneHint: "影響已有收費表客戶的拆櫃/送貨收費",
+    zoneUrban: "市區",
+    zoneLantau: "大嶼山／東涌",
+    fCargoType: "貨物類型",
+    fCargoTypeHint: "留空（自動）將按描述自動判斷",
+    cargoTypeAuto: "自動判斷",
+    cargoTypeElevator: "升降機",
+    cargoTypeEscalator: "電扶梯",
     f40: "40呎貨櫃數量",
     sectionArrival: "抵達及倉存資料",
     fArrivingType: "抵達方式",
@@ -1795,6 +1829,20 @@ const TEXT = {
     adminConfirmBtn: "永久刪除",
     billingModeSearch: "搜尋",
     billingModeMonthly: "每月總覽",
+    billingModeHandling: "拆櫃/送貨收費",
+    billingHandlingDesc: "按客戶收費表計算的拆櫃/送貨服務費及貨櫃拖運費 \u2014 與上方的倉租計算分開。只顯示已有收費表的客戶（其士、迅達）。",
+    billingHandlingNeedsQuote: (n) => `${n} 項工作需要人手報價 \u2014 收費表未有提供該地區／貨物類型組合的自動收費。`,
+    billingHandlingNoneMsg: "暫無拆櫃/送貨收費 \u2014 當已有收費表的客戶之貨品記錄到倉或送貨後，將會顯示於此。",
+    billingHandlingColType: "工作類型",
+    billingHandlingColBasis: "計算基礎",
+    billingHandlingColRate: "費率",
+    billingHandlingTypeDevan: "拆櫃",
+    billingHandlingTypeDelivery: "送貨",
+    billingHandlingTypeHaulage: "貨櫃拖運",
+    billingHandlingOversizeTag: (mult) => `超大件 \u00d7${mult}`,
+    billingHandlingHaulageBasis: (c20, c40) => [c20 ? `${c20} \u00d7 20呎` : "", c40 ? `${c40} \u00d7 40呎` : ""].filter(Boolean).join("，"),
+    billingHandlingQuoteBadge: "另行報價",
+    billingHandlingFootnote: "R/Ton（運費噸）= max(重量噸數, CBM體積)。費率來自2018年收費表；地區及貨物類型於每項記錄設定（於手動輸入編輯）。超大件倍數與工作紙上顯示的相同級別一致。",
     billingMonthLabel: "月份",
     billingYearLabel: "年份",
     billingMonthNoneMsg: "此月份沒有存倉收費。",
@@ -2234,6 +2282,21 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, directory, emplo
         </Field>
         <Field label={t.f40} colors={colors}>
           <input type="number" min="0" className={inputClass} style={inputStyle} value={form.containers40} onChange={set("containers40")} />
+        </Field>
+        <div />
+
+        <Field label={t.fZone} hint={t.fZoneHint} colors={colors}>
+          <select className={inputClass} style={inputStyle} value={form.zone || "urban"} onChange={set("zone")}>
+            <option value="urban">{t.zoneUrban}</option>
+            <option value="lantau">{t.zoneLantau}</option>
+          </select>
+        </Field>
+        <Field label={t.fCargoType} hint={t.fCargoTypeHint} colors={colors}>
+          <select className={inputClass} style={inputStyle} value={form.cargoType || ""} onChange={set("cargoType")}>
+            <option value="">{t.cargoTypeAuto}</option>
+            <option value="elevator">{t.cargoTypeElevator}</option>
+            <option value="escalator">{t.cargoTypeEscalator}</option>
+          </select>
         </Field>
         <div />
       </div>
@@ -2983,18 +3046,102 @@ function SignedDocControl({ docKey, colors, t }) {
 }
 
 
+// Real per-job Devan/Delivery handling tariffs, from the 2018 tariff sheets. This is a
+// SEPARATE charge from the existing $/CBM/month storage billing - it's the cost of
+// physically devanning/delivering the cargo, priced per job by R/Ton (revenue ton =
+// max(weight in tons, volume in CBM)), varying by zone and elevator vs escalator.
+// Only Chevalier and Schindler are populated - other clients keep using storage billing
+// only until their tariffs are provided.
+const HANDLING_TARIFFS = {
+  Chevalier: {
+    devanPerRTon: { urban: { elevator: 97, escalator: 97 }, lantau: { elevator: null, escalator: null } }, // Lantau devan: T.B.A. in tariff
+    deliveryPerRTon: { urban: { elevator: 193, escalator: 193 }, lantau: { elevator: 232, escalator: 232 } },
+    minPerTrip: { urban: 1920, lantau: 2300 },
+    containerHaulage: { "20": 1550, "40": 1750 },
+  },
+  Schindler: {
+    devanPerRTon: { urban: { elevator: 125, escalator: 125 }, lantau: { elevator: 125, escalator: 125 } },
+    deliveryPerRTon: { urban: { elevator: 250, escalator: 250 }, lantau: { elevator: 300, escalator: 300 } },
+    minPerTrip: null, // tariff doesn't give a plain min-per-trip separate from Special Minimum
+    containerHaulage: { "20": 1550, "40": 1750 },
+  },
+};
+function revenueTon(item) {
+  const weightTons = (Number(item.weightKg) || 0) / 1000;
+  const cbm = Number(item.volumeCbm) || (item.packages || []).reduce((s, p) => s + (Number(p.cbm) || 0), 0);
+  return Math.max(weightTons, cbm);
+}
+// Computes the handling charge for one Devan or Delivery job on this item. Returns null
+// if this client has no tariff on file yet. `amount: null` (with a rate table entry
+// present but no number, e.g. Chevalier Lantau devan) means the tariff itself says
+// "T.B.A." - needs a manual quote, not an app-computed price.
+function computeHandlingCharge(item, jobType) {
+  const tariff = HANDLING_TARIFFS[item.client];
+  if (!tariff) return null;
+  const zone = item.zone === "lantau" ? "lantau" : "urban";
+  const cargoType = inferCargoType(item);
+  const rTons = revenueTon(item);
+  const rateTable = jobType === "devan" ? tariff.devanPerRTon : tariff.deliveryPerRTon;
+  const perRTonRate = rateTable && rateTable[zone] ? rateTable[zone][cargoType] : undefined;
+  if (perRTonRate == null) return { amount: null, rTons, zone, cargoType, needsQuote: true };
+  let amount = rTons * perRTonRate;
+  const minTrip = tariff.minPerTrip ? tariff.minPerTrip[zone] : null;
+  if (minTrip && amount < minTrip) amount = minTrip;
+  let oversizeMult = 1;
+  if (item.isOversize && item.oversizeCbm) {
+    oversizeMult = cargoType === "escalator"
+      ? (oversizeLengthTierFor(item.client, Number(item.oversizeCbm)) || 1)
+      : (oversizeTierFor(item.client, Number(item.oversizeCbm)) || 1);
+  }
+  amount *= oversizeMult;
+  return { amount: Math.round(amount * 100) / 100, rTons, zone, cargoType, perRTonRate, minTrip, oversizeMult, needsQuote: false };
+}
+function computeContainerHaulageCharge(item) {
+  const tariff = HANDLING_TARIFFS[item.client];
+  if (!tariff) return null;
+  const c20 = Number(item.containers20) || 0;
+  const c40 = Number(item.containers40) || 0;
+  if (!c20 && !c40) return null;
+  const amount = c20 * tariff.containerHaulage["20"] + c40 * tariff.containerHaulage["40"];
+  return { amount: Math.round(amount * 100) / 100, containers20: c20, containers40: c40 };
+}
+function inferCargoType(item) {
+  if (item.cargoType) return item.cargoType;
+  const text = [item.description, ...(item.packages || []).map((p) => p.description)].join(" ").toLowerCase();
+  if (/escalator/.test(text)) return "escalator";
+  if (/elevator|lift/.test(text)) return "elevator";
+  return "elevator";
+}
+
 const OVERSIZE_RULES = {
+  // Elevator packages, tiered by R/Ton (revenue ton = max(weight in tons, CBM)).
+  // Anything above the highest tier isn't given an auto multiplier in the tariff itself -
+  // it says "price to be advised" / quote separately, so oversizeTierFor returns null
+  // (meaning: needs a manual quote) rather than guessing a rate.
   Schindler: [
     { min: 3.25, max: 5.50, mult: 1.5 },
     { min: 5.501, max: 7.50, mult: 2.0 },
-    { min: 7.501, max: Infinity, mult: 2.5 },
   ],
   Chevalier: [
     { min: 4.0, max: 6.50, mult: 2.0 },
     { min: 6.501, max: 8.00, mult: 2.5 },
-    { min: 8.001, max: Infinity, mult: 3.0 },
   ],
 };
+// Schindler's tariff separately tiers oversize ESCALATOR packages by length (metres),
+// not R/Ton - Chevalier's tariff doesn't give escalator-specific oversize tiers at all.
+const OVERSIZE_LENGTH_RULES = {
+  Schindler: [
+    { min: 7.901, max: 13.5, mult: 2.0 },
+  ],
+};
+function oversizeLengthTierFor(client, meters) {
+  const rules = OVERSIZE_LENGTH_RULES[client];
+  if (!rules || !(meters > 0)) return null;
+  for (const r of rules) {
+    if (meters >= r.min && meters <= r.max) return r.mult;
+  }
+  return null; // above the highest tier (or below it) - not auto-priced, quote separately
+}
 function oversizeTierFor(client, cbm) {
   const rules = OVERSIZE_RULES[client];
   if (!rules || !(cbm > 0)) return null;
@@ -3581,6 +3728,28 @@ function BillingPanel({ items, onDeleteItem, authUser, colors, t, lang }) {
   }, [allRows, search, filterClient, filterProject, filterJobNo]);
 
   const grandTotal = Math.round(filtered.reduce((s, r) => s + r.total, 0) * 100) / 100;
+
+  const handlingRows = useMemo(() => {
+    const rows = [];
+    for (const item of items) {
+      if (!HANDLING_TARIFFS[item.client]) continue;
+      const hasArrival = (item.arrivals || []).length > 0 || item.depotArrivalDate;
+      const hasDelivery = (item.deliveries || []).length > 0;
+      if (hasArrival) {
+        const c = computeHandlingCharge(item, "devan");
+        if (c) rows.push({ item, jobType: "devan", ...c });
+      }
+      if (hasDelivery) {
+        const c = computeHandlingCharge(item, "delivery");
+        if (c) rows.push({ item, jobType: "delivery", ...c });
+      }
+      const haul = computeContainerHaulageCharge(item);
+      if (haul) rows.push({ item, jobType: "haulage", ...haul });
+    }
+    return rows;
+  }, [items]);
+  const handlingGrandTotal = Math.round(handlingRows.reduce((s, r) => s + (r.amount || 0), 0) * 100) / 100;
+  const handlingNeedsQuoteCount = handlingRows.filter((r) => r.needsQuote).length;
   const money = (n) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   return (
@@ -3589,7 +3758,7 @@ function BillingPanel({ items, onDeleteItem, authUser, colors, t, lang }) {
         <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.billingTitle}</h3>
         <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.billingDesc}</p>
         <div className="flex gap-1 rounded-lg p-1 mb-3" style={{ background: colors.surfaceDim, width: "fit-content" }}>
-          {[["search", t.billingModeSearch], ["monthly", t.billingModeMonthly]].map(([k, label]) => (
+          {[["search", t.billingModeSearch], ["monthly", t.billingModeMonthly], ["handling", t.billingModeHandling]].map(([k, label]) => (
             <button key={k} onClick={() => setMode(k)} className="px-3 py-1.5 rounded text-sm font-semibold"
               style={{ fontFamily: FONT_DISPLAY, background: mode === k ? colors.surface : "transparent", color: colors.ink }}>
               {label}
@@ -3797,6 +3966,59 @@ function BillingPanel({ items, onDeleteItem, authUser, colors, t, lang }) {
         </div>
         <div className="text-xs" style={{ color: colors.inkFaint }}>{t.billingFootnote}</div>
       </>
+      )}
+      {mode === "handling" && (
+        <>
+          <div className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.billingHandlingDesc}</div>
+          {handlingNeedsQuoteCount > 0 && (
+            <div className="px-3 py-2 rounded text-sm mb-3" style={{ background: colors.amberSoft, color: colors.amberText }}>
+              {t.billingHandlingNeedsQuote(handlingNeedsQuoteCount)}
+            </div>
+          )}
+          <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}` }}>
+            <table className="w-full text-sm" style={{ background: colors.surface }}>
+              <thead>
+                <tr style={{ background: colors.surfaceDim }}>
+                  {[t.billingColClient, t.billingColProject, t.billingColJobNo, t.billingHandlingColType, t.billingHandlingColBasis, t.billingHandlingColRate, t.billingColTotal].map((h) => (
+                    <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {handlingRows.length === 0 && (
+                  <tr><td colSpan={7} className="px-3 py-6 text-center text-sm" style={{ color: colors.inkFaint }}>{t.billingHandlingNoneMsg}</td></tr>
+                )}
+                {handlingRows.map((r, idx) => (
+                  <tr key={idx} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
+                    <td className="px-3 py-2">{r.item.client}</td>
+                    <td className="px-3 py-2">{r.item.project || r.item.constructionSite || "—"}</td>
+                    <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{r.item.jobNumber || "—"}</td>
+                    <td className="px-3 py-2">
+                      {r.jobType === "devan" ? t.billingHandlingTypeDevan : r.jobType === "delivery" ? t.billingHandlingTypeDelivery : t.billingHandlingTypeHaulage}
+                      {r.oversizeMult > 1 && <span className="ml-1 text-xs" style={{ color: colors.amberText }}>{t.billingHandlingOversizeTag(r.oversizeMult)}</span>}
+                    </td>
+                    <td className="px-3 py-2 text-xs" style={{ color: colors.inkFaint }}>
+                      {r.jobType === "haulage"
+                        ? t.billingHandlingHaulageBasis(r.containers20, r.containers40)
+                        : `${Math.round((r.rTons || 0) * 1000) / 1000} R/Ton \u00b7 ${r.zone === "lantau" ? t.zoneLantau : t.zoneUrban} \u00b7 ${r.cargoType === "escalator" ? t.cargoTypeEscalator : t.cargoTypeElevator}`}
+                    </td>
+                    <td className="px-3 py-2 text-xs" style={{ color: colors.inkFaint }}>{r.jobType !== "haulage" && r.perRTonRate ? `$${r.perRTonRate}/R.Ton` : "—"}</td>
+                    <td className="px-3 py-2 font-semibold">{r.needsQuote ? <span style={{ color: colors.amberText }}>{t.billingHandlingQuoteBadge}</span> : money(r.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              {handlingRows.length > 0 && (
+                <tfoot>
+                  <tr style={{ borderTop: `2px solid ${colors.line}` }}>
+                    <td colSpan={6} className="px-3 py-2 text-right font-semibold" style={{ color: colors.ink, fontFamily: FONT_DISPLAY }}>{t.billingGrandTotal}</td>
+                    <td className="px-3 py-2 font-bold" style={{ color: colors.ink }}>{money(handlingGrandTotal)}</td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+          <div className="text-xs mt-2" style={{ color: colors.inkFaint }}>{t.billingHandlingFootnote}</div>
+        </>
       )}
       {pendingDeleteItem && (
         <AdminConfirmModal
