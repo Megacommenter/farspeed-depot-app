@@ -4589,6 +4589,32 @@ function recomputeItemTotals(item) {
   if (oversizeCbm == null && cbm) next.volumeCbm = String(Math.round(cbm * 1000) / 1000);
   return next;
 }
+// Totals for a subset of an item's cases, expressed on the item's authoritative basis.
+//
+// sumSelectedPackages adds up the per-case packing-list figures, which is the right
+// answer while cases are still on an Incoming shipment - nothing has been declared yet.
+// Once cases are in inventory the item carries a Devan/CFS weight and, for oversize
+// cargo, a CBM that sets the billing tier. A delivery drawn from that item has to be
+// quoted on the same basis, or the depot shows one number on arrival and a different
+// one on the way out. The subset's share is taken from the packing list (the only
+// per-case data there is) and applied to the item's own total, falling back to a plain
+// case count when the packing list carries no weights or volumes at all.
+function selectedItemTotals(item, codes) {
+  const pkgs = item.packages || [];
+  const s = sumSelectedPackages(pkgs, codes);
+  const listedWeight = pkgs.reduce((acc, p) => acc + (Number(p.weightKg) || 0), 0);
+  const listedCbm = pkgs.reduce((acc, p) => acc + (Number(p.cbm) || 0), 0);
+  const countShare = pkgs.length ? s.count / pkgs.length : 0;
+  const itemWeight = Number(item.weightKg) || 0;
+  const itemCbm = Number(item.volumeCbm) || 0;
+  const weight = item.weightSource === "declared" && itemWeight > 0
+    ? itemWeight * (listedWeight > 0 ? s.weight / listedWeight : countShare)
+    : s.weight;
+  const cbm = item.volumeSource && itemCbm > 0
+    ? itemCbm * (listedCbm > 0 ? s.cbm / listedCbm : countShare)
+    : s.cbm;
+  return { count: s.count, weight, cbm };
+}
 function groupPackagesByOrder(pkgs) {
   const hasAnyOrderNo = pkgs.some((p) => p.orderNo);
   if (!hasAnyOrderNo) return [{ orderNo: "", packages: pkgs }];
@@ -4915,7 +4941,7 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
           </div>
           {(() => {
             const grand = matchedItems.reduce((acc, it) => {
-              const s = sumSelectedPackages(it.packages, selectedByItem[it.id] || []);
+              const s = selectedItemTotals(it, selectedByItem[it.id] || []);
               return { count: acc.count + s.count, weight: acc.weight + s.weight, cbm: acc.cbm + s.cbm };
             }, { count: 0, weight: 0, cbm: 0 });
             return grand.count > 0 ? (
@@ -4928,7 +4954,7 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
             {matchedItems.map((it) => {
               const remainingPkgs = remainingPackages(it);
               const selectedCodes = selectedByItem[it.id] || [];
-              const totals = sumSelectedPackages(it.packages, selectedCodes);
+              const totals = selectedItemTotals(it, selectedCodes);
               return (
                 <div key={it.id} style={{ borderTop: `1px solid ${colors.green}`, paddingTop: 10 }}>
                   <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
