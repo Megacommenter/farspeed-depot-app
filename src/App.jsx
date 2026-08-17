@@ -1396,6 +1396,10 @@ const TEXT = {
     legacyTypeSelectBtn: "Add",
     legacySelectedTotals: (count, kg, cbm) => `Selected: ${count} pkg${count === 1 ? "" : "s"} \u00b7 ${kg} kg \u00b7 ${cbm} cbm`,
     legacySelectedTotalsGrand: (count, kg, cbm) => `Total selected across all entries: ${count} pkg${count === 1 ? "" : "s"} \u00b7 ${kg} kg \u00b7 ${cbm} cbm`,
+    legacyDeliveryDeclaredLabel: "On this delivery sheet:",
+    legacyDeliveryDeclaredGap: (declaredKg, listedKg, pct, heavier) =>
+      `Sheet declares ${declaredKg} kg; the cases selected come to ${listedKg} kg on the packing list (${heavier ? "+" : "\u2212"}${pct}%). The sheet's figure is recorded.`,
+    legacyDeclaredSplitNote: "split pro-rata \u2014 one total covers several lots",
     incomingDeclaredLabel: "Totals on the Devan/CFS sheet (optional)",
     legacyDeclaredLabel: "On this sheet:",
     legacyDeclaredHint: "Sheet totals are used for storage, handling and billing. The packing-list weight stays on record case by case.",
@@ -1973,6 +1977,10 @@ const TEXT = {
     legacyTypeSelectBtn: "加入",
     legacySelectedTotals: (count, kg, cbm) => `已選：${count} 件 \u00b7 ${kg} kg \u00b7 ${cbm} cbm`,
     legacySelectedTotalsGrand: (count, kg, cbm) => `全部已選（合計）：${count} 件 \u00b7 ${kg} kg \u00b7 ${cbm} cbm`,
+    legacyDeliveryDeclaredLabel: "此送貨單據數據：",
+    legacyDeliveryDeclaredGap: (declaredKg, listedKg, pct, heavier) =>
+      `單據列明 ${declaredKg} kg；所選件號按裝箱單合計 ${listedKg} kg（${heavier ? "+" : "\u2212"}${pct}%）。記錄以單據為準。`,
+    legacyDeclaredSplitNote: "按比例分攤 \u2014 單一總數涵蓋多個梯號",
     incomingDeclaredLabel: "拆櫃／CFS 單據總數（可留空）",
     legacyDeclaredLabel: "此單據數據：",
     legacyDeclaredHint: "倉租、裝卸及收費以單據數據為準；裝箱單重量仍按件保留記錄。",
@@ -4499,31 +4507,89 @@ function sumSelectedPackages(packages, codes) {
 function declaredContextKey(s) {
   return String(s || "").toUpperCase().replace(/[^A-Z0-9]+/g, "");
 }
-function declaredMatchesIncoming(context, inc) {
-  const key = declaredContextKey(context);
-  if (!key) return false;
-  const candidates = [inc.unitCode, inc.shkNumber].filter(Boolean);
+// Lot identifiers arrive in inconsistent shapes: "ES-1" against a unit code of "ES1",
+// "60726103/L7" against "L7". Comparing on a fully stripped string is unsafe - once the
+// separators go, "60726103/L7 60726117/L8" reads as "...L760726117L8", and a boundary
+// test for L7 sees a digit after it and fails. So split the heading into alphanumeric
+// tokens, add the joins of adjacent tokens (which recovers "ES" + "1" as "ES1"), and
+// require the identifier to equal one of those outright. Exact equality also keeps "ES1"
+// from matching "ES12" without needing a boundary rule at all.
+function declaredContextTokens(context) {
+  const tokens = String(context || "").toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
+  const keys = new Set(tokens);
+  for (let i = 0; i < tokens.length - 1; i++) {
+    keys.add(tokens[i] + tokens[i + 1]);
+    if (i < tokens.length - 2) keys.add(tokens[i] + tokens[i + 1] + tokens[i + 2]);
+  }
+  return keys;
+}
+function lotIdentityMatches(context, lot) {
+  const keys = declaredContextTokens(context);
+  if (!keys.size) return false;
+  const candidates = [lot.unitCode, lot.shkNumber].filter(Boolean);
   for (const raw of candidates) {
     for (const part of String(raw).split(/[,;]/)) {
       const needle = declaredContextKey(part);
-      // Require a non-digit boundary after the match so "ES1" doesn't match "ES12".
-      if (needle.length >= 2 && new RegExp(`${needle}(?![0-9])`).test(key)) return true;
+      if (needle.length >= 2 && keys.has(needle)) return true;
     }
   }
   return false;
 }
-// Picks the total line belonging to this Incoming. Falls back to the sheet's only total
-// when there is exactly one, since a single-lot sheet needs no disambiguation.
-function pickDeclaredForIncoming(list, inc) {
-  const all = list || [];
-  const hit = all.find((d) => declaredMatchesIncoming(d.context, inc));
-  if (hit) return hit;
-  if (all.length === 1) return all[0];
-  return null;
-}
 function declaredNum(v) {
   const n = Number(String(v == null ? "" : v).replace(/,/g, ""));
   return Number.isFinite(n) && n > 0 ? n : null;
+}
+// Maps each lot on a sheet to the totals declared for it, keyed by lot id.
+//
+// Three shapes turn up in practice. A sheet may close each lot with its own "共:" line
+// (the ES1 Devan sheet) - that line names one lot and its figures are used as-is. A
+// sheet may close several lots with a single line (the L7/L8/L9 delivery sheet, whose
+// only total covers all twelve packages) - that one figure has to be split across the
+// lots it names, or each would claim the whole thing. And a single-lot sheet may not
+// name its lot at all, in which case its only total is taken to cover everything.
+//
+// Splits are pro-rata on the packing-list figures of the cases actually selected, since
+// that is the only per-case data available. `listedFor(lot)` supplies those.
+function distributeDeclaredAcrossLots(list, lots, listedFor) {
+  const out = {};
+  const all = list || [];
+  if (!lots || !lots.length) return out;
+  const claimed = new Set();
+
+  const assign = (line, group) => {
+    const totPkgs = declaredNum(line.pkgs);
+    const totKg = declaredNum(line.kg);
+    const totCbm = declaredNum(line.cbm);
+    const listed = group.map((lot) => listedFor(lot) || { count: 0, weight: 0, cbm: 0 });
+    const shareOf = (key, i) => {
+      const denom = listed.reduce((s, l) => s + (Number(l[key]) || 0), 0);
+      if (denom > 0) return (Number(listed[i][key]) || 0) / denom;
+      return group.length ? 1 / group.length : 0;
+    };
+    const single = group.length === 1;
+    group.forEach((lot, i) => {
+      if (claimed.has(lot.id)) return;
+      claimed.add(lot.id);
+      out[lot.id] = {
+        // A per-lot package count is only meaningful when the line describes one lot.
+        // Splitting it would invent a number and fire a false package-count warning.
+        pkgs: single && totPkgs != null ? String(totPkgs) : "",
+        kg: totKg == null ? "" : String(Math.round(totKg * (single ? 1 : shareOf("weight", i)) * 10) / 10),
+        cbm: totCbm == null ? "" : String(Math.round(totCbm * (single ? 1 : shareOf("cbm", i)) * 1000) / 1000),
+        split: !single,
+      };
+    });
+  };
+
+  const unnamed = [];
+  for (const line of all) {
+    const group = lots.filter((lot) => lotIdentityMatches(line.context, lot));
+    if (group.length) assign(line, group);
+    else unnamed.push(line);
+  }
+  // Nothing on the sheet named a lot: fall back to its sole total covering everything.
+  if (claimed.size === 0 && unnamed.length === 1) assign(unnamed[0], lots);
+  return out;
 }
 // `totals` is the packing-list sum of the selected cases, `declared` the sheet figures.
 function computeDeclaredVariance(totals, declared) {
@@ -4599,6 +4665,16 @@ function recomputeItemTotals(item) {
 // one on the way out. The subset's share is taken from the packing list (the only
 // per-case data there is) and applied to the item's own total, falling back to a plain
 // case count when the packing list carries no weights or volumes at all.
+// Substitutes the sheet's declared figures for the derived ones where it states them.
+function effectiveDeliveryTotals(totals, declared) {
+  const kg = declared ? declaredNum(declared.kg) : null;
+  const cbm = declared ? declaredNum(declared.cbm) : null;
+  return {
+    count: totals.count,
+    weight: kg != null ? kg : totals.weight,
+    cbm: cbm != null ? cbm : totals.cbm,
+  };
+}
 function selectedItemTotals(item, codes) {
   const pkgs = item.packages || [];
   const s = sumSelectedPackages(pkgs, codes);
@@ -4663,9 +4739,14 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
   // Totals as declared on this sheet, per matched lot. Pre-filled from the sheet's own
   // "共:" lines and editable, because a scanned or hand-typed sheet won't always parse.
   const declaredByIncoming = row.declaredByIncoming || {};
+  const declaredIncomingDist = distributeDeclaredAcrossLots(
+    row.declaredTotalsList,
+    matchedIncomings,
+    (inc) => sumSelectedPackages(inc.packages, selectedByIncoming[inc.id] || [])
+  );
   function getDeclaredFor(inc) {
     if (declaredByIncoming[inc.id] !== undefined) return declaredByIncoming[inc.id];
-    const found = pickDeclaredForIncoming(row.declaredTotalsList, inc);
+    const found = declaredIncomingDist[inc.id];
     return found ? { pkgs: found.pkgs, kg: found.kg, cbm: found.cbm } : { pkgs: "", kg: "", cbm: "" };
   }
   function setDeclaredFor(inc, patch) {
@@ -4687,6 +4768,24 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
       })
     : [];
   const selectedByItem = row.selectedByItem || {};
+  // A Delivery sheet declares its own totals just as a Devan does - the L7/L8/L9 sheet
+  // closes with one line covering all twelve packages - and that figure is the accurate
+  // one, so it drives the delivery instead of the packing-list sum of the cases ticked.
+  const declaredByItem = row.declaredByItem || {};
+  const declaredItemDist = distributeDeclaredAcrossLots(
+    row.declaredTotalsList,
+    matchedItems,
+    (it) => sumSelectedPackages(it.packages, selectedByItem[it.id] || [])
+  );
+  function getDeclaredForItem(it) {
+    if (declaredByItem[it.id] !== undefined) return declaredByItem[it.id];
+    const found = declaredItemDist[it.id];
+    return found ? { pkgs: found.pkgs, kg: found.kg, cbm: found.cbm } : { pkgs: "", kg: "", cbm: "" };
+  }
+  function setDeclaredForItem(it, patch) {
+    const cur = getDeclaredForItem(it);
+    onChange({ ...row, declaredByItem: { ...declaredByItem, [it.id]: { ...cur, ...patch } } });
+  }
   function toggleItemCode(itemId, code) {
     const cur = selectedByItem[itemId] || [];
     const next = cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code];
@@ -4941,7 +5040,8 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
           </div>
           {(() => {
             const grand = matchedItems.reduce((acc, it) => {
-              const s = selectedItemTotals(it, selectedByItem[it.id] || []);
+              const codes = selectedByItem[it.id] || [];
+              const s = effectiveDeliveryTotals(selectedItemTotals(it, codes), getDeclaredForItem(it));
               return { count: acc.count + s.count, weight: acc.weight + s.weight, cbm: acc.cbm + s.cbm };
             }, { count: 0, weight: 0, cbm: 0 });
             return grand.count > 0 ? (
@@ -4954,7 +5054,10 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
             {matchedItems.map((it) => {
               const remainingPkgs = remainingPackages(it);
               const selectedCodes = selectedByItem[it.id] || [];
-              const totals = selectedItemTotals(it, selectedCodes);
+              const derivedTotals = selectedItemTotals(it, selectedCodes);
+              const itemDeclared = getDeclaredForItem(it);
+              const totals = effectiveDeliveryTotals(derivedTotals, itemDeclared);
+              const itemVariance = computeDeclaredVariance(derivedTotals, itemDeclared);
               return (
                 <div key={it.id} style={{ borderTop: `1px solid ${colors.green}`, paddingTop: 10 }}>
                   <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
@@ -4975,8 +5078,42 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
                     </div>
                   </div>
                   {selectedCodes.length > 0 && (
-                    <div className="text-xs mb-2 font-semibold" style={{ color: colors.ink }}>
-                      {t.legacySelectedTotals(totals.count, Math.round(totals.weight * 10) / 10, Math.round(totals.cbm * 1000) / 1000)}
+                    <div className="mb-2">
+                      <div className="text-xs font-semibold mb-1.5" style={{ color: colors.ink }}>
+                        {t.legacySelectedTotals(totals.count, Math.round(totals.weight * 10) / 10, Math.round(totals.cbm * 1000) / 1000)}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 mb-1">
+                        <div className="text-xs font-semibold" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
+                          {t.legacyDeliveryDeclaredLabel}
+                        </div>
+                        {[
+                          { key: "kg", ph: t.jsKgs, w: 90 },
+                          { key: "cbm", ph: t.jsCbm, w: 82 },
+                        ].map((f) => (
+                          <input
+                            key={f.key}
+                            type="number" min="0" step="0.001"
+                            className={inputClass}
+                            style={{ ...inputStyleFor(colors), width: f.w, fontSize: 12, padding: "4px 8px" }}
+                            placeholder={f.ph}
+                            value={itemDeclared[f.key] || ""}
+                            onChange={(e) => setDeclaredForItem(it, { [f.key]: e.target.value })}
+                          />
+                        ))}
+                        {declaredItemDist[it.id] && declaredItemDist[it.id].split && (
+                          <span className="text-xs" style={{ color: colors.inkFaint }}>{t.legacyDeclaredSplitNote}</span>
+                        )}
+                      </div>
+                      {itemVariance && itemVariance.kg && Math.abs(itemVariance.kg.pct) >= 0.05 && (
+                        <div className="text-xs" style={{ color: colors.inkFaint }}>
+                          {t.legacyDeliveryDeclaredGap(
+                            Math.round(itemVariance.kg.declared * 10) / 10,
+                            Math.round(itemVariance.kg.listed * 10) / 10,
+                            Math.abs(itemVariance.kg.pct).toFixed(1),
+                            itemVariance.kg.delta > 0
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                   <div className="flex flex-wrap gap-2">
@@ -5401,6 +5538,11 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
           })
         : [];
       const selectedByIncoming = row.selectedByIncoming || {};
+      const incomingDeclaredDist = distributeDeclaredAcrossLots(
+        row.declaredTotalsList,
+        matchedIncomings,
+        (inc) => sumSelectedPackages(inc.packages, selectedByIncoming[inc.id] || [])
+      );
       const hasAnyIncomingSelection = matchedIncomings.some((inc) => (selectedByIncoming[inc.id] || []).length > 0);
       const archiveEntry = {
         id, rowIndex: i, fileName: row.file.name, docType: row.docType, client: row.client,
@@ -5421,7 +5563,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
             if (codes.length === 0) continue;
             const oversize = (row.oversizeByIncoming || {})[inc.id] || { checked: !!(row.oversizeByLot || {})[inc.unitCode], cbm: (row.oversizeByLot || {})[inc.unitCode] || "" };
             const declaredEdited = (row.declaredByIncoming || {})[inc.id];
-            const declaredParsed = pickDeclaredForIncoming(row.declaredTotalsList, inc);
+            const declaredParsed = incomingDeclaredDist[inc.id];
             const declared = declaredEdited || (declaredParsed
               ? { pkgs: declaredParsed.pkgs, kg: declaredParsed.kg, cbm: declaredParsed.cbm }
               : null);
@@ -5518,8 +5660,21 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
       const hasItemSelections = Object.values(selectedByItem).some((codes) => (codes || []).length > 0);
 
       if (hasItemSelections) {
+        // Resolve the sheet's declared totals the same way the row displayed them, so the
+        // saved delivery carries the figure the user was looking at rather than a
+        // recount of the packing list.
+        const deliveryLots = Object.keys(selectedByItem)
+          .filter((id) => (selectedByItem[id] || []).length > 0)
+          .map((id) => (items || []).find((it) => it.id === id))
+          .filter(Boolean);
+        const deliveryDeclaredDist = distributeDeclaredAcrossLots(
+          row.declaredTotalsList,
+          deliveryLots,
+          (it) => sumSelectedPackages(it.packages, selectedByItem[it.id] || [])
+        );
         for (const [itemId, codes] of Object.entries(selectedByItem)) {
           if (!codes || codes.length === 0) continue;
+          const declared = (row.declaredByItem || {})[itemId] || deliveryDeclaredDist[itemId] || null;
           existingDeliveryEntries.push({
             itemId,
             delivery: {
@@ -5527,6 +5682,9 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
               jobNumber: row.jobNumber, recordedBy: "", notes: t.legacyImportedNote(row.file.name),
               shkNumber: row.shkNumber || "",
               codes,
+              declared: declared && (declaredNum(declared.kg) != null || declaredNum(declared.cbm) != null)
+                ? { kg: declared.kg || "", cbm: declared.cbm || "" }
+                : null,
             },
             archiveEntry,
           });
