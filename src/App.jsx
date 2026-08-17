@@ -360,7 +360,14 @@ const PL_HEADER_ALIASES = {
   orderNo: ["omc sales order no.", "omc sales order no", "sales order no.", "sales order no", "order no."],
   description: ["description", "material description"],
   grossWeight: ["g.weight", "gross weight", "gross", "actual   weight", "actual weight", "g.w./kg", "g.w.", "g.w"],
-  netWeight: ["n.weight", "net weight", "net", "estimated  weight", "estimated weight", "n.w./kg", "n.w.", "n.w"],
+  // Schindler's sheets carry an "Estimated weight" beside an "Actual weight". Despite the
+  // names, the estimated column is the packing list's gross weight - the sheet says so
+  // itself at the top ("the gross weight in the packing list is the theoretic weight") -
+  // and it is the column the file's own total row adds up. The actual column is partial:
+  // on HPL_0060759755 it reads 517 where estimated reads 800, and totals 29,232 against
+  // the sheet's declared 33,736.4. Kept as its own field so it can outrank both.
+  estimatedWeight: ["estimated   weight", "estimated  weight", "estimated weight"],
+  netWeight: ["n.weight", "net weight", "net", "estimated net weight", "n.w./kg", "n.w.", "n.w"],
   cbm: ["cbm", "volume(m3)", "volume (m3)", "volume"],
   dimension: ["dimension", "dimension (mm)", "dimensions", "size"],
   dimensionCm: ["dim(cm)", "dim (cm)", "dimension(cm)", "dimension (cm)", "dimensions(cm)", "dimensions (cm)"],
@@ -552,8 +559,14 @@ function parsePackingListSheet(rows, legend) {
     const description = colMap.description !== undefined ? String(row[colMap.description] || "").trim() : "";
     const grossVal = colMap.grossWeight !== undefined && row[colMap.grossWeight] !== "" && row[colMap.grossWeight] != null ? plNum(row[colMap.grossWeight]) : null;
     const netVal = colMap.netWeight !== undefined && row[colMap.netWeight] !== "" && row[colMap.netWeight] != null ? plNum(row[colMap.netWeight]) : null;
-    // Use whichever weight is bigger - usually gross, but this doesn't assume it.
-    const weight = grossVal != null && netVal != null ? Math.max(grossVal, netVal) : (grossVal != null ? grossVal : (netVal != null ? netVal : 0));
+    const estVal = colMap.estimatedWeight !== undefined && row[colMap.estimatedWeight] !== "" && row[colMap.estimatedWeight] != null ? plNum(row[colMap.estimatedWeight]) : null;
+    // An explicit estimated-weight column is the sheet's own gross figure - take it
+    // outright. Comparing it against the actual column and keeping the larger would mix
+    // two different measures row by row and land on a total the sheet never states.
+    // Otherwise use whichever of gross/net is bigger, which doesn't assume gross is.
+    const weight = estVal != null && estVal > 0
+      ? estVal
+      : (grossVal != null && netVal != null ? Math.max(grossVal, netVal) : (grossVal != null ? grossVal : (netVal != null ? netVal : 0)));
     let cbm = 0;
     if (colMap.dimensionCm !== undefined && row[colMap.dimensionCm]) cbm = plCbmFromDimension(row[colMap.dimensionCm], "cm");
     if (!cbm && colMap.dimension !== undefined && row[colMap.dimension]) cbm = plCbmFromDimension(row[colMap.dimension]);
@@ -7106,7 +7119,7 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                         </td>
                         <td className="px-3 py-2">{g.packages.length}</td>
                         <td className="px-3 py-2 text-xs" style={{ color: colors.inkFaint }}>{g.containers.join(", ") || "—"}</td>
-                        <td className="px-3 py-2">{Math.round(g.totalWeight)}</td>
+                        <td className="px-3 py-2">{Math.round(g.totalWeight * 10) / 10}</td>
                         <td className="px-3 py-2">{g.totalCbm ? Math.round(g.totalCbm * 1000) / 1000 : "—"}</td>
                         <td className="px-3 py-2 text-right">
                           <button
