@@ -4408,23 +4408,35 @@ function guessFieldsFromWorkbook(wb) {
   const totalLines = flatText.split("\n");
   for (let li = 0; li < totalLines.length; li++) {
     if (!/(?:共|total)\s*[:\uff1a]/i.test(totalLines[li])) continue;
+    // "OVERSIZE TOTAL: 29.68 CBM" and "NORMAL SIZE TOTAL:" break a block down by case
+    // type - they are not a lot's declared total, and treating them as one lets them
+    // claim lots that belong to the block's real total line further down.
+    if (/(?:over\s*size|oversize|normal\s*size)\s*total/i.test(totalLines[li])) continue;
     const pk = totalLines[li].match(/(\d+)\s*PKGS?/i);
     const kg = totalLines[li].match(/([\d,]+(?:\.\d+)?)\s*KGS?/i);
     const cb = totalLines[li].match(/([\d,]+(?:\.\d+)?)\s*CBM/i);
     if (!pk && !kg && !cb) continue;
+    // Walk back to the previous total line, collecting every heading in between. A block
+    // can list many lots before closing them with one figure - this sheet's second block
+    // names seven (L8, L3, L6, L4, L12, L1 and more) before "共: 203 PKGS" - so the scan
+    // has to run to the block boundary rather than stop after the first few, or the lots
+    // furthest from the total would never be tied to it.
     const heading = [];
-    for (let bi = li - 1; bi >= 0 && heading.length < 4; bi--) {
+    for (let bi = li - 1; bi >= 0 && heading.length < 60; bi--) {
       const prev = String(totalLines[bi] || "").trim();
       if (!prev) continue;
       if (/^C\/S\s*NO\.?/i.test(prev)) continue; // case rows carry no lot identity
-      if (/(?:共|total)\s*[:\uff1a]/i.test(prev)) break; // reached the lot above
+      // Skip the same oversize/normal-size sub-totals on the way back: they sit inside a
+      // block, so treating one as the block boundary would orphan every lot above it.
+      if (/(?:over\s*size|oversize|normal\s*size)\s*total/i.test(prev)) continue;
+      if (/(?:共|total)\s*[:\uff1a]/i.test(prev)) break; // reached the block above
       heading.push(prev);
     }
     out.declaredTotalsList.push({
       pkgs: pk ? pk[1] : "",
       kg: kg ? kg[1].replace(/,/g, "") : "",
       cbm: cb ? cb[1].replace(/,/g, "") : "",
-      context: heading.reverse().join(" ").slice(0, 160),
+      context: heading.reverse().join(" ").slice(0, 2000),
     });
   }
 
@@ -4578,16 +4590,42 @@ function splitDeclaredAcrossLots(total, lots, listedFor) {
   const shareOf = (key, i) => {
     const denom = listed.reduce((s, l) => s + (Number(l[key]) || 0), 0);
     if (denom > 0) return (Number(listed[i][key]) || 0) / denom;
+    // Elevator lots often carry no per-case weight or volume at all. Case count is the
+    // next best proxy - a 32-case lot should take more of the total than an 18-case one.
+    const byCount = listed.reduce((s, l) => s + (Number(l.count) || 0), 0);
+    if (byCount > 0) return (Number(listed[i].count) || 0) / byCount;
     return lots.length ? 1 / lots.length : 0;
   };
   const single = lots.length === 1;
+  // Rounding each share independently leaves the split a little short of or over the
+  // stated total. The last lot takes the remainder so the parts always add back to the
+  // figure on the sheet - a depot total that doesn't reconcile invites a recount.
+  const spread = (total, key, decimals) => {
+    if (total == null) return lots.map(() => "");
+    if (single) return [String(total)];
+    const f = 10 ** decimals;
+    const vals = [];
+    let used = 0;
+    lots.forEach((lot, i) => {
+      if (i === lots.length - 1) {
+        vals.push(Math.round((total - used) * f) / f);
+      } else {
+        const v = Math.round(total * shareOf(key, i) * f) / f;
+        used += v;
+        vals.push(v);
+      }
+    });
+    return vals.map(String);
+  };
+  const kgs = spread(totKg, "weight", 1);
+  const cbms = spread(totCbm, "cbm", 3);
   lots.forEach((lot, i) => {
     out[lot.id] = {
       // A per-lot package count is only meaningful when the line describes one lot.
       // Splitting it would invent a number and fire a false package-count warning.
       pkgs: single && totPkgs != null ? String(totPkgs) : "",
-      kg: totKg == null ? "" : String(Math.round(totKg * (single ? 1 : shareOf("weight", i)) * 10) / 10),
-      cbm: totCbm == null ? "" : String(Math.round(totCbm * (single ? 1 : shareOf("cbm", i)) * 1000) / 1000),
+      kg: kgs[i],
+      cbm: cbms[i],
       split: !single,
     };
   });
