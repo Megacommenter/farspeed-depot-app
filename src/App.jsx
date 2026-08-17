@@ -1397,6 +1397,8 @@ const TEXT = {
     legacySelectedTotals: (count, kg, cbm) => `Selected: ${count} pkg${count === 1 ? "" : "s"} \u00b7 ${kg} kg \u00b7 ${cbm} cbm`,
     legacySelectedTotalsGrand: (count, kg, cbm) => `Total selected across all entries: ${count} pkg${count === 1 ? "" : "s"} \u00b7 ${kg} kg \u00b7 ${cbm} cbm`,
     legacyDeliveryDeclaredLabel: "On this delivery sheet:",
+    legacyOversizeCasesPh: "e.g. 13/23",
+    legacyOversizeDeliveryHint: "Prints in the OVERSIZE CASES box on this delivery sheet",
     legacyDeliveryDeclaredGap: (declaredKg, listedKg, pct, heavier) =>
       `Sheet declares ${declaredKg} kg; the cases selected come to ${listedKg} kg on the packing list (${heavier ? "+" : "\u2212"}${pct}%). The sheet's figure is recorded.`,
     legacySheetTotalLabel: (lots) => `Total stated on this sheet \u2014 covers ${lots}`,
@@ -1981,6 +1983,8 @@ const TEXT = {
     legacySelectedTotals: (count, kg, cbm) => `已選：${count} 件 \u00b7 ${kg} kg \u00b7 ${cbm} cbm`,
     legacySelectedTotalsGrand: (count, kg, cbm) => `全部已選（合計）：${count} 件 \u00b7 ${kg} kg \u00b7 ${cbm} cbm`,
     legacyDeliveryDeclaredLabel: "此送貨單據數據：",
+    legacyOversizeCasesPh: "例如 13/23",
+    legacyOversizeDeliveryHint: "會列印於此送貨單的「超大件」欄",
     legacyDeliveryDeclaredGap: (declaredKg, listedKg, pct, heavier) =>
       `單據列明 ${declaredKg} kg；所選件號按裝箱單合計 ${listedKg} kg（${heavier ? "+" : "\u2212"}${pct}%）。記錄以單據為準。`,
     legacySheetTotalLabel: (lots) => `單據總數 \u2014 涵蓋 ${lots}`,
@@ -3507,8 +3511,18 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
   const dateText = isDelivery ? delivery.date : item.depotArrivalDate || effectiveDepotArrivalDate(item);
   const jobNo = isDelivery ? delivery.jobNumber : item.jobNumber;
   const issuedBy = (isDelivery ? delivery.recordedBy : item.recordedBy) || "";
-  const showOversize = ["Devan", "CFS"].includes(template) && !!OVERSIZE_RULES[item.client];
-  const oversizeText = showOversize ? computeOversizeText(item) : "";
+  // A delivery sheet carries its own OVERSIZE CASES box - the cases going out on this
+  // job, named case by case ("L13#13/23@4.49CBM") - so it prints what was recorded
+  // against the delivery rather than re-deriving the whole lot's oversize cases.
+  const deliveryOversize = isDelivery && delivery && delivery.oversize && declaredNum(delivery.oversize.cbm) != null
+    ? delivery.oversize
+    : null;
+  const showOversize = deliveryOversize
+    ? true
+    : (["Devan", "CFS"].includes(template) && !!OVERSIZE_RULES[item.client]);
+  const oversizeText = deliveryOversize
+    ? `${deliveryOversize.cases ? `#${deliveryOversize.cases} ` : ""}@${deliveryOversize.cbm}CBM`
+    : (showOversize ? computeOversizeText(item) : "");
 
   const pkgs = isDelivery ? (delivery.codes ? delivery.codes.length : Number(delivery.packageCount) || 0) : totalUnits(item);
   let kgs = item.weightKg || "";
@@ -4459,10 +4473,23 @@ function guessFieldsFromWorkbook(wb) {
   // their own, so this figure is the only CBM basis available for them, and oversize
   // cargo bills at a higher rate.
   out.oversizeByLot = {};
+  out.oversizeCasesByLot = {};
   const oversizeSectionMatch = flatText.match(/oversize\s*cases?[:\uff1a]?\s*([\s\S]{0,400}?)(?:\n\s*\n|$)/i);
   if (oversizeSectionMatch) {
-    const pairs = [...oversizeSectionMatch[1].matchAll(/([A-Za-z0-9\-]+)\s*@\s*([\d,]+(?:\.\d+)?)\s*CBM/gi)];
-    for (const p of pairs) out.oversizeByLot[p[1].trim()] = p[2].replace(/,/g, "");
+    // Two forms in use. A Devan names the lot only - "L13@4.49CBM". A delivery sheet
+    // names the case as well - "L13#13/23@4.49CBM" - because by then it is one specific
+    // case leaving the depot. The old pattern allowed neither "#" nor "/" before the @,
+    // so on a delivery it captured the tail of the case number ("23") as the lot name and
+    // the entry could never be matched back to L13.
+    const pairs = [...oversizeSectionMatch[1].matchAll(
+      /([A-Za-z0-9\-]+?)\s*(?:#\s*([0-9,\/\- ]+?))?\s*@\s*([\d,]+(?:\.\d+)?)\s*CBM/gi
+    )];
+    for (const p of pairs) {
+      const lot = p[1].trim();
+      if (!lot) continue;
+      out.oversizeByLot[lot] = p[3].replace(/,/g, "");
+      if (p[2]) out.oversizeCasesByLot[lot] = p[2].trim();
+    }
   }
 
   return out;
@@ -4911,6 +4938,20 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
     const cur = getDeclaredForItem(it);
     onChange({ ...row, declaredByItem: { ...declaredByItem, [it.id]: { ...cur, ...patch } } });
   }
+  // Oversize on the way out. A delivery sheet lists its own OVERSIZE CASES section, so
+  // the cases and CBM leaving on this job are recorded against the delivery rather than
+  // inferred from whatever was flagged when the lot arrived.
+  const oversizeByDeliveryItem = row.oversizeByDeliveryItem || {};
+  function getDeliveryOversizeFor(it) {
+    if (oversizeByDeliveryItem[it.id] !== undefined) return oversizeByDeliveryItem[it.id];
+    const cbm = (row.oversizeByLot || {})[it.unitCode];
+    const cases = (row.oversizeCasesByLot || {})[it.unitCode] || "";
+    return { checked: !!cbm, cbm: cbm || "", cases };
+  }
+  function setDeliveryOversizeFor(it, patch) {
+    const cur = getDeliveryOversizeFor(it);
+    onChange({ ...row, oversizeByDeliveryItem: { ...oversizeByDeliveryItem, [it.id]: { ...cur, ...patch } } });
+  }
   function toggleItemCode(itemId, code) {
     const cur = selectedByItem[itemId] || [];
     const next = cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code];
@@ -5214,6 +5255,7 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
               const itemDeclared = getDeclaredForItem(it);
               const totals = effectiveDeliveryTotals(derivedTotals, itemDeclared);
               const itemVariance = computeDeclaredVariance(derivedTotals, itemDeclared);
+              const dOversize = getDeliveryOversizeFor(it);
               return (
                 <div key={it.id} style={{ borderTop: `1px solid ${colors.green}`, paddingTop: 10 }}>
                   <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
@@ -5276,6 +5318,36 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
                           )}
                         </div>
                       )}
+                      <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                        <label className="flex items-center gap-1.5 text-xs font-semibold" style={{ color: colors.ink }}>
+                          <input
+                            type="checkbox"
+                            checked={!!dOversize.checked}
+                            onChange={(e) => setDeliveryOversizeFor(it, { checked: e.target.checked })}
+                          />
+                          {t.legacyOversizeLabel}
+                        </label>
+                        {dOversize.checked && (
+                          <>
+                            <input
+                              className={inputClass}
+                              style={{ ...inputStyleFor(colors), width: 124, fontSize: 12, padding: "4px 8px" }}
+                              placeholder={t.legacyOversizeCasesPh}
+                              value={dOversize.cases || ""}
+                              onChange={(e) => setDeliveryOversizeFor(it, { cases: e.target.value })}
+                            />
+                            <input
+                              type="number" min="0" step="0.001"
+                              className={inputClass}
+                              style={{ ...inputStyleFor(colors), width: 86, fontSize: 12, padding: "4px 8px" }}
+                              placeholder={t.jsCbm}
+                              value={dOversize.cbm || ""}
+                              onChange={(e) => setDeliveryOversizeFor(it, { cbm: e.target.value })}
+                            />
+                            <span className="text-xs" style={{ color: colors.inkFaint }}>{t.legacyOversizeDeliveryHint}</span>
+                          </>
+                        )}
+                      </div>
                     </div>
                   )}
                   <div className="flex flex-wrap gap-2">
@@ -5843,6 +5915,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
         );
         for (const [itemId, codes] of Object.entries(selectedByItem)) {
           if (!codes || codes.length === 0) continue;
+          const itemUnitCode = ((items || []).find((x) => x.id === itemId) || {}).unitCode;
           const fromGroup = deliveryDeclaredDist[itemId];
           const declared = (fromGroup && fromGroup.split)
             ? fromGroup
@@ -5857,6 +5930,14 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
               declared: declared && (declaredNum(declared.kg) != null || declaredNum(declared.cbm) != null)
                 ? { kg: declared.kg || "", cbm: declared.cbm || "", split: !!declared.split }
                 : null,
+              oversize: (() => {
+                const os = (row.oversizeByDeliveryItem || {})[itemId] || {
+                  checked: !!(row.oversizeByLot || {})[itemUnitCode],
+                  cbm: (row.oversizeByLot || {})[itemUnitCode] || "",
+                  cases: (row.oversizeCasesByLot || {})[itemUnitCode] || "",
+                };
+                return os.checked && declaredNum(os.cbm) != null ? { cbm: String(os.cbm), cases: os.cases || "" } : null;
+              })(),
             },
             archiveEntry,
           });
