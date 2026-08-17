@@ -1410,6 +1410,7 @@ const TEXT = {
       : `Sheet is ${kg} kg lighter than the packing list (\u2212${pct}%) \u2014 worth checking before you process it.`,
     legacyDeclaredPkgsGap: (declared, selected) => `Sheet counts ${declared} package${declared === 1 ? "" : "s"}, you selected ${selected}.`,
     fWeightFromSheet: "From the Devan/CFS sheet",
+    fWeightSheetShare: "Estimated \u2014 share of a sheet total covering several lots",
     fWeightPackingList: (kg) => `Packing list: ${kg} kg`,
     fVolumePackingList: (cbm) => `Packing list: ${cbm} cbm`,
     fVolumeFromOversize: "Oversize CBM \u2014 sets the billing tier, so it outranks the sheet total",
@@ -1993,6 +1994,7 @@ const TEXT = {
       : `單據比裝箱單輕 ${kg} kg（\u2212${pct}%）\u2014 處理前請先核對。`,
     legacyDeclaredPkgsGap: (declared, selected) => `單據件數為 ${declared} 件，現選 ${selected} 件。`,
     fWeightFromSheet: "取自拆櫃／CFS 單據",
+    fWeightSheetShare: "估算 \u2014 分攤自涵蓋多個梯號的單據總數",
     fWeightPackingList: (kg) => `裝箱單：${kg} kg`,
     fVolumePackingList: (cbm) => `裝箱單：${cbm} cbm`,
     fVolumeFromOversize: "超大件 CBM \u2014 收費級距按此計算，優先於單據總數",
@@ -2311,8 +2313,8 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, directory, emplo
 
         <Field
           label={t.fWeight}
-          hint={form.weightSource === "declared"
-            ? `${t.fWeightFromSheet}${form.weightPackingListKg ? ` \u00b7 ${t.fWeightPackingList(form.weightPackingListKg)}` : ""}`
+          hint={form.weightSource
+            ? `${form.weightSource === "declared-estimated" ? t.fWeightSheetShare : t.fWeightFromSheet}${form.weightPackingListKg ? ` \u00b7 ${t.fWeightPackingList(form.weightPackingListKg)}` : ""}`
             : undefined}
           colors={colors}
         >
@@ -2321,7 +2323,7 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, directory, emplo
         <Field
           label={t.fVolume}
           hint={form.volumeSource
-            ? `${form.volumeSource === "oversize" ? t.fVolumeFromOversize : t.fWeightFromSheet}${form.volumeCbmPackingList ? ` \u00b7 ${t.fVolumePackingList(form.volumeCbmPackingList)}` : ""}`
+            ? `${form.volumeSource === "oversize" ? t.fVolumeFromOversize : form.volumeSource === "declared-estimated" ? t.fWeightSheetShare : t.fWeightFromSheet}${form.volumeCbmPackingList ? ` \u00b7 ${t.fVolumePackingList(form.volumeCbmPackingList)}` : ""}`
             : undefined}
           colors={colors}
         >
@@ -3513,6 +3515,11 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
   let cbm = item.volumeCbm || "";
   let estimated = false;
   if (isDelivery) {
+    // A delivery recorded from a job sheet carries that sheet's own totals. They are the
+    // figures the job was done on, so the printed sheet states them rather than a fresh
+    // count of per-case packing-list weights that would disagree with the paperwork.
+    const decKg = delivery.declared ? declaredNum(delivery.declared.kg) : null;
+    const decCbm = delivery.declared ? declaredNum(delivery.declared.cbm) : null;
     if (delivery.codes && (item.packages || []).length > 0) {
       const delivered = item.packages.filter((p) => delivery.codes.includes(p.code));
       const haveAllWeights = delivered.length > 0 && delivered.every((p) => p.weightKg !== "" && p.weightKg != null);
@@ -3529,6 +3536,10 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
       if (!kgs && item.weightKg) kgs = `~${Math.round(Number(item.weightKg) * share * 10) / 10}`;
       if (!cbm && item.volumeCbm) cbm = `~${Math.round(Number(item.volumeCbm) * share * 1000) / 1000}`;
     }
+    // Stated on the job sheet beats anything derived, and is not an estimate.
+    if (decKg != null) kgs = String(decKg);
+    if (decCbm != null) cbm = String(decCbm);
+    if (decKg != null && decCbm != null) estimated = false;
   }
   const csLine = isDelivery
     ? (delivery.codes ? delivery.codes.join(", ") : "")
@@ -4688,22 +4699,40 @@ function recomputeItemTotals(item) {
   // them doesn't drag the other off the packing list. Within each, a batch that carried
   // a sheet figure contributes it; a batch checked in without one contributes the
   // packing-list total of its own cases.
+  //
+  // A sheet figure only wins when the sheet actually stated it for this lot. Where it is
+  // this lot's share of a total covering many lots - the Devan that ran fourteen lifts
+  // together, whose kg and cbm were never divided accurately between them - it is an
+  // estimate, and measured per-case weights from the packing list are the better record.
+  // The lump total stays on the arrival batch either way.
+  const hasListedWeights = pkgs.some((p) => Number(p.weightKg) > 0);
+  const hasListedCbm = pkgs.some((p) => Number(p.cbm) > 0);
   let weight = 0;
   let cbm = 0;
+  let usedKg = false, usedCbm = false, estKg = false, estCbm = false;
   for (const a of arrivals) {
     const batchListed = sumSelectedPackages(pkgs, a.codes || []);
+    const split = !!(a.declared && a.declared.split);
     const dKg = a.declared ? declaredNum(a.declared.kg) : null;
     const dCbm = a.declared ? declaredNum(a.declared.cbm) : null;
-    weight += dKg != null ? dKg : batchListed.weight;
-    cbm += dCbm != null ? dCbm : batchListed.cbm;
+    const takeKg = dKg != null && !(split && hasListedWeights);
+    const takeCbm = dCbm != null && !(split && hasListedCbm);
+    if (takeKg) { usedKg = true; if (split) estKg = true; }
+    if (takeCbm) { usedCbm = true; if (split) estCbm = true; }
+    weight += takeKg ? dKg : batchListed.weight;
+    cbm += takeCbm ? dCbm : batchListed.cbm;
   }
-  if (anyDeclaredKg && weight) next.weightKg = String(Math.round(weight * 10) / 10);
+  next.weightSource = usedKg ? (estKg ? "declared-estimated" : "declared") : "";
+  if (usedCbm) next.volumeSource = estCbm ? "declared-estimated" : "declared";
+  else if (next.volumeSource === "declared") next.volumeSource = "";
+  if (usedKg && weight) next.weightKg = String(Math.round(weight * 10) / 10);
   // Oversize outranks the sheet's lot total on volume, and only on volume. Oversize
   // cargo is priced off its CBM alone - `oversizeCbm` picks the rate multiplier tier in
   // computeItemBillingRows and stands in as the billable volume when the cases carry no
   // CBM of their own - so a coarser lot total must not displace it. Weight has no such
   // override, which is why it takes the sheet figure unconditionally.
-  if (oversizeCbm == null && cbm) next.volumeCbm = String(Math.round(cbm * 1000) / 1000);
+  if (oversizeCbm == null && usedCbm && cbm) next.volumeCbm = String(Math.round(cbm * 1000) / 1000);
+  else if (oversizeCbm != null) next.volumeSource = "oversize";
   return next;
 }
 // Totals for a subset of an item's cases, expressed on the item's authoritative basis.
@@ -5698,9 +5727,14 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
             const oversize = (row.oversizeByIncoming || {})[inc.id] || { checked: !!(row.oversizeByLot || {})[inc.unitCode], cbm: (row.oversizeByLot || {})[inc.unitCode] || "" };
             const declaredEdited = (row.declaredByIncoming || {})[inc.id];
             const declaredParsed = incomingDeclaredDist[inc.id];
-            const declared = declaredEdited || (declaredParsed
-              ? { pkgs: declaredParsed.pkgs, kg: declaredParsed.kg, cbm: declaredParsed.cbm }
-              : null);
+            // Same precedence the row displayed: a lot inside a shared total is driven by
+            // that total, and travels with the split flag so the item knows its weight is
+            // a share rather than something the sheet stated for this lot.
+            const declared = (declaredParsed && declaredParsed.split)
+              ? { pkgs: declaredParsed.pkgs, kg: declaredParsed.kg, cbm: declaredParsed.cbm, split: true }
+              : (declaredEdited || (declaredParsed
+                  ? { pkgs: declaredParsed.pkgs, kg: declaredParsed.kg, cbm: declaredParsed.cbm }
+                  : null));
             checkInOps.push({
               op: {
                 incomingId: inc.id,
@@ -5821,7 +5855,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
               shkNumber: row.shkNumber || "",
               codes,
               declared: declared && (declaredNum(declared.kg) != null || declaredNum(declared.cbm) != null)
-                ? { kg: declared.kg || "", cbm: declared.cbm || "" }
+                ? { kg: declared.kg || "", cbm: declared.cbm || "", split: !!declared.split }
                 : null,
             },
             archiveEntry,
