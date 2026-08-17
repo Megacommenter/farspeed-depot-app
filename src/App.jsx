@@ -115,7 +115,17 @@ function computeStorageCharge(arrivalDateStr, endDateStr, freeDays, ratePerCbmMo
 function computeItemBillingRows(item) {
   const rate = cbmRateFor(item.client);
   if (!rate) return [];
-  const oversizeMultiplier = item.isOversize && item.oversizeCbm ? (oversizeTierFor(item.client, Number(item.oversizeCbm)) || 1) : 1;
+  // Oversize is priced per case off that case's own CBM. A lot with #7/29@3.96,
+  // #8/29@3.26 and #21/29@5.28 can straddle three tiers, so a single item-wide
+  // multiplier would over- or under-charge every case that isn't the one it came from.
+  const osMap = oversizeCaseMap(item);
+  const namedOversize = osMap.size > 0;
+  const lotOversizeCbm = namedOversize ? 0 : oversizeCbmTotal(oversizeCasesOf(item));
+  const lotMultiplier = lotOversizeCbm > 0 ? (oversizeTierFor(item.client, lotOversizeCbm) || 1) : 1;
+  const tierFor = (cbm) => oversizeTierFor(item.client, cbm) || 1;
+  const oversizeMultiplier = namedOversize
+    ? Math.max(1, ...[...osMap.values()].map(tierFor))
+    : lotMultiplier;
   const effectiveRate = rate * oversizeMultiplier;
   const freeDays = freeDaysFor(item);
   const rows = [];
@@ -129,22 +139,32 @@ function computeItemBillingRows(item) {
       const byEnd = new Map();
       (batch.codes || []).forEach((code) => {
         const pkg = (item.packages || []).find((p) => p.code === code);
-        let cbm = pkg ? Number(pkg.cbm) || 0 : 0;
-        // No per-case CBM on file (common for older Devan/CFS sheets that only declare an
-        // oversize total for the whole lot) - split the declared oversize CBM proportionally
-        // across the batch's cases instead of silently billing $0.
-        if (!hasCbmData && item.isOversize && item.oversizeCbm) cbm = Number(item.oversizeCbm) / totalPkgCount;
+        const osCbm = osMap.get(code);
+        let cbm, mult;
+        if (osCbm != null) {
+          // A named oversize case bills on its declared CBM at its own tier.
+          cbm = osCbm;
+          mult = tierFor(osCbm);
+        } else {
+          cbm = pkg ? Number(pkg.cbm) || 0 : 0;
+          // No per-case CBM on file (common for older Devan/CFS sheets that only declare an
+          // oversize total for the whole lot) - split the declared oversize CBM proportionally
+          // across the batch's cases instead of silently billing $0.
+          if (!hasCbmData && lotOversizeCbm > 0) cbm = lotOversizeCbm / totalPkgCount;
+          mult = namedOversize ? 1 : lotMultiplier;
+        }
         const end = deliveredAt[code] || null;
-        const key = end || "__ongoing__";
-        if (!byEnd.has(key)) byEnd.set(key, { end, cbm: 0, codes: [] });
+        const key = `${end || "__ongoing__"}|${mult}`;
+        if (!byEnd.has(key)) byEnd.set(key, { end, mult, cbm: 0, codes: [] });
         const g = byEnd.get(key);
         g.cbm += cbm;
         g.codes.push(code);
       });
       for (const g of byEnd.values()) {
         if (!(g.cbm > 0)) continue;
-        const calc = computeStorageCharge(batch.date, g.end, freeDays, effectiveRate, g.cbm);
-        if (calc) rows.push({ item, rate: effectiveRate, baseRate: rate, oversizeMultiplier, freeDays, batchDate: batch.date, batchType: batch.type, codes: g.codes, cbm: g.cbm, endDate: g.end, ongoing: !g.end, ...calc });
+        const groupRate = rate * g.mult;
+        const calc = computeStorageCharge(batch.date, g.end, freeDays, groupRate, g.cbm);
+        if (calc) rows.push({ item, rate: groupRate, baseRate: rate, oversizeMultiplier: g.mult, freeDays, batchDate: batch.date, batchType: batch.type, codes: g.codes, cbm: g.cbm, endDate: g.end, ongoing: !g.end, ...calc });
       }
     });
   } else {
@@ -846,6 +866,7 @@ function emptyForm() {
     volumeCbmPackingList: "",
     weightSource: "",
     volumeSource: "",
+    oversizeCases: [],
     shkNumber: "",
     ssDoNo: "",
     containers20: "",
@@ -1435,7 +1456,11 @@ const TEXT = {
     legacySelectedTotals: (count, kg, cbm) => `Selected: ${count} pkg${count === 1 ? "" : "s"} \u00b7 ${kg} kg \u00b7 ${cbm} cbm`,
     legacySelectedTotalsGrand: (count, kg, cbm) => `Total selected across all entries: ${count} pkg${count === 1 ? "" : "s"} \u00b7 ${kg} kg \u00b7 ${cbm} cbm`,
     legacyDeliveryDeclaredLabel: "On this delivery sheet:",
-    legacyOversizeCasesPh: "e.g. 13/23",
+    legacyOversizeCasesPh: "e.g. 14/21",
+    legacyOversizeCaseCol: "Case",
+    legacyOversizeAdd: "+ Add oversize case",
+    legacyOversizeRemove: "Remove",
+    legacyOversizeTotal: (n, cbm) => `${n} oversize cases \u00b7 ${cbm} cbm total \u00b7 each bills at its own tier`,
     legacyOversizeDeliveryHint: "Prints in the OVERSIZE CASES box on this delivery sheet",
     legacyDeliveryDeclaredGap: (declaredKg, listedKg, pct, heavier) =>
       `Sheet declares ${declaredKg} kg; the cases selected come to ${listedKg} kg on the packing list (${heavier ? "+" : "\u2212"}${pct}%). The sheet's figure is recorded.`,
@@ -2021,7 +2046,11 @@ const TEXT = {
     legacySelectedTotals: (count, kg, cbm) => `已選：${count} 件 \u00b7 ${kg} kg \u00b7 ${cbm} cbm`,
     legacySelectedTotalsGrand: (count, kg, cbm) => `全部已選（合計）：${count} 件 \u00b7 ${kg} kg \u00b7 ${cbm} cbm`,
     legacyDeliveryDeclaredLabel: "此送貨單據數據：",
-    legacyOversizeCasesPh: "例如 13/23",
+    legacyOversizeCasesPh: "例如 14/21",
+    legacyOversizeCaseCol: "件號",
+    legacyOversizeAdd: "+ 新增超大件",
+    legacyOversizeRemove: "移除",
+    legacyOversizeTotal: (n, cbm) => `${n} 件超大件 \u00b7 合計 ${cbm} cbm \u00b7 各按其級距計費`,
     legacyOversizeDeliveryHint: "會列印於此送貨單的「超大件」欄",
     legacyDeliveryDeclaredGap: (declaredKg, listedKg, pct, heavier) =>
       `單據列明 ${declaredKg} kg；所選件號按裝箱單合計 ${listedKg} kg（${heavier ? "+" : "\u2212"}${pct}%）。記錄以單據為準。`,
@@ -3552,14 +3581,14 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
   // A delivery sheet carries its own OVERSIZE CASES box - the cases going out on this
   // job, named case by case ("L13#13/23@4.49CBM") - so it prints what was recorded
   // against the delivery rather than re-deriving the whole lot's oversize cases.
-  const deliveryOversize = isDelivery && delivery && delivery.oversize && declaredNum(delivery.oversize.cbm) != null
-    ? delivery.oversize
-    : null;
-  const showOversize = deliveryOversize
+  const deliveryOversizeCases = isDelivery && delivery && delivery.oversize
+    ? cleanOversizeCases(delivery.oversize.cases)
+    : [];
+  const showOversize = deliveryOversizeCases.length > 0
     ? true
     : (["Devan", "CFS"].includes(template) && !!OVERSIZE_RULES[item.client]);
-  const oversizeText = deliveryOversize
-    ? `${deliveryOversize.cases ? `#${deliveryOversize.cases} ` : ""}@${deliveryOversize.cbm}CBM`
+  const oversizeText = deliveryOversizeCases.length > 0
+    ? deliveryOversizeCases.map((c) => `${c.code ? `#${c.code} ` : ""}@${c.cbm}CBM`).join("\n")
     : (showOversize ? computeOversizeText(item) : "");
 
   const pkgs = isDelivery ? (delivery.codes ? delivery.codes.length : Number(delivery.packageCount) || 0) : totalUnits(item);
@@ -4510,25 +4539,30 @@ function guessFieldsFromWorkbook(wb) {
   // "OVERSIZE CASES: L13@4.49CBM, L14@4.49CBM" - these lots have no per-case CBM data of
   // their own, so this figure is the only CBM basis available for them, and oversize
   // cargo bills at a higher rate.
+  // OVERSIZE CASES, as Irene writes them:
+  //   P2#14/21@3.92CBM, P4#7/29@3.96CBM, #8/29@3.26CBM, #21/29@5.28CBM
+  //   L13@4.49CBM, L14@4.49CBM
+  // A lot can carry several oversize cases, and after the first the lot prefix is dropped
+  // - "#8/29" still belongs to P4. Some sheets name no case at all and give one figure for
+  // the whole lot. All three shapes land in the same structure: lot -> [{code, cbm}].
   out.oversizeByLot = {};
-  out.oversizeCasesByLot = {};
-  const oversizeSectionMatch = flatText.match(/oversize\s*cases?[:\uff1a]?\s*([\s\S]{0,400}?)(?:\n\s*\n|$)/i);
+  const oversizeSectionMatch = flatText.match(/oversize\s*cases?[:\uff1a]?\s*([\s\S]{0,600}?)(?:\n\s*\n|$)/i);
   if (oversizeSectionMatch) {
-    // Two forms in use. A Devan names the lot only - "L13@4.49CBM". A delivery sheet
-    // names the case as well - "L13#13/23@4.49CBM" - because by then it is one specific
-    // case leaving the depot. The old pattern allowed neither "#" nor "/" before the @,
-    // so on a delivery it captured the tail of the case number ("23") as the lot name and
-    // the entry could never be matched back to L13.
-    const pairs = [...oversizeSectionMatch[1].matchAll(
-      /([A-Za-z0-9\-]+?)\s*(?:#\s*([0-9,\/\- ]+?))?\s*@\s*([\d,]+(?:\.\d+)?)\s*CBM/gi
+    const entries = [...oversizeSectionMatch[1].matchAll(
+      /(?:([A-Za-z][A-Za-z0-9\-]*)\s*)?(?:#\s*([0-9]+(?:\s*\/\s*[0-9]+)?))?\s*@\s*([\d,]+(?:\.\d+)?)\s*CBM/gi
     )];
-    for (const p of pairs) {
-      const lot = p[1].trim();
+    let carriedLot = "";
+    for (const e of entries) {
+      const lot = (e[1] || "").trim() || carriedLot;
       if (!lot) continue;
-      out.oversizeByLot[lot] = p[3].replace(/,/g, "");
-      if (p[2]) out.oversizeCasesByLot[lot] = p[2].trim();
+      carriedLot = lot;
+      const code = (e[2] || "").replace(/\s+/g, "");
+      const cbm = e[3].replace(/,/g, "");
+      if (!out.oversizeByLot[lot]) out.oversizeByLot[lot] = [];
+      out.oversizeByLot[lot].push({ code, cbm });
     }
   }
+
 
   return out;
 }
@@ -4596,6 +4630,33 @@ function sumSelectedPackages(packages, codes) {
 // volume and billing, the packing-list sum is kept alongside it as the per-case record,
 // and the difference is shown rather than treated as an error.
 // ---------------------------------------------------------------------------
+// Older rows stored one figure per lot; keep them readable alongside the case list.
+function normaliseOversize(v) {
+  if (!v) return { checked: false, cases: [{ code: "", cbm: "" }] };
+  if (Array.isArray(v.cases)) return { checked: !!v.checked, cases: v.cases.length ? v.cases : [{ code: "", cbm: "" }] };
+  return { checked: !!v.checked, cases: [{ code: typeof v.cases === "string" ? v.cases : "", cbm: v.cbm || "" }] };
+}
+function cleanOversizeCases(cases) {
+  return (cases || [])
+    .map((c) => ({ code: String(c.code || "").trim(), cbm: String(c.cbm || "").trim() }))
+    .filter((c) => Number(c.cbm) > 0);
+}
+function oversizeCasesOf(item) {
+  const list = cleanOversizeCases(item.oversizeCases);
+  if (list.length) return list;
+  // Pre-existing items carry a single lot-level figure and no case codes.
+  if (item.isOversize && Number(item.oversizeCbm) > 0) return [{ code: "", cbm: String(item.oversizeCbm) }];
+  return [];
+}
+function oversizeCbmTotal(cases) {
+  return Math.round(cleanOversizeCases(cases).reduce((s, c) => s + Number(c.cbm), 0) * 1000) / 1000;
+}
+// Codes that carry their own oversize CBM, and therefore their own rate tier.
+function oversizeCaseMap(item) {
+  const m = new Map();
+  for (const c of oversizeCasesOf(item)) if (c.code) m.set(c.code, Number(c.cbm));
+  return m;
+}
 function declaredContextKey(s) {
   return String(s || "").toUpperCase().replace(/[^A-Z0-9]+/g, "");
 }
@@ -4848,6 +4909,57 @@ function groupPackagesByOrder(pkgs) {
   }
   return order.map((k) => ({ orderNo: k, packages: groups[k] }));
 }
+// Oversize cases for one lot. A lot can have several - P4 ships #7/29, #8/29 and #21/29
+// at three different volumes - and each is priced on its own CBM, so they are held as a
+// list of {code, cbm} rather than one figure for the lot.
+function OversizeCasesEditor({ value, onToggle, onCases, colors, t, inputClass, inputStyle }) {
+  const cases = value.cases && value.cases.length ? value.cases : [{ code: "", cbm: "" }];
+  const patch = (i, p) => onCases(cases.map((c, k) => (k === i ? { ...c, ...p } : c)));
+  const total = cases.reduce((s, c) => s + (Number(c.cbm) || 0), 0);
+  return (
+    <div className="rounded px-2 py-2" style={{ background: value.checked ? colors.amberSoft : "transparent" }}>
+      <label className="flex items-center gap-1.5 text-xs font-semibold" style={{ color: colors.ink }}>
+        <input type="checkbox" checked={!!value.checked} onChange={(e) => onToggle(e.target.checked)} />
+        {t.legacyOversizeLabel}
+      </label>
+      {value.checked && (
+        <div className="mt-1.5 flex flex-col gap-1.5">
+          {cases.map((c, i) => (
+            <div key={i} className="flex flex-wrap items-center gap-2">
+              <span className="text-xs" style={{ color: colors.inkFaint, width: 34 }}>{t.legacyOversizeCaseCol}</span>
+              <input
+                className={inputClass}
+                style={{ ...inputStyle, width: 96, fontSize: 12, padding: "4px 8px" }}
+                placeholder={t.legacyOversizeCasesPh}
+                value={c.code || ""}
+                onChange={(e) => patch(i, { code: e.target.value })}
+              />
+              <input
+                type="number" min="0" step="0.001"
+                className={inputClass}
+                style={{ ...inputStyle, width: 86, fontSize: 12, padding: "4px 8px" }}
+                placeholder={t.jsCbm}
+                value={c.cbm || ""}
+                onChange={(e) => patch(i, { cbm: e.target.value })}
+              />
+              {cases.length > 1 && (
+                <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }}
+                  onClick={() => onCases(cases.filter((_, k) => k !== i))}>{t.legacyOversizeRemove}</button>
+              )}
+            </div>
+          ))}
+          <div className="flex flex-wrap items-center gap-3">
+            <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }}
+              onClick={() => onCases([...cases, { code: "", cbm: "" }])}>{t.legacyOversizeAdd}</button>
+            <span className="text-xs" style={{ color: colors.inkFaint }}>
+              {cases.length > 1 ? t.legacyOversizeTotal(cases.length, Math.round(total * 1000) / 1000) : t.legacyOversizeHint}
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 // One editable set of figures for a total the sheet states once across several lots.
 function SharedDeclaredTotal({ group, value, onPatch, colors, t, inputClass, inputStyle }) {
   const names = group.lots.map((l) => l.unitCode || l.id).join(", ");
@@ -4902,12 +5014,14 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
   }
   const oversizeByIncoming = row.oversizeByIncoming || {};
   function getOversizeFor(inc) {
-    if (oversizeByIncoming[inc.id] !== undefined) return oversizeByIncoming[inc.id];
-    const detectedCbm = (row.oversizeByLot || {})[inc.unitCode];
-    return { checked: !!detectedCbm, cbm: detectedCbm || "" };
+    if (oversizeByIncoming[inc.id] !== undefined) return normaliseOversize(oversizeByIncoming[inc.id]);
+    const detected = (row.oversizeByLot || {})[inc.unitCode];
+    return detected && detected.length
+      ? { checked: true, cases: detected.map((c) => ({ code: c.code || "", cbm: c.cbm || "" })) }
+      : { checked: false, cases: [{ code: "", cbm: "" }] };
   }
   function setOversizeFor(inc, patch) {
-    const cur = getOversizeFor(inc);
+    const cur = normaliseOversize(getOversizeFor(inc));
     onChange({ ...row, oversizeByIncoming: { ...oversizeByIncoming, [inc.id]: { ...cur, ...patch } } });
   }
   // Totals as declared on this sheet, per matched lot. Pre-filled from the sheet's own
@@ -4981,13 +5095,14 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
   // inferred from whatever was flagged when the lot arrived.
   const oversizeByDeliveryItem = row.oversizeByDeliveryItem || {};
   function getDeliveryOversizeFor(it) {
-    if (oversizeByDeliveryItem[it.id] !== undefined) return oversizeByDeliveryItem[it.id];
-    const cbm = (row.oversizeByLot || {})[it.unitCode];
-    const cases = (row.oversizeCasesByLot || {})[it.unitCode] || "";
-    return { checked: !!cbm, cbm: cbm || "", cases };
+    if (oversizeByDeliveryItem[it.id] !== undefined) return normaliseOversize(oversizeByDeliveryItem[it.id]);
+    const detected = (row.oversizeByLot || {})[it.unitCode];
+    return detected && detected.length
+      ? { checked: true, cases: detected.map((c) => ({ code: c.code || "", cbm: c.cbm || "" })) }
+      : { checked: false, cases: [{ code: "", cbm: "" }] };
   }
   function setDeliveryOversizeFor(it, patch) {
-    const cur = getDeliveryOversizeFor(it);
+    const cur = normaliseOversize(getDeliveryOversizeFor(it));
     onChange({ ...row, oversizeByDeliveryItem: { ...oversizeByDeliveryItem, [it.id]: { ...cur, ...patch } } });
   }
   function toggleItemCode(itemId, code) {
@@ -5162,22 +5277,13 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
                       <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => selectAllIncoming(inc.id, remainingPkgs)}>{t.selectAllBtn}</button>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 mb-2 px-2 py-1.5 rounded" style={{ background: oversize.checked ? colors.amberSoft : "transparent" }}>
-                    <label className="flex items-center gap-1.5 text-xs font-semibold" style={{ color: oversize.checked ? colors.amberText : colors.inkFaint }}>
-                      <input type="checkbox" checked={oversize.checked} onChange={(e) => setOversizeFor(inc, { checked: e.target.checked })} />
-                      {t.legacyOversizeLabel}
-                    </label>
-                    {oversize.checked && (
-                      <input
-                        type="number" min="0" step="0.01"
-                        className={inputClass}
-                        style={{ ...inputStyleFor(colors), width: 90, fontSize: 12, padding: "4px 8px" }}
-                        placeholder={t.legacyOversizeCbmPlaceholder}
-                        value={oversize.cbm}
-                        onChange={(e) => setOversizeFor(inc, { cbm: e.target.value })}
-                      />
-                    )}
-                    {oversize.checked && <span className="text-xs" style={{ color: colors.inkFaint }}>{t.legacyOversizeHint}</span>}
+                  <div className="mb-2">
+                    <OversizeCasesEditor
+                      value={oversize}
+                      onToggle={(checked) => setOversizeFor(inc, { checked })}
+                      onCases={(cases) => setOversizeFor(inc, { cases })}
+                      colors={colors} t={t} inputClass={inputClass} inputStyle={inputStyleFor(colors)}
+                    />
                   </div>
                   {selectedCodes.length > 0 && (
                     <div className="mb-2">
@@ -5356,35 +5462,13 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
                           )}
                         </div>
                       )}
-                      <div className="flex flex-wrap items-center gap-2 mt-1.5">
-                        <label className="flex items-center gap-1.5 text-xs font-semibold" style={{ color: colors.ink }}>
-                          <input
-                            type="checkbox"
-                            checked={!!dOversize.checked}
-                            onChange={(e) => setDeliveryOversizeFor(it, { checked: e.target.checked })}
-                          />
-                          {t.legacyOversizeLabel}
-                        </label>
-                        {dOversize.checked && (
-                          <>
-                            <input
-                              className={inputClass}
-                              style={{ ...inputStyleFor(colors), width: 124, fontSize: 12, padding: "4px 8px" }}
-                              placeholder={t.legacyOversizeCasesPh}
-                              value={dOversize.cases || ""}
-                              onChange={(e) => setDeliveryOversizeFor(it, { cases: e.target.value })}
-                            />
-                            <input
-                              type="number" min="0" step="0.001"
-                              className={inputClass}
-                              style={{ ...inputStyleFor(colors), width: 86, fontSize: 12, padding: "4px 8px" }}
-                              placeholder={t.jsCbm}
-                              value={dOversize.cbm || ""}
-                              onChange={(e) => setDeliveryOversizeFor(it, { cbm: e.target.value })}
-                            />
-                            <span className="text-xs" style={{ color: colors.inkFaint }}>{t.legacyOversizeDeliveryHint}</span>
-                          </>
-                        )}
+                      <div className="mt-1.5">
+                        <OversizeCasesEditor
+                          value={dOversize}
+                          onToggle={(checked) => setDeliveryOversizeFor(it, { checked })}
+                          onCases={(cases) => setDeliveryOversizeFor(it, { cases })}
+                          colors={colors} t={t} inputClass={inputClass} inputStyle={inputStyleFor(colors)}
+                        />
                       </div>
                     </div>
                   )}
@@ -5834,7 +5918,9 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
           for (const inc of matchedIncomings) {
             const codes = selectedByIncoming[inc.id] || [];
             if (codes.length === 0) continue;
-            const oversize = (row.oversizeByIncoming || {})[inc.id] || { checked: !!(row.oversizeByLot || {})[inc.unitCode], cbm: (row.oversizeByLot || {})[inc.unitCode] || "" };
+            const detectedOs = (row.oversizeByLot || {})[inc.unitCode];
+            const oversize = normaliseOversize((row.oversizeByIncoming || {})[inc.id]
+              || (detectedOs && detectedOs.length ? { checked: true, cases: detectedOs } : null));
             const declaredEdited = (row.declaredByIncoming || {})[inc.id];
             const declaredParsed = incomingDeclaredDist[inc.id];
             // Same precedence the row displayed: a lot inside a shared total is driven by
@@ -5858,8 +5944,9 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
                 ssDoNo: row.ssDoNo,
                 shkNumber: row.shkNumber,
                 jobRef: row.jobRef,
-                isOversize: !!(oversize.checked && oversize.cbm),
-                oversizeCbm: oversize.checked ? oversize.cbm : "",
+                isOversize: !!(oversize.checked && cleanOversizeCases(oversize.cases).length),
+                oversizeCases: oversize.checked ? cleanOversizeCases(oversize.cases) : [],
+                oversizeCbm: oversize.checked ? String(oversizeCbmTotal(oversize.cases) || "") : "",
               },
               archiveEntry,
             });
@@ -5969,12 +6056,11 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
                 ? { kg: declared.kg || "", cbm: declared.cbm || "", split: !!declared.split }
                 : null,
               oversize: (() => {
-                const os = (row.oversizeByDeliveryItem || {})[itemId] || {
-                  checked: !!(row.oversizeByLot || {})[itemUnitCode],
-                  cbm: (row.oversizeByLot || {})[itemUnitCode] || "",
-                  cases: (row.oversizeCasesByLot || {})[itemUnitCode] || "",
-                };
-                return os.checked && declaredNum(os.cbm) != null ? { cbm: String(os.cbm), cases: os.cases || "" } : null;
+                const detected = (row.oversizeByLot || {})[itemUnitCode];
+                const os = normaliseOversize((row.oversizeByDeliveryItem || {})[itemId]
+                  || (detected && detected.length ? { checked: true, cases: detected } : null));
+                const list = os.checked ? cleanOversizeCases(os.cases) : [];
+                return list.length ? { cases: list, cbm: String(oversizeCbmTotal(list)) } : null;
               })(),
             },
             archiveEntry,
@@ -7603,7 +7689,8 @@ export default function FarspeedInventory() {
         counter += 1;
         const totalWeight = inc.packages.reduce((s, p) => s + (Number(p.weightKg) || 0), 0);
         const totalCbm = inc.packages.reduce((s, p) => s + (Number(p.cbm) || 0), 0);
-        const oversizeCbmVal = op.isOversize ? Number(op.oversizeCbm) || 0 : 0;
+        const opOversizeCases = cleanOversizeCases(op.oversizeCases);
+        const oversizeCbmVal = op.isOversize ? (oversizeCbmTotal(opOversizeCases) || Number(op.oversizeCbm) || 0) : 0;
         const effectiveCbm = oversizeCbmVal > 0 ? oversizeCbmVal : totalCbm;
         const newItem = {
           ...emptyForm(),
@@ -7616,6 +7703,7 @@ export default function FarspeedInventory() {
           weightKg: totalWeight ? String(Math.round(totalWeight * 10) / 10) : "",
           volumeCbm: effectiveCbm ? String(Math.round(effectiveCbm * 1000) / 1000) : "",
           isOversize: oversizeCbmVal > 0,
+          oversizeCases: opOversizeCases,
           oversizeCbm: oversizeCbmVal > 0 ? String(oversizeCbmVal) : "",
           packages: inc.packages, arrivals: [batch], deliveries: [],
           notes: t.incomingCheckedInNote(inc.id), numericId: counter,
