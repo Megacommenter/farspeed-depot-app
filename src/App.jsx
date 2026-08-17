@@ -454,6 +454,23 @@ function plGuessClient(rows) {
   return null;
 }
 function plGuessProject(rows) {
+  // "Project Name" can appear two ways. On a job-sheet-style layout it's a label with the
+  // value in the cell beside it. On Schindler's booking workbook it's a column header in
+  // the table, with "Destination Port" as the next header along - reading rightwards
+  // there returns the neighbouring header instead of a project. So when the label sits in
+  // a detected header row, take the first real value from underneath it.
+  const headerIdx = plDetectHeaderRow(rows);
+  if (headerIdx !== -1) {
+    const headerRow = rows[headerIdx] || [];
+    for (let i = 0; i < headerRow.length; i++) {
+      const n = plNorm(headerRow[i]);
+      if (n !== "project" && n !== "project name" && n !== "project name:") continue;
+      for (let r = headerIdx + 1; r < rows.length; r++) {
+        const v = String((rows[r] || [])[i] || "").trim();
+        if (v) return v;
+      }
+    }
+  }
   for (const row of rows.slice(0, 25)) {
     for (let i = 0; i < row.length; i++) {
       const n = plNorm(row[i]);
@@ -536,7 +553,10 @@ function parsePackingListSheet(rows, legend) {
     // number paired with real weight or CBM is equally good evidence of a genuine row.
     if (!description && !(caseNo && (weight || cbm))) continue;
 
-    const key = translateLot(lastLot) || "UNSPECIFIED";
+    // Schindler's booking workbooks carry no lift/SAP column - the lot identity is the
+    // OMC Sales Order no. (60789730, 60789890), one per lift. Without this the whole
+    // sheet collapsed into a single UNSPECIFIED group.
+    const key = translateLot(lastLot) || (colMap.lot === undefined ? lastOrderNo : "") || "UNSPECIFIED";
     if (!groups[key]) { groups[key] = { lot: key, packages: [], containers: new Set(), totalWeight: 0, totalCbm: 0 }; order.push(key); }
     groups[key].packages.push({ code: lastCase || String(groups[key].packages.length + 1), orderNo: lastOrderNo, description, weightKg: weight ? String(weight) : "", cbm: cbm ? String(cbm) : "" });
     if (lastContainer) groups[key].containers.add(lastContainer);
@@ -558,13 +578,25 @@ function parsePackingListSheet(rows, legend) {
       }
     }
   }
-  return { groups: order.map((k) => ({ ...groups[k], containers: [...groups[k].containers] })), hasLotColumn: colMap.lot !== undefined };
+  // Where the order number stood in as the lot, repeating it as a per-package order
+  // heading would just print "60789730 / 60789730" above its own cases.
+  for (const key of order) {
+    for (const p of groups[key].packages) if (p.orderNo && p.orderNo === key) p.orderNo = "";
+  }
+  const identifiedLots = colMap.lot !== undefined
+    || (colMap.orderNo !== undefined && order.length > 0 && !order.includes("UNSPECIFIED"));
+  return { groups: order.map((k) => ({ ...groups[k], containers: [...groups[k].containers] })), hasLotColumn: identifiedLots };
 }
 function parsePackingListWorkbook(workbook) {
   let bestGroups = null;
   let bestHasLotColumn = false;
   let client = null;
   let project = "";
+  // Schindler workbooks pair a case-level "packing list_Head" sheet with a much longer
+  // "Packing List Contents" sheet that breaks every case down into its component lines.
+  // Both parse, but only the Head sheet is one row per case - Contents would turn twenty
+  // cases into four hundred packages - so it wins outright wherever it exists.
+  let headSheetUsed = false;
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName];
     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: true });
@@ -574,6 +606,12 @@ function parsePackingListWorkbook(workbook) {
     const result = parsePackingListSheet(rows, legend);
     if (!result || !result.groups || result.groups.length === 0) continue;
     const { groups, hasLotColumn } = result;
+    const isHeadSheet = /packing\s*list[\s_\-]*head/i.test(sheetName);
+    if (isHeadSheet && !headSheetUsed) {
+      bestGroups = groups; bestHasLotColumn = hasLotColumn; headSheetUsed = true;
+      continue;
+    }
+    if (headSheetUsed) continue;
     // A sheet that actually identifies lift/lot numbers is preferred over one that had to
     // lump everything into a single UNSPECIFIED group, even if the latter has more raw
     // rows (that's often a material/component breakdown sheet, not the case-level one).
