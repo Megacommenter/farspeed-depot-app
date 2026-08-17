@@ -802,6 +802,12 @@ function emptyForm() {
     description: "",
     weightKg: "",
     volumeCbm: "",
+    // Kept alongside weightKg so the manufacturer's per-case figures survive even after
+    // the Devan/CFS sheet total takes over as the billing weight.
+    weightPackingListKg: "",
+    volumeCbmPackingList: "",
+    weightSource: "",
+    volumeSource: "",
     shkNumber: "",
     ssDoNo: "",
     containers20: "",
@@ -1390,6 +1396,17 @@ const TEXT = {
     legacyTypeSelectBtn: "Add",
     legacySelectedTotals: (count, kg, cbm) => `Selected: ${count} pkg${count === 1 ? "" : "s"} \u00b7 ${kg} kg \u00b7 ${cbm} cbm`,
     legacySelectedTotalsGrand: (count, kg, cbm) => `Total selected across all entries: ${count} pkg${count === 1 ? "" : "s"} \u00b7 ${kg} kg \u00b7 ${cbm} cbm`,
+    incomingDeclaredLabel: "Totals on the Devan/CFS sheet (optional)",
+    legacyDeclaredLabel: "On this sheet:",
+    legacyDeclaredHint: "Sheet totals are used for storage, handling and billing. The packing-list weight stays on record case by case.",
+    legacyDeclaredKgGap: (kg, heavier, pct) => heavier
+      ? `Sheet is ${kg} kg heavier than the packing list (+${pct}%) \u2014 expected, it includes crating and skids on truss sections.`
+      : `Sheet is ${kg} kg lighter than the packing list (\u2212${pct}%) \u2014 worth checking before you process it.`,
+    legacyDeclaredPkgsGap: (declared, selected) => `Sheet counts ${declared} package${declared === 1 ? "" : "s"}, you selected ${selected}.`,
+    fWeightFromSheet: "From the Devan/CFS sheet",
+    fWeightPackingList: (kg) => `Packing list: ${kg} kg`,
+    fVolumePackingList: (cbm) => `Packing list: ${cbm} cbm`,
+    fVolumeFromOversize: "Oversize CBM \u2014 sets the billing tier, so it outranks the sheet total",
     legacyMatchedItem: (id) => `Delivering from ${id}`,
     legacyArrivalStaysOpenHint: "Stays open at the depot until a matching Delivery file is uploaded (or you record a delivery for it normally).",
     legacyNoReferralHint: "No \"Ref Job no.\" line detected \u2014 enter the arrival's job number manually, or this file will only be archived.",
@@ -1956,6 +1973,17 @@ const TEXT = {
     legacyTypeSelectBtn: "加入",
     legacySelectedTotals: (count, kg, cbm) => `已選：${count} 件 \u00b7 ${kg} kg \u00b7 ${cbm} cbm`,
     legacySelectedTotalsGrand: (count, kg, cbm) => `全部已選（合計）：${count} 件 \u00b7 ${kg} kg \u00b7 ${cbm} cbm`,
+    incomingDeclaredLabel: "拆櫃／CFS 單據總數（可留空）",
+    legacyDeclaredLabel: "此單據數據：",
+    legacyDeclaredHint: "倉租、裝卸及收費以單據數據為準；裝箱單重量仍按件保留記錄。",
+    legacyDeclaredKgGap: (kg, heavier, pct) => heavier
+      ? `單據比裝箱單重 ${kg} kg（+${pct}%）\u2014 屬正常，單據已包含桁架段的木箱及卡板。`
+      : `單據比裝箱單輕 ${kg} kg（\u2212${pct}%）\u2014 處理前請先核對。`,
+    legacyDeclaredPkgsGap: (declared, selected) => `單據件數為 ${declared} 件，現選 ${selected} 件。`,
+    fWeightFromSheet: "取自拆櫃／CFS 單據",
+    fWeightPackingList: (kg) => `裝箱單：${kg} kg`,
+    fVolumePackingList: (cbm) => `裝箱單：${cbm} cbm`,
+    fVolumeFromOversize: "超大件 CBM \u2014 收費級距按此計算，優先於單據總數",
     legacyMatchedItem: (id) => `送出自 ${id}`,
     legacyArrivalStaysOpenHint: "此記錄會保持在倉狀態，直至上載對應的送貨檔案（或日後手動記錄送貨）為止。",
     legacyNoReferralHint: "未有偵測到「Ref Job no.」字句 — 請手動輸入到倉工單號，否則此檔案只會被存檔。",
@@ -2269,10 +2297,22 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, directory, emplo
           <input className={inputClass} style={inputStyle} value={form.ssDoNo || ""} onChange={set("ssDoNo")} placeholder={'ex ss."SHIP" V.___; CONTAINERS NO. ___'} />
         </Field>
 
-        <Field label={t.fWeight} colors={colors}>
+        <Field
+          label={t.fWeight}
+          hint={form.weightSource === "declared"
+            ? `${t.fWeightFromSheet}${form.weightPackingListKg ? ` \u00b7 ${t.fWeightPackingList(form.weightPackingListKg)}` : ""}`
+            : undefined}
+          colors={colors}
+        >
           <input type="number" className={inputClass} style={inputStyle} value={form.weightKg} onChange={set("weightKg")} />
         </Field>
-        <Field label={t.fVolume} colors={colors}>
+        <Field
+          label={t.fVolume}
+          hint={form.volumeSource
+            ? `${form.volumeSource === "oversize" ? t.fVolumeFromOversize : t.fWeightFromSheet}${form.volumeCbmPackingList ? ` \u00b7 ${t.fVolumePackingList(form.volumeCbmPackingList)}` : ""}`
+            : undefined}
+          colors={colors}
+        >
           <input type="number" className={inputClass} style={inputStyle} value={form.volumeCbm} onChange={set("volumeCbm")} />
         </Field>
         <div />
@@ -4347,6 +4387,35 @@ function guessFieldsFromWorkbook(wb) {
   const cbmMatch = totalsText.match(/([\d,]+(?:\.\d+)?)\s*CBM/i) || flatText.match(/([\d,]+(?:\.\d+)?)\s*CBM/i);
   if (cbmMatch) out.volumeCbm = cbmMatch[1].replace(/,/g, "");
 
+  // One sheet usually covers several lots, each closed by its own "共:" line - the ES1
+  // Devan sheet has one for the escalator and two more for elevator lots below it.
+  // Collect every total line together with the heading text directly above it, so each
+  // lot's declared figures can be matched to the Incoming shipment they actually belong
+  // to instead of assuming the first total on the page covers the whole file.
+  out.declaredTotalsList = [];
+  const totalLines = flatText.split("\n");
+  for (let li = 0; li < totalLines.length; li++) {
+    if (!/(?:共|total)\s*[:\uff1a]/i.test(totalLines[li])) continue;
+    const pk = totalLines[li].match(/(\d+)\s*PKGS?/i);
+    const kg = totalLines[li].match(/([\d,]+(?:\.\d+)?)\s*KGS?/i);
+    const cb = totalLines[li].match(/([\d,]+(?:\.\d+)?)\s*CBM/i);
+    if (!pk && !kg && !cb) continue;
+    const heading = [];
+    for (let bi = li - 1; bi >= 0 && heading.length < 4; bi--) {
+      const prev = String(totalLines[bi] || "").trim();
+      if (!prev) continue;
+      if (/^C\/S\s*NO\.?/i.test(prev)) continue; // case rows carry no lot identity
+      if (/(?:共|total)\s*[:\uff1a]/i.test(prev)) break; // reached the lot above
+      heading.push(prev);
+    }
+    out.declaredTotalsList.push({
+      pkgs: pk ? pk[1] : "",
+      kg: kg ? kg[1].replace(/,/g, "") : "",
+      cbm: cb ? cb[1].replace(/,/g, "") : "",
+      context: heading.reverse().join(" ").slice(0, 160),
+    });
+  }
+
   const ssShipMatch = flatText.match(/ex\s*ss\.?\s*"[^"]+"[^\n]*/i);
   if (ssShipMatch && !out.ssDoNo) out.ssDoNo = ssShipMatch[0].trim();
 
@@ -4412,6 +4481,114 @@ function sumSelectedPackages(packages, codes) {
     cbm: matched.reduce((s, p) => s + (Number(p.cbm) || 0), 0),
   };
 }
+// ---------------------------------------------------------------------------
+// Declared totals (Devan/CFS sheet) vs packing-list totals.
+//
+// Two weights legitimately exist for the same cargo. The manufacturer's detail
+// packing list gives a gross weight per case; the Devan/CFS sheet gives a total taken
+// from the carrier paperwork, which on escalator jobs runs heavier because it includes
+// the crating and skids on the truss sections. Worked example - SHK0959/25 ES1: the
+// four parts boxes agree exactly (1,130 kg both ways) while 501/502/503 come in
+// +380/+635/+375, a 1,390 kg gap on an otherwise identical shipment.
+//
+// Per Schindler (Irene), the Devan figure is the accurate one and any real discrepancy
+// is settled on paperwork that never reaches this server. So declared wins for weight,
+// volume and billing, the packing-list sum is kept alongside it as the per-case record,
+// and the difference is shown rather than treated as an error.
+// ---------------------------------------------------------------------------
+function declaredContextKey(s) {
+  return String(s || "").toUpperCase().replace(/[^A-Z0-9]+/g, "");
+}
+function declaredMatchesIncoming(context, inc) {
+  const key = declaredContextKey(context);
+  if (!key) return false;
+  const candidates = [inc.unitCode, inc.shkNumber].filter(Boolean);
+  for (const raw of candidates) {
+    for (const part of String(raw).split(/[,;]/)) {
+      const needle = declaredContextKey(part);
+      // Require a non-digit boundary after the match so "ES1" doesn't match "ES12".
+      if (needle.length >= 2 && new RegExp(`${needle}(?![0-9])`).test(key)) return true;
+    }
+  }
+  return false;
+}
+// Picks the total line belonging to this Incoming. Falls back to the sheet's only total
+// when there is exactly one, since a single-lot sheet needs no disambiguation.
+function pickDeclaredForIncoming(list, inc) {
+  const all = list || [];
+  const hit = all.find((d) => declaredMatchesIncoming(d.context, inc));
+  if (hit) return hit;
+  if (all.length === 1) return all[0];
+  return null;
+}
+function declaredNum(v) {
+  const n = Number(String(v == null ? "" : v).replace(/,/g, ""));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+// `totals` is the packing-list sum of the selected cases, `declared` the sheet figures.
+function computeDeclaredVariance(totals, declared) {
+  if (!declared) return null;
+  const out = { any: false };
+  const pair = (key, listed, raw) => {
+    const d = declaredNum(raw);
+    if (d == null || !(listed > 0)) return null;
+    const delta = d - listed;
+    const pct = (delta / listed) * 100;
+    if (Math.abs(pct) >= 0.05) out.any = true;
+    return { declared: d, listed, delta, pct };
+  };
+  out.pkgs = pair("pkgs", totals.count, declared.pkgs);
+  out.kg = pair("kg", totals.weight, declared.kg);
+  out.cbm = pair("cbm", totals.cbm, declared.cbm);
+  if (out.pkgs && out.pkgs.delta !== 0) out.any = true;
+  return out;
+}
+// Recomputes an item's headline weight/volume from its arrival batches. A batch that
+// carried declared figures contributes those; a batch checked in without a sheet (the
+// Incoming tab, manual entry) contributes the packing-list weight of its own cases. An
+// explicit oversize CBM still outranks everything, as it did before.
+function recomputeItemTotals(item) {
+  const pkgs = item.packages || [];
+  const listedWeight = pkgs.reduce((s, p) => s + (Number(p.weightKg) || 0), 0);
+  const listedCbm = pkgs.reduce((s, p) => s + (Number(p.cbm) || 0), 0);
+  const arrivals = (item.arrivals || []).filter((a) => !a.voided);
+  const anyDeclaredKg = arrivals.some((a) => a.declared && declaredNum(a.declared.kg) != null);
+  const anyDeclaredCbm = arrivals.some((a) => a.declared && declaredNum(a.declared.cbm) != null);
+
+  const next = {
+    ...item,
+    weightPackingListKg: listedWeight ? String(Math.round(listedWeight * 10) / 10) : "",
+    volumeCbmPackingList: listedCbm ? String(Math.round(listedCbm * 1000) / 1000) : "",
+    weightSource: anyDeclaredKg ? "declared" : "",
+    volumeSource: "",
+  };
+  const oversizeCbm = item.isOversize ? declaredNum(item.oversizeCbm) : null;
+  if (oversizeCbm != null) next.volumeSource = "oversize";
+  else if (anyDeclaredCbm) next.volumeSource = "declared";
+  if (!anyDeclaredKg && !anyDeclaredCbm) return next;
+
+  // Weight and volume are resolved independently, so a sheet that states only one of
+  // them doesn't drag the other off the packing list. Within each, a batch that carried
+  // a sheet figure contributes it; a batch checked in without one contributes the
+  // packing-list total of its own cases.
+  let weight = 0;
+  let cbm = 0;
+  for (const a of arrivals) {
+    const batchListed = sumSelectedPackages(pkgs, a.codes || []);
+    const dKg = a.declared ? declaredNum(a.declared.kg) : null;
+    const dCbm = a.declared ? declaredNum(a.declared.cbm) : null;
+    weight += dKg != null ? dKg : batchListed.weight;
+    cbm += dCbm != null ? dCbm : batchListed.cbm;
+  }
+  if (anyDeclaredKg && weight) next.weightKg = String(Math.round(weight * 10) / 10);
+  // Oversize outranks the sheet's lot total on volume, and only on volume. Oversize
+  // cargo is priced off its CBM alone - `oversizeCbm` picks the rate multiplier tier in
+  // computeItemBillingRows and stands in as the billable volume when the cases carry no
+  // CBM of their own - so a coarser lot total must not displace it. Weight has no such
+  // override, which is why it takes the sheet figure unconditionally.
+  if (oversizeCbm == null && cbm) next.volumeCbm = String(Math.round(cbm * 1000) / 1000);
+  return next;
+}
 function groupPackagesByOrder(pkgs) {
   const hasAnyOrderNo = pkgs.some((p) => p.orderNo);
   if (!hasAnyOrderNo) return [{ orderNo: "", packages: pkgs }];
@@ -4456,6 +4633,18 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
   function setOversizeFor(inc, patch) {
     const cur = getOversizeFor(inc);
     onChange({ ...row, oversizeByIncoming: { ...oversizeByIncoming, [inc.id]: { ...cur, ...patch } } });
+  }
+  // Totals as declared on this sheet, per matched lot. Pre-filled from the sheet's own
+  // "共:" lines and editable, because a scanned or hand-typed sheet won't always parse.
+  const declaredByIncoming = row.declaredByIncoming || {};
+  function getDeclaredFor(inc) {
+    if (declaredByIncoming[inc.id] !== undefined) return declaredByIncoming[inc.id];
+    const found = pickDeclaredForIncoming(row.declaredTotalsList, inc);
+    return found ? { pkgs: found.pkgs, kg: found.kg, cbm: found.cbm } : { pkgs: "", kg: "", cbm: "" };
+  }
+  function setDeclaredFor(inc, patch) {
+    const cur = getDeclaredFor(inc);
+    onChange({ ...row, declaredByIncoming: { ...declaredByIncoming, [inc.id]: { ...cur, ...patch } } });
   }
 
   // Delivery: match against real inventory items (itemized, with cases still remaining)
@@ -4610,6 +4799,8 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
               const selectedCodes = selectedByIncoming[inc.id] || [];
               const totals = sumSelectedPackages(inc.packages, selectedCodes);
               const oversize = getOversizeFor(inc);
+              const declared = getDeclaredFor(inc);
+              const variance = computeDeclaredVariance(totals, declared);
               return (
                 <div key={inc.id} style={{ borderTop: `1px solid ${colors.green}`, paddingTop: 10 }}>
                   <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
@@ -4647,8 +4838,39 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
                     {oversize.checked && <span className="text-xs" style={{ color: colors.inkFaint }}>{t.legacyOversizeHint}</span>}
                   </div>
                   {selectedCodes.length > 0 && (
-                    <div className="text-xs mb-2 font-semibold" style={{ color: colors.ink }}>
-                      {t.legacySelectedTotals(totals.count, Math.round(totals.weight * 10) / 10, Math.round(totals.cbm * 1000) / 1000)}
+                    <div className="mb-2">
+                      <div className="text-xs font-semibold mb-1.5" style={{ color: colors.ink }}>
+                        {t.legacySelectedTotals(totals.count, Math.round(totals.weight * 10) / 10, Math.round(totals.cbm * 1000) / 1000)}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 mb-1">
+                        <div className="text-xs font-semibold" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
+                          {t.legacyDeclaredLabel}
+                        </div>
+                        {[
+                          { key: "pkgs", ph: t.jsPkgs, w: 64 },
+                          { key: "kg", ph: t.jsKgs, w: 90 },
+                          { key: "cbm", ph: t.jsCbm, w: 82 },
+                        ].map((f) => (
+                          <input
+                            key={f.key}
+                            type="number" min="0" step="0.001"
+                            className={inputClass}
+                            style={{ ...inputStyleFor(colors), width: f.w, fontSize: 12, padding: "4px 8px" }}
+                            placeholder={f.ph}
+                            value={declared[f.key] || ""}
+                            onChange={(e) => setDeclaredFor(inc, { [f.key]: e.target.value })}
+                          />
+                        ))}
+                      </div>
+                      {variance && variance.any && (
+                        <div className="text-xs" style={{ color: variance.pkgs && variance.pkgs.delta !== 0 ? colors.amberText : colors.inkFaint }}>
+                          {variance.pkgs && variance.pkgs.delta !== 0 ? t.legacyDeclaredPkgsGap(variance.pkgs.declared, variance.pkgs.listed) : ""}
+                          {variance.kg && Math.abs(variance.kg.pct) >= 0.05
+                            ? `${variance.pkgs && variance.pkgs.delta !== 0 ? " " : ""}${t.legacyDeclaredKgGap(Math.round(Math.abs(variance.kg.delta) * 10) / 10, variance.kg.delta > 0, Math.abs(variance.kg.pct).toFixed(1))}`
+                            : ""}
+                        </div>
+                      )}
+                      <div className="text-xs" style={{ color: colors.inkFaint }}>{t.legacyDeclaredHint}</div>
                     </div>
                   )}
                   <div className="flex flex-col gap-3">
@@ -4811,7 +5033,7 @@ function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, 
     setSelectedByShipment((prev) => ({ ...prev, [inc.id]: remainingPkgs(inc).map((p) => p.code) }));
   }
   function getForm(id) {
-    return formByShipment[id] || { type: "Devan", depot: DEPOTS[0], jobNumber: "", date: todayStr(), ssDoNo: "" };
+    return formByShipment[id] || { type: "Devan", depot: DEPOTS[0], jobNumber: "", date: todayStr(), ssDoNo: "", declaredPkgs: "", declaredKg: "", declaredCbm: "" };
   }
   function setForm(id, patch) {
     setFormByShipment((prev) => ({ ...prev, [id]: { ...getForm(id), ...patch } }));
@@ -4821,9 +5043,16 @@ function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, 
     const codes = getSel(inc.id);
     const form = getForm(inc.id);
     if (codes.length === 0 || !form.jobNumber || !form.date) return;
-    onCheckIn({ incomingId: inc.id, codes, type: form.type, depot: form.depot, jobNumber: form.jobNumber, date: form.date, ssDoNo: form.ssDoNo });
+    const declared = (form.declaredPkgs || form.declaredKg || form.declaredCbm)
+      ? { pkgs: form.declaredPkgs, kg: form.declaredKg, cbm: form.declaredCbm }
+      : null;
+    onCheckIn({
+      incomingId: inc.id, codes, type: form.type, depot: form.depot,
+      jobNumber: form.jobNumber, date: form.date, ssDoNo: form.ssDoNo,
+      declared, declaredSource: form.type,
+    });
     setSelectedByShipment((prev) => ({ ...prev, [inc.id]: [] }));
-    setFormByShipment((prev) => ({ ...prev, [inc.id]: { ...getForm(inc.id), jobNumber: "" } }));
+    setFormByShipment((prev) => ({ ...prev, [inc.id]: { ...getForm(inc.id), jobNumber: "", declaredPkgs: "", declaredKg: "", declaredCbm: "" } }));
   }
 
   return (
@@ -4974,6 +5203,42 @@ function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, 
                             </Field>
                           </div>
                         )}
+                        <div className="col-span-1 sm:col-span-2 md:col-span-4">
+                          {(() => {
+                            const selTotals = sumSelectedPackages(inc.packages, getSel(inc.id));
+                            const declaredNow = { pkgs: form.declaredPkgs, kg: form.declaredKg, cbm: form.declaredCbm };
+                            const v = computeDeclaredVariance(selTotals, declaredNow);
+                            return (
+                              <Field label={t.incomingDeclaredLabel} hint={t.legacyDeclaredHint} colors={colors}>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  {[
+                                    { key: "declaredPkgs", ph: t.jsPkgs, w: 70 },
+                                    { key: "declaredKg", ph: t.jsKgs, w: 96 },
+                                    { key: "declaredCbm", ph: t.jsCbm, w: 88 },
+                                  ].map((f) => (
+                                    <input
+                                      key={f.key}
+                                      type="number" min="0" step="0.001"
+                                      className={inputClass}
+                                      style={{ ...inputStyle, width: f.w }}
+                                      placeholder={f.ph}
+                                      value={form[f.key] || ""}
+                                      onChange={(e) => setForm(inc.id, { [f.key]: e.target.value })}
+                                    />
+                                  ))}
+                                  {v && v.any && (
+                                    <span className="text-xs" style={{ color: v.pkgs && v.pkgs.delta !== 0 ? colors.amberText : colors.inkFaint }}>
+                                      {v.pkgs && v.pkgs.delta !== 0 ? t.legacyDeclaredPkgsGap(v.pkgs.declared, v.pkgs.listed) : ""}
+                                      {v.kg && Math.abs(v.kg.pct) >= 0.05
+                                        ? `${v.pkgs && v.pkgs.delta !== 0 ? " " : ""}${t.legacyDeclaredKgGap(Math.round(Math.abs(v.kg.delta) * 10) / 10, v.kg.delta > 0, Math.abs(v.kg.pct).toFixed(1))}`
+                                        : ""}
+                                    </span>
+                                  )}
+                                </div>
+                              </Field>
+                            );
+                          })()}
+                        </div>
                       </div>
                       <button
                         className="px-4 py-2 rounded text-sm font-semibold w-fit"
@@ -5129,10 +5394,17 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
             const codes = selectedByIncoming[inc.id] || [];
             if (codes.length === 0) continue;
             const oversize = (row.oversizeByIncoming || {})[inc.id] || { checked: !!(row.oversizeByLot || {})[inc.unitCode], cbm: (row.oversizeByLot || {})[inc.unitCode] || "" };
+            const declaredEdited = (row.declaredByIncoming || {})[inc.id];
+            const declaredParsed = pickDeclaredForIncoming(row.declaredTotalsList, inc);
+            const declared = declaredEdited || (declaredParsed
+              ? { pkgs: declaredParsed.pkgs, kg: declaredParsed.kg, cbm: declaredParsed.cbm }
+              : null);
             checkInOps.push({
               op: {
                 incomingId: inc.id,
                 codes,
+                declared,
+                declaredSource: row.file ? row.file.name : "",
                 type: row.docType,
                 depot: row.depot || DEPOTS[0],
                 jobNumber: row.jobNumber,
@@ -6843,7 +7115,12 @@ export default function FarspeedInventory() {
     for (const op of operations) {
       const inc = incoming.find((i) => i.id === op.incomingId);
       if (!inc || op.codes.length === 0) { results.push(null); continue; }
-      const batch = { id: `ARR${Date.now()}${Math.floor(Math.random() * 1000)}`, date: op.date, type: op.type, codes: op.codes };
+      const batch = {
+        id: `ARR${Date.now()}${Math.floor(Math.random() * 1000)}`,
+        date: op.date, type: op.type, codes: op.codes,
+        declared: op.declared || null,
+        declaredSource: op.declaredSource || "",
+      };
       const prior = incomingPatches.get(op.incomingId);
       const effectiveLinkedId = prior ? prior.linkedItemId : inc.linkedItemId;
       let resultItemId;
@@ -6869,10 +7146,10 @@ export default function FarspeedInventory() {
           notes: t.incomingCheckedInNote(inc.id), numericId: counter,
           id: `FS-${String(counter).padStart(4, "0")}`, createdAt: todayStr(),
         };
-        workingItems = [...workingItems, newItem];
+        workingItems = [...workingItems, recomputeItemTotals(newItem)];
         resultItemId = newItem.id;
       } else {
-        workingItems = workingItems.map((it) => (it.id === effectiveLinkedId ? { ...it, arrivals: [...(it.arrivals || []), batch] } : it));
+        workingItems = workingItems.map((it) => (it.id === effectiveLinkedId ? recomputeItemTotals({ ...it, arrivals: [...(it.arrivals || []), batch] }) : it));
         resultItemId = effectiveLinkedId;
       }
       incomingPatches.set(op.incomingId, { linkedItemId: resultItemId, addedCodes: [...(prior ? prior.addedCodes : []), ...op.codes] });
@@ -6888,10 +7165,15 @@ export default function FarspeedInventory() {
     }
     return results;
   }
-  function handleCheckIn({ incomingId, codes, type, depot, jobNumber, date, ssDoNo }) {
+  function handleCheckIn({ incomingId, codes, type, depot, jobNumber, date, ssDoNo, declared, declaredSource }) {
     const inc = incoming.find((i) => i.id === incomingId);
     if (!inc || codes.length === 0) return null;
-    const batch = { id: `ARR${Date.now()}${Math.floor(Math.random() * 1000)}`, date, type, codes };
+    const batch = {
+      id: `ARR${Date.now()}${Math.floor(Math.random() * 1000)}`,
+      date, type, codes,
+      declared: declared || null,
+      declaredSource: declaredSource || "",
+    };
     let resultItemId = inc.linkedItemId;
 
     if (!inc.linkedItemId) {
@@ -6924,10 +7206,10 @@ export default function FarspeedInventory() {
         id: `FS-${String(counter).padStart(4, "0")}`,
         createdAt: todayStr(),
       };
-      persist([...items, newItem]);
+      persist([...items, recomputeItemTotals(newItem)]);
       resultItemId = newItem.id;
     } else {
-      persist(items.map((it) => (it.id === inc.linkedItemId ? { ...it, arrivals: [...(it.arrivals || []), batch] } : it)));
+      persist(items.map((it) => (it.id === inc.linkedItemId ? recomputeItemTotals({ ...it, arrivals: [...(it.arrivals || []), batch] }) : it)));
     }
 
     setIncoming((prev) => prev.map((i) => (i.id === incomingId ? { ...i, checkedInCodes: [...new Set([...(i.checkedInCodes || []), ...codes])], linkedItemId: resultItemId } : i)));
