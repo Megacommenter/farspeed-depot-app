@@ -1399,7 +1399,9 @@ const TEXT = {
     legacyDeliveryDeclaredLabel: "On this delivery sheet:",
     legacyDeliveryDeclaredGap: (declaredKg, listedKg, pct, heavier) =>
       `Sheet declares ${declaredKg} kg; the cases selected come to ${listedKg} kg on the packing list (${heavier ? "+" : "\u2212"}${pct}%). The sheet's figure is recorded.`,
-    legacyDeclaredSplitNote: "split pro-rata \u2014 one total covers several lots",
+    legacySheetTotalLabel: (lots) => `Total stated on this sheet \u2014 covers ${lots}`,
+    legacySheetTotalHint: "The sheet gives one total for these lots. Edit it here; each lot's share below is worked out from it, pro-rata on the packing list.",
+    legacyDeclaredShareNote: (kg, cbm) => `Share of the sheet total: ${kg} kg \u00b7 ${cbm} cbm`,
     incomingDeclaredLabel: "Totals on the Devan/CFS sheet (optional)",
     legacyDeclaredLabel: "On this sheet:",
     legacyDeclaredHint: "Sheet totals are used for storage, handling and billing. The packing-list weight stays on record case by case.",
@@ -1980,7 +1982,9 @@ const TEXT = {
     legacyDeliveryDeclaredLabel: "此送貨單據數據：",
     legacyDeliveryDeclaredGap: (declaredKg, listedKg, pct, heavier) =>
       `單據列明 ${declaredKg} kg；所選件號按裝箱單合計 ${listedKg} kg（${heavier ? "+" : "\u2212"}${pct}%）。記錄以單據為準。`,
-    legacyDeclaredSplitNote: "按比例分攤 \u2014 單一總數涵蓋多個梯號",
+    legacySheetTotalLabel: (lots) => `單據總數 \u2014 涵蓋 ${lots}`,
+    legacySheetTotalHint: "單據就這幾個梯號只列一個總數。請在此修改，下方各梯號的分攤額會按裝箱單比例自動計算。",
+    legacyDeclaredShareNote: (kg, cbm) => `分攤自單據總數：${kg} kg \u00b7 ${cbm} cbm`,
     incomingDeclaredLabel: "拆櫃／CFS 單據總數（可留空）",
     legacyDeclaredLabel: "此單據數據：",
     legacyDeclaredHint: "倉租、裝卸及收費以單據數據為準；裝箱單重量仍按件保留記錄。",
@@ -4539,56 +4543,65 @@ function declaredNum(v) {
   const n = Number(String(v == null ? "" : v).replace(/,/g, ""));
   return Number.isFinite(n) && n > 0 ? n : null;
 }
-// Maps each lot on a sheet to the totals declared for it, keyed by lot id.
-//
-// Three shapes turn up in practice. A sheet may close each lot with its own "共:" line
-// (the ES1 Devan sheet) - that line names one lot and its figures are used as-is. A
-// sheet may close several lots with a single line (the L7/L8/L9 delivery sheet, whose
-// only total covers all twelve packages) - that one figure has to be split across the
-// lots it names, or each would claim the whole thing. And a single-lot sheet may not
-// name its lot at all, in which case its only total is taken to cover everything.
-//
-// Splits are pro-rata on the packing-list figures of the cases actually selected, since
-// that is the only per-case data available. `listedFor(lot)` supplies those.
-function distributeDeclaredAcrossLots(list, lots, listedFor) {
-  const out = {};
+// Groups the matched lots by the total line that covers them. A sheet may close each lot
+// separately (the ES1 Devan) or close several at once (the L7/L8/L9 delivery, whose only
+// total covers all twelve packages); the group is what the sheet actually states, and is
+// therefore the thing the user edits.
+function groupDeclaredLots(list, lots) {
   const all = list || [];
-  if (!lots || !lots.length) return out;
+  const groups = [];
   const claimed = new Set();
-
-  const assign = (line, group) => {
-    const totPkgs = declaredNum(line.pkgs);
-    const totKg = declaredNum(line.kg);
-    const totCbm = declaredNum(line.cbm);
-    const listed = group.map((lot) => listedFor(lot) || { count: 0, weight: 0, cbm: 0 });
-    const shareOf = (key, i) => {
-      const denom = listed.reduce((s, l) => s + (Number(l[key]) || 0), 0);
-      if (denom > 0) return (Number(listed[i][key]) || 0) / denom;
-      return group.length ? 1 / group.length : 0;
-    };
-    const single = group.length === 1;
-    group.forEach((lot, i) => {
-      if (claimed.has(lot.id)) return;
-      claimed.add(lot.id);
-      out[lot.id] = {
-        // A per-lot package count is only meaningful when the line describes one lot.
-        // Splitting it would invent a number and fire a false package-count warning.
-        pkgs: single && totPkgs != null ? String(totPkgs) : "",
-        kg: totKg == null ? "" : String(Math.round(totKg * (single ? 1 : shareOf("weight", i)) * 10) / 10),
-        cbm: totCbm == null ? "" : String(Math.round(totCbm * (single ? 1 : shareOf("cbm", i)) * 1000) / 1000),
-        split: !single,
-      };
-    });
-  };
-
   const unnamed = [];
   for (const line of all) {
-    const group = lots.filter((lot) => lotIdentityMatches(line.context, lot));
-    if (group.length) assign(line, group);
-    else unnamed.push(line);
+    const group = lots.filter((lot) => !claimed.has(lot.id) && lotIdentityMatches(line.context, lot));
+    if (group.length) {
+      group.forEach((lot) => claimed.add(lot.id));
+      groups.push({ line, lots: group });
+    } else unnamed.push(line);
   }
   // Nothing on the sheet named a lot: fall back to its sole total covering everything.
-  if (claimed.size === 0 && unnamed.length === 1) assign(unnamed[0], lots);
+  if (claimed.size === 0 && unnamed.length === 1 && lots.length) groups.push({ line: unnamed[0], lots: [...lots] });
+  return groups;
+}
+function declaredGroupKey(group) {
+  return group.lots.map((l) => l.id).sort().join("|");
+}
+// Shares one declared total out over the lots it covers, pro-rata on the packing-list
+// figures of the cases selected - the only per-case data there is.
+function splitDeclaredAcrossLots(total, lots, listedFor) {
+  const out = {};
+  if (!total) return out;
+  const totPkgs = declaredNum(total.pkgs);
+  const totKg = declaredNum(total.kg);
+  const totCbm = declaredNum(total.cbm);
+  const listed = lots.map((lot) => listedFor(lot) || { count: 0, weight: 0, cbm: 0 });
+  const shareOf = (key, i) => {
+    const denom = listed.reduce((s, l) => s + (Number(l[key]) || 0), 0);
+    if (denom > 0) return (Number(listed[i][key]) || 0) / denom;
+    return lots.length ? 1 / lots.length : 0;
+  };
+  const single = lots.length === 1;
+  lots.forEach((lot, i) => {
+    out[lot.id] = {
+      // A per-lot package count is only meaningful when the line describes one lot.
+      // Splitting it would invent a number and fire a false package-count warning.
+      pkgs: single && totPkgs != null ? String(totPkgs) : "",
+      kg: totKg == null ? "" : String(Math.round(totKg * (single ? 1 : shareOf("weight", i)) * 10) / 10),
+      cbm: totCbm == null ? "" : String(Math.round(totCbm * (single ? 1 : shareOf("cbm", i)) * 1000) / 1000),
+      split: !single,
+    };
+  });
+  return out;
+}
+// `overridesByGroup` holds totals the user has corrected, keyed by declaredGroupKey.
+function distributeDeclaredAcrossLots(list, lots, listedFor, overridesByGroup) {
+  const out = {};
+  if (!lots || !lots.length) return out;
+  for (const group of groupDeclaredLots(list, lots)) {
+    const key = declaredGroupKey(group);
+    const total = (overridesByGroup && overridesByGroup[key]) || group.line;
+    Object.assign(out, splitDeclaredAcrossLots(total, group.lots, listedFor));
+  }
   return out;
 }
 // `totals` is the packing-list sum of the selected cases, `declared` the sheet figures.
@@ -4703,6 +4716,35 @@ function groupPackagesByOrder(pkgs) {
   }
   return order.map((k) => ({ orderNo: k, packages: groups[k] }));
 }
+// One editable set of figures for a total the sheet states once across several lots.
+function SharedDeclaredTotal({ group, value, onPatch, colors, t, inputClass, inputStyle }) {
+  const names = group.lots.map((l) => l.unitCode || l.id).join(", ");
+  return (
+    <div className="mb-2 px-2 py-2 rounded" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+      <div className="text-xs font-semibold mb-1.5" style={{ color: colors.ink, fontFamily: FONT_DISPLAY }}>
+        {t.legacySheetTotalLabel(names)}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {[
+          { key: "pkgs", ph: t.jsPkgs, w: 64 },
+          { key: "kg", ph: t.jsKgs, w: 96 },
+          { key: "cbm", ph: t.jsCbm, w: 88 },
+        ].map((f) => (
+          <input
+            key={f.key}
+            type="number" min="0" step="0.001"
+            className={inputClass}
+            style={{ ...inputStyle, width: f.w, fontSize: 12, padding: "4px 8px" }}
+            placeholder={f.ph}
+            value={value[f.key] || ""}
+            onChange={(e) => onPatch({ [f.key]: e.target.value })}
+          />
+        ))}
+      </div>
+      <div className="text-xs mt-1" style={{ color: colors.inkFaint }}>{t.legacySheetTotalHint}</div>
+    </div>
+  );
+}
 function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAll, processing, processDisabled, colors, t, lang }) {
   const inputStyle = inputStyleFor(colors);
   const set = (k) => (e) => onChange({ ...row, [k]: e.target.value });
@@ -4739,14 +4781,15 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
   // Totals as declared on this sheet, per matched lot. Pre-filled from the sheet's own
   // "共:" lines and editable, because a scanned or hand-typed sheet won't always parse.
   const declaredByIncoming = row.declaredByIncoming || {};
+  const incomingListedFor = (inc) => sumSelectedPackages(inc.packages, selectedByIncoming[inc.id] || []);
+  const declaredIncomingGroups = groupDeclaredLots(row.declaredTotalsList, matchedIncomings);
   const declaredIncomingDist = distributeDeclaredAcrossLots(
-    row.declaredTotalsList,
-    matchedIncomings,
-    (inc) => sumSelectedPackages(inc.packages, selectedByIncoming[inc.id] || [])
+    row.declaredTotalsList, matchedIncomings, incomingListedFor, row.declaredByGroup || {}
   );
   function getDeclaredFor(inc) {
-    if (declaredByIncoming[inc.id] !== undefined) return declaredByIncoming[inc.id];
     const found = declaredIncomingDist[inc.id];
+    if (found && found.split) return { pkgs: found.pkgs, kg: found.kg, cbm: found.cbm };
+    if (declaredByIncoming[inc.id] !== undefined) return declaredByIncoming[inc.id];
     return found ? { pkgs: found.pkgs, kg: found.kg, cbm: found.cbm } : { pkgs: "", kg: "", cbm: "" };
   }
   function setDeclaredFor(inc, patch) {
@@ -4772,14 +4815,29 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
   // closes with one line covering all twelve packages - and that figure is the accurate
   // one, so it drives the delivery instead of the packing-list sum of the cases ticked.
   const declaredByItem = row.declaredByItem || {};
+  const declaredByGroup = row.declaredByGroup || {};
+  const itemListedFor = (it) => sumSelectedPackages(it.packages, selectedByItem[it.id] || []);
+  const declaredItemGroups = groupDeclaredLots(row.declaredTotalsList, matchedItems);
   const declaredItemDist = distributeDeclaredAcrossLots(
-    row.declaredTotalsList,
-    matchedItems,
-    (it) => sumSelectedPackages(it.packages, selectedByItem[it.id] || [])
+    row.declaredTotalsList, matchedItems, itemListedFor, declaredByGroup
   );
+  // A total the sheet states once for several lots is edited once, as the sheet wrote it.
+  // Each lot's share is derived from it, so correcting the sheet figure re-splits them
+  // all rather than leaving the user to reconcile three boxes by hand.
+  function getDeclaredGroupTotal(group) {
+    const key = declaredGroupKey(group);
+    if (declaredByGroup[key] !== undefined) return declaredByGroup[key];
+    return { pkgs: group.line.pkgs || "", kg: group.line.kg || "", cbm: group.line.cbm || "" };
+  }
+  function setDeclaredGroupTotal(group, patch) {
+    const key = declaredGroupKey(group);
+    onChange({ ...row, declaredByGroup: { ...declaredByGroup, [key]: { ...getDeclaredGroupTotal(group), ...patch } } });
+  }
   function getDeclaredForItem(it) {
-    if (declaredByItem[it.id] !== undefined) return declaredByItem[it.id];
     const found = declaredItemDist[it.id];
+    // Lots inside a shared total are driven by that total, not by their own box.
+    if (found && found.split) return { pkgs: found.pkgs, kg: found.kg, cbm: found.cbm };
+    if (declaredByItem[it.id] !== undefined) return declaredByItem[it.id];
     return found ? { pkgs: found.pkgs, kg: found.kg, cbm: found.cbm } : { pkgs: "", kg: "", cbm: "" };
   }
   function setDeclaredForItem(it, patch) {
@@ -4917,6 +4975,19 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
               </select>
             </Field>
           </div>
+          {declaredIncomingGroups.filter((g) => g.lots.length > 1).map((g) => (
+            <SharedDeclaredTotal
+              key={declaredGroupKey(g)}
+              group={g}
+              value={(row.declaredByGroup || {})[declaredGroupKey(g)] || { pkgs: g.line.pkgs || "", kg: g.line.kg || "", cbm: g.line.cbm || "" }}
+              onPatch={(patch) => {
+                const key = declaredGroupKey(g);
+                const cur = (row.declaredByGroup || {})[key] || { pkgs: g.line.pkgs || "", kg: g.line.kg || "", cbm: g.line.cbm || "" };
+                onChange({ ...row, declaredByGroup: { ...(row.declaredByGroup || {}), [key]: { ...cur, ...patch } } });
+              }}
+              colors={colors} t={t} inputClass={inputClass} inputStyle={inputStyleFor(colors)}
+            />
+          ))}
           <div className="flex flex-col gap-4">
             {matchedIncomings.map((inc) => {
               const done = new Set(inc.checkedInCodes || []);
@@ -4967,26 +5038,35 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
                       <div className="text-xs font-semibold mb-1.5" style={{ color: colors.ink }}>
                         {t.legacySelectedTotals(totals.count, Math.round(totals.weight * 10) / 10, Math.round(totals.cbm * 1000) / 1000)}
                       </div>
-                      <div className="flex flex-wrap items-center gap-2 mb-1">
-                        <div className="text-xs font-semibold" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
-                          {t.legacyDeclaredLabel}
+                      {declaredIncomingDist[inc.id] && declaredIncomingDist[inc.id].split ? (
+                        <div className="text-xs mb-1" style={{ color: colors.inkFaint }}>
+                          {t.legacyDeclaredShareNote(
+                            Math.round((Number(declared.kg) || 0) * 10) / 10,
+                            Math.round((Number(declared.cbm) || 0) * 1000) / 1000
+                          )}
                         </div>
-                        {[
-                          { key: "pkgs", ph: t.jsPkgs, w: 64 },
-                          { key: "kg", ph: t.jsKgs, w: 90 },
-                          { key: "cbm", ph: t.jsCbm, w: 82 },
-                        ].map((f) => (
-                          <input
-                            key={f.key}
-                            type="number" min="0" step="0.001"
-                            className={inputClass}
-                            style={{ ...inputStyleFor(colors), width: f.w, fontSize: 12, padding: "4px 8px" }}
-                            placeholder={f.ph}
-                            value={declared[f.key] || ""}
-                            onChange={(e) => setDeclaredFor(inc, { [f.key]: e.target.value })}
-                          />
-                        ))}
-                      </div>
+                      ) : (
+                        <div className="flex flex-wrap items-center gap-2 mb-1">
+                          <div className="text-xs font-semibold" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
+                            {t.legacyDeclaredLabel}
+                          </div>
+                          {[
+                            { key: "pkgs", ph: t.jsPkgs, w: 64 },
+                            { key: "kg", ph: t.jsKgs, w: 90 },
+                            { key: "cbm", ph: t.jsCbm, w: 82 },
+                          ].map((f) => (
+                            <input
+                              key={f.key}
+                              type="number" min="0" step="0.001"
+                              className={inputClass}
+                              style={{ ...inputStyleFor(colors), width: f.w, fontSize: 12, padding: "4px 8px" }}
+                              placeholder={f.ph}
+                              value={declared[f.key] || ""}
+                              onChange={(e) => setDeclaredFor(inc, { [f.key]: e.target.value })}
+                            />
+                          ))}
+                        </div>
+                      )}
                       {variance && variance.any && (
                         <div className="text-xs" style={{ color: variance.pkgs && variance.pkgs.delta !== 0 ? colors.amberText : colors.inkFaint }}>
                           {variance.pkgs && variance.pkgs.delta !== 0 ? t.legacyDeclaredPkgsGap(variance.pkgs.declared, variance.pkgs.listed) : ""}
@@ -5050,6 +5130,15 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
               </div>
             ) : null;
           })()}
+          {declaredItemGroups.filter((g) => g.lots.length > 1).map((g) => (
+            <SharedDeclaredTotal
+              key={declaredGroupKey(g)}
+              group={g}
+              value={getDeclaredGroupTotal(g)}
+              onPatch={(patch) => setDeclaredGroupTotal(g, patch)}
+              colors={colors} t={t} inputClass={inputClass} inputStyle={inputStyleFor(colors)}
+            />
+          ))}
           <div className="flex flex-col gap-4">
             {matchedItems.map((it) => {
               const remainingPkgs = remainingPackages(it);
@@ -5082,28 +5171,34 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
                       <div className="text-xs font-semibold mb-1.5" style={{ color: colors.ink }}>
                         {t.legacySelectedTotals(totals.count, Math.round(totals.weight * 10) / 10, Math.round(totals.cbm * 1000) / 1000)}
                       </div>
-                      <div className="flex flex-wrap items-center gap-2 mb-1">
-                        <div className="text-xs font-semibold" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
-                          {t.legacyDeliveryDeclaredLabel}
+                      {declaredItemDist[it.id] && declaredItemDist[it.id].split ? (
+                        <div className="text-xs mb-1" style={{ color: colors.inkFaint }}>
+                          {t.legacyDeclaredShareNote(
+                            Math.round((Number(itemDeclared.kg) || 0) * 10) / 10,
+                            Math.round((Number(itemDeclared.cbm) || 0) * 1000) / 1000
+                          )}
                         </div>
-                        {[
-                          { key: "kg", ph: t.jsKgs, w: 90 },
-                          { key: "cbm", ph: t.jsCbm, w: 82 },
-                        ].map((f) => (
-                          <input
-                            key={f.key}
-                            type="number" min="0" step="0.001"
-                            className={inputClass}
-                            style={{ ...inputStyleFor(colors), width: f.w, fontSize: 12, padding: "4px 8px" }}
-                            placeholder={f.ph}
-                            value={itemDeclared[f.key] || ""}
-                            onChange={(e) => setDeclaredForItem(it, { [f.key]: e.target.value })}
-                          />
-                        ))}
-                        {declaredItemDist[it.id] && declaredItemDist[it.id].split && (
-                          <span className="text-xs" style={{ color: colors.inkFaint }}>{t.legacyDeclaredSplitNote}</span>
-                        )}
-                      </div>
+                      ) : (
+                        <div className="flex flex-wrap items-center gap-2 mb-1">
+                          <div className="text-xs font-semibold" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
+                            {t.legacyDeliveryDeclaredLabel}
+                          </div>
+                          {[
+                            { key: "kg", ph: t.jsKgs, w: 90 },
+                            { key: "cbm", ph: t.jsCbm, w: 82 },
+                          ].map((f) => (
+                            <input
+                              key={f.key}
+                              type="number" min="0" step="0.001"
+                              className={inputClass}
+                              style={{ ...inputStyleFor(colors), width: f.w, fontSize: 12, padding: "4px 8px" }}
+                              placeholder={f.ph}
+                              value={itemDeclared[f.key] || ""}
+                              onChange={(e) => setDeclaredForItem(it, { [f.key]: e.target.value })}
+                            />
+                          ))}
+                        </div>
+                      )}
                       {itemVariance && itemVariance.kg && Math.abs(itemVariance.kg.pct) >= 0.05 && (
                         <div className="text-xs" style={{ color: colors.inkFaint }}>
                           {t.legacyDeliveryDeclaredGap(
@@ -5541,7 +5636,8 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
       const incomingDeclaredDist = distributeDeclaredAcrossLots(
         row.declaredTotalsList,
         matchedIncomings,
-        (inc) => sumSelectedPackages(inc.packages, selectedByIncoming[inc.id] || [])
+        (inc) => sumSelectedPackages(inc.packages, selectedByIncoming[inc.id] || []),
+        row.declaredByGroup || {}
       );
       const hasAnyIncomingSelection = matchedIncomings.some((inc) => (selectedByIncoming[inc.id] || []).length > 0);
       const archiveEntry = {
@@ -5670,11 +5766,15 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
         const deliveryDeclaredDist = distributeDeclaredAcrossLots(
           row.declaredTotalsList,
           deliveryLots,
-          (it) => sumSelectedPackages(it.packages, selectedByItem[it.id] || [])
+          (it) => sumSelectedPackages(it.packages, selectedByItem[it.id] || []),
+          row.declaredByGroup || {}
         );
         for (const [itemId, codes] of Object.entries(selectedByItem)) {
           if (!codes || codes.length === 0) continue;
-          const declared = (row.declaredByItem || {})[itemId] || deliveryDeclaredDist[itemId] || null;
+          const fromGroup = deliveryDeclaredDist[itemId];
+          const declared = (fromGroup && fromGroup.split)
+            ? fromGroup
+            : ((row.declaredByItem || {})[itemId] || fromGroup || null);
           existingDeliveryEntries.push({
             itemId,
             delivery: {
