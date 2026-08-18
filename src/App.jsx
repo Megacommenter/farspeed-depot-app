@@ -586,6 +586,14 @@ function parsePackingListSheet(rows, legend) {
     // number paired with real weight or CBM is equally good evidence of a genuine row.
     if (!description && !(caseNo && (weight || cbm))) continue;
 
+    // Nested layouts list a case once and then itemise what's inside it on the rows
+    // below - Schindler's "Detail" sheet gives case 1/17 its volume and weight, then
+    // three bolt lines underneath with no case number, no volume and no weight of their
+    // own. Those lines are contents, not cases: counting them turned 17 cases into 68.
+    // A row that names no case and carries neither weight nor volume belongs to the case
+    // above it, and would contribute nothing but an inflated package count anyway.
+    if (!caseNo && !weight && !cbm && lastCase) continue;
+
     // Schindler's booking workbooks carry no lift/SAP column - the lot identity is the
     // OMC Sales Order no. (60789730, 60789890), one per lift. Without this the whole
     // sheet collapsed into a single UNSPECIFIED group.
@@ -620,6 +628,72 @@ function parsePackingListSheet(rows, legend) {
     || (colMap.orderNo !== undefined && order.length > 0 && !order.includes("UNSPECIFIED"));
   return { groups: order.map((k) => ({ ...groups[k], containers: [...groups[k].containers] })), hasLotColumn: identifiedLots };
 }
+// Last resort for a workbook whose case-level pages can't be read: the Summary page.
+// It states the totals directly - "Total No. Case : 17", "Gross Weight : 16735",
+// "Volume : 30.29" - so a lot can still be created with the right case count and totals
+// even when no per-case table was found. Per-case weight and volume are shared evenly,
+// which is an estimate, but keeps storage billing (which is charged on per-case CBM)
+// working instead of silently pricing the lot at zero.
+function parsePackingListSummarySheet(rows) {
+  const labelled = (labels) => {
+    for (const row of rows || []) {
+      for (let i = 0; i < row.length; i++) {
+        const n = plNorm(row[i]).replace(/[:\uff1a]/g, "").trim();
+        if (!labels.includes(n)) continue;
+        for (let j = i + 1; j < row.length; j++) {
+          const v = plNum(row[j]);
+          if (v > 0) return v;
+        }
+      }
+    }
+    return 0;
+  };
+  const cases = Math.round(labelled(["total no. case", "total no of case", "total no. of case", "total cases", "total case"]));
+  if (!(cases > 0) || cases > 5000) return null;
+  const gross = labelled(["gross weight", "total gross weight", "g.w."]);
+  const net = labelled(["total net weight", "net weight", "n.w."]);
+  const volume = labelled(["volume", "total volume", "measurement"]);
+  const weight = gross > 0 ? gross : net;
+  if (!(weight > 0) && !(volume > 0)) return null;
+
+  let lot = "";
+  for (const row of rows || []) {
+    for (let i = 0; i < row.length; i++) {
+      const n = plNorm(row[i]).replace(/[:\uff1a]/g, "").trim();
+      if (n !== "project name" && n !== "project") continue;
+      for (let j = i + 1; j < row.length; j++) {
+        const v = String(row[j] == null ? "" : row[j]).trim();
+        if (v) { lot = v; break; }
+      }
+      if (lot) break;
+    }
+    if (lot) break;
+  }
+  // "PL_4550362030_AST(L3401-L3406)" - the lifts are the part in brackets.
+  const bracketed = lot.match(/\(([^)]+)\)\s*$/);
+  if (bracketed) lot = bracketed[1].trim();
+
+  const packages = Array.from({ length: cases }, (_, i) => ({
+    code: `${i + 1}/${cases}`,
+    orderNo: "",
+    description: "",
+    weightKg: weight > 0 ? String(Math.round((weight / cases) * 100) / 100) : "",
+    cbm: volume > 0 ? String(Math.round((volume / cases) * 10000) / 10000) : "",
+  }));
+  return {
+    groups: [{
+      lot: lot || "UNSPECIFIED",
+      packages,
+      containers: [],
+      // Totals come off the Summary itself, so they stay exact rather than inheriting
+      // the rounding drift of the per-case shares above.
+      totalWeight: weight,
+      totalCbm: volume,
+      fromSummary: true,
+    }],
+    hasLotColumn: !!lot,
+  };
+}
 function parsePackingListWorkbook(workbook) {
   let bestGroups = null;
   let bestHasLotColumn = false;
@@ -650,6 +724,15 @@ function parsePackingListWorkbook(workbook) {
     // rows (that's often a material/component breakdown sheet, not the case-level one).
     const better = !bestGroups || (hasLotColumn && !bestHasLotColumn) || (hasLotColumn === bestHasLotColumn && groups.length > bestGroups.length);
     if (better) { bestGroups = groups; bestHasLotColumn = hasLotColumn; }
+  }
+  // Nothing case-level anywhere in the workbook - fall back to the Summary page.
+  if (!bestGroups || bestGroups.length === 0) {
+    for (const sheetName of workbook.SheetNames) {
+      if (!/summary|\u603b\u8ba1|\u6458\u8981/i.test(sheetName)) continue;
+      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: "", raw: true });
+      const summary = parsePackingListSummarySheet(rows);
+      if (summary) { bestGroups = summary.groups; break; }
+    }
   }
   return { groups: bestGroups, client, project };
 }
