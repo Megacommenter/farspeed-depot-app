@@ -4567,11 +4567,22 @@ function dateToLocalISO(d) {
   return `${yr}-${mo}-${da}`;
 }
 // Reads the workbook's own Excel "Print Area" setting for a sheet, if one is defined.
-// Farspeed's rule: only rows within the printable A4 area count as actually arriving or
-// leaving - anything beyond that (e.g. extra case groups that overflowed onto a page that
-// was never actually printed/sent) is not part of this job. Returns the last row number
-// covered by the print area (1-indexed, matching Excel), or null if none is set.
-function getPrintAreaLastRow(wb, sheetIndex) {
+// Farspeed's rule: only what falls inside the printable A4 area counts as actually
+// arriving or leaving - anything outside it was never printed or sent, so it is not part
+// of this job. That applies across as well as down: the CFS_2/2605199 sheet parks a
+// second, unrelated set of lots (L32-02 through L32-05, under a different SHK reference)
+// out in column N, past the print area's right edge at column L, where they would
+// otherwise be read as extra lots on this job and would break the lot lines they sit
+// beside. Returns the last row and column covered (1-indexed, as Excel counts them).
+function colLettersToIndex(letters) {
+  let n = 0;
+  for (const ch of String(letters || "").toUpperCase()) {
+    if (ch < "A" || ch > "Z") return 0;
+    n = n * 26 + (ch.charCodeAt(0) - 64);
+  }
+  return n;
+}
+function getPrintArea(wb, sheetIndex) {
   try {
     const names = wb.Workbook && wb.Workbook.Names;
     if (!names) return null;
@@ -4579,8 +4590,11 @@ function getPrintAreaLastRow(wb, sheetIndex) {
       if (!n || !n.Name || !/print_area/i.test(n.Name)) continue;
       if (n.Sheet !== undefined && n.Sheet !== null && n.Sheet !== sheetIndex) continue;
       const ref = String(n.Ref || "");
-      const m = ref.match(/!\$?[A-Za-z]+\$?(\d+)(?::\$?[A-Za-z]+\$?(\d+))?/);
-      if (m) return Math.max(Number(m[1]), Number(m[2] || m[1]));
+      const m = ref.match(/!\$?([A-Za-z]+)\$?(\d+)(?::\$?([A-Za-z]+)\$?(\d+))?/);
+      if (!m) continue;
+      const lastRow = Math.max(Number(m[2]), Number(m[4] || m[2]));
+      const lastCol = Math.max(colLettersToIndex(m[1]), colLettersToIndex(m[3] || m[1]));
+      return { lastRow, lastCol: lastCol || 0 };
     }
   } catch (e) { /* fall back to using the whole sheet */ }
   return null;
@@ -4639,10 +4653,17 @@ function mergeLotMark(lot, mark) {
 function parseJobSheetBlocks(rows) {
   const blocks = [];
   let cur = null;
+  // A SHK reference or LIFT NO. line sits above the lots it describes and can be restated
+  // partway down the page - the 2605199 CFS sheet files L52/L53 under SHK0395/26 and then
+  // L32-02..05 under SHK0107/26 - so the heading in force is tracked as the page is read
+  // rather than being pinned to whichever block happened to be open.
+  let ctx = { shkNumber: "", liftNo: "" };
+  const closed = (b) => !!(b && (b.pkgs || b.kg || b.cbm));
   const startBlock = (refJobNumber, refDateRaw) => {
     cur = {
       refJobNumber: refJobNumber || "", refDateRaw: refDateRaw || "",
-      shkNumber: "", liftNo: "", lots: [], pkgs: "", kg: "", cbm: "",
+      shkNumber: ctx.shkNumber, liftNo: ctx.liftNo, lots: [], pkgs: "", kg: "", cbm: "",
+      figuresAfterLots: false,
     };
     blocks.push(cur);
     return cur;
@@ -4653,31 +4674,38 @@ function parseJobSheetBlocks(rows) {
     if (!line) continue;
 
     const refM = line.match(/ref(?:er)?\.?\s*(?:to\s+)?job\s*no\.?\s*([A-Za-z0-9\-]+)\s*(?:on\s*([\d\/\.\- ]+\d))?/i);
-    if (refM) { startBlock(refM[1].trim(), (refM[2] || "").trim()); continue; }
+    if (refM) { ctx = { shkNumber: "", liftNo: "" }; startBlock(refM[1].trim(), (refM[2] || "").trim()); continue; }
 
     // A 共:/Total: line closes the block it belongs to; the grand total at the foot of the
     // page belongs to no single arrival and must not overwrite the last block's figures.
-    if (/(?:共|total)\s*[:\uff1a]/i.test(line)) { cur = null; continue; }
-    if (!cur) {
-      // Sheets that name their lots without any "Ref Job no." heading still get read - the
-      // first lot line opens an anonymous block - but ordinary header rows do not.
-      if (!/^['\u2018\u2019]?\d{6,12}\s*\//.test(line)) continue;
-      startBlock("", "");
-    }
+    if (/(?:共|total)\s*[:\uff1a]/i.test(line)) { cur = null; ctx = { shkNumber: "", liftNo: "" }; continue; }
 
     const shkM = line.match(/\bSHK\s*[-#]?\s*(\d{3,6})\s*\/\s*(\d{2})\b/i);
-    if (shkM && !cur.shkNumber) cur.shkNumber = `SHK${shkM[1]}/${shkM[2]}`;
     const liftM = line.match(/lift\s*no\.?\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-\.\/]*)/i);
-    if (liftM && !cur.liftNo) cur.liftNo = liftM[1].trim();
+    if (shkM || liftM) {
+      // A heading arriving after the open block has already stated its figures belongs to
+      // what comes next, not to what just finished.
+      if (closed(cur)) cur = null;
+      if (shkM) { ctx.shkNumber = `SHK${shkM[1]}/${shkM[2]}`; if (cur) cur.shkNumber = ctx.shkNumber; }
+      if (liftM) { ctx.liftNo = liftM[1].trim(); if (cur) cur.liftNo = ctx.liftNo; }
+    }
 
     // "60759188/L32-01", or with its cases written inline: "'60766021/L52#3,7/19"
     const lotM = line.match(/^['\u2018\u2019]?(\d{6,12})\s*\/\s*([A-Za-z][A-Za-z0-9\-\.]*)\s*(?:#\s*([\d][\d\s,\-\/]*))?$/);
     if (lotM) {
+      // A CFS sheet names a lot and then closes it with its own C/S NO. figures before
+      // naming the next, so a lot arriving after a block was closed that way starts a new
+      // one. A delivery sheet does the opposite - it states the figures first and then
+      // lists the lots they cover - so the test is whether the figures were recorded with
+      // lots already open, not merely whether figures exist.
+      if (closed(cur) && cur.figuresAfterLots) startBlock(cur.refJobNumber, cur.refDateRaw);
+      if (!cur) startBlock("", "");
       const lot = { lotRef: lotM[1], unitCode: lotM[2], caseNumbers: [], caseText: "", lotCases: null };
       if (lotM[3]) mergeLotMark(lot, parseCaseMark(lotM[3]));
       cur.lots.push(lot);
       continue;
     }
+    if (!cur) continue; // ordinary header rows above the first lot or referral
 
     // A marking on a line of its own belongs to the lot named directly above it.
     if (/^#/.test(line)) {
@@ -4696,9 +4724,11 @@ function parseJobSheetBlocks(rows) {
       const pk = line.match(/(\d+)\s*PKGS?/i);
       const kg = line.match(/([\d,]+(?:\.\d+)?)\s*KGS?/i);
       const cb = line.match(/([\d,]+(?:\.\d+)?)\s*CBM/i);
+      const hadFigures = closed(cur);
       if (pk && !cur.pkgs) cur.pkgs = pk[1];
       if (kg && !cur.kg) cur.kg = kg[1].replace(/,/g, "");
       if (cb && !cur.cbm) cur.cbm = cb[1].replace(/,/g, "");
+      if (!hadFigures && closed(cur) && cur.lots.length > 0) cur.figuresAfterLots = true;
     }
   }
   return blocks;
@@ -4707,8 +4737,11 @@ function guessFieldsFromWorkbook(wb) {
   const sheetIndex = 0;
   const sheet = wb.Sheets[wb.SheetNames[sheetIndex]];
   let rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false });
-  const printAreaLastRow = getPrintAreaLastRow(wb, sheetIndex);
-  if (printAreaLastRow) rows = rows.slice(0, printAreaLastRow);
+  const printArea = getPrintArea(wb, sheetIndex);
+  if (printArea) {
+    if (printArea.lastRow) rows = rows.slice(0, printArea.lastRow);
+    if (printArea.lastCol) rows = rows.map((r) => (r || []).slice(0, printArea.lastCol));
+  }
   const flatText = rows.map((r) => r.join(" ")).join("\n");
 
   const siteBlock = findAddressLines(rows, JOBSHEET_LABEL_ALIASES.to);
@@ -4732,15 +4765,12 @@ function guessFieldsFromWorkbook(wb) {
 
   const rawDate = findLabelValue(rows, JOBSHEET_LABEL_ALIASES.date);
   if (rawDate) {
+    // A DATE cell Excel holds as a real date arrives here already formatted month-first
+    // ("6/5/26"), so Date() reads it correctly. A hand-typed one is text, written day-first
+    // and punctuated however it was typed - "29-/5/2026" on the 2605199 CFS sheet - which
+    // Date() rejects outright, leaving the row with no date at all.
     const d = new Date(rawDate);
-    if (!isNaN(d)) out.date = dateToLocalISO(d);
-    else {
-      const m = rawDate.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
-      if (m) {
-        const yr = m[3].length === 2 ? `20${m[3]}` : m[3];
-        out.date = `${yr}-${String(m[2]).padStart(2, "0")}-${String(m[1]).padStart(2, "0")}`;
-      }
-    }
+    out.date = !isNaN(d) ? dateToLocalISO(d) : parseSheetDayFirstDate(rawDate);
   }
 
   const referMatches = [...flatText.matchAll(/ref(?:er)?\.?\s*(?:to\s+)?job\s*no\.?\s*([A-Za-z0-9\-]+)\s*(?:on\s*([\d\/\.\- ]+\d))?/gi)];
@@ -4857,15 +4887,28 @@ function guessFieldsFromWorkbook(wb) {
     });
   }
 
-  // When one sheet closes several arrivals, its single "共:" line covers all of them, and
-  // sharing that figure out pro-rata invents numbers the sheet never stated. This file
-  // declares 11.44 cbm against 2605126 and 6.80 cbm against 2605199; splitting the 18.24
-  // total across four cases each would have put 9.12 on both. So where the page is
-  // genuinely multi-arrival, each block's own C/S NO. figures go in front of the grand
-  // total, which then finds every lot already claimed and drops out.
-  const namedBlocks = out.refBlocks.filter((b) => b.refJobNumber);
-  const blocksWithFigures = namedBlocks.filter((b) => b.kg || b.cbm);
-  if (namedBlocks.length >= 2 && blocksWithFigures.length) {
+  // A sheet that closes several lots with one "共:" line forces that figure to be shared
+  // out pro-rata, which invents numbers it never stated: this delivery declares 11.44 cbm
+  // against 2605126 and 6.80 against 2605199, but splitting the 18.24 total over four
+  // cases each would put 9.12 on both. Every lot's own C/S NO. line already carries the
+  // real figure, so those are used in front of the grand total - but only once they have
+  // been checked back against it, because a sheet whose C/S rows are per-case rather than
+  // per-lot would otherwise have a single case's weight read as a whole lot's.
+  const blocksWithFigures = out.refBlocks.filter((b) => (b.lots.length || b.refJobNumber) && (b.kg || b.cbm));
+  const sheetTotals = out.declaredTotalsList;
+  const reconciles = (key) => {
+    const stated = sheetTotals.reduce((s, l) => s + (Number(l[key]) || 0), 0);
+    const parts = blocksWithFigures.reduce((s, b) => s + (Number(b[key]) || 0), 0);
+    if (!(stated > 0) || !(parts > 0)) return false;
+    return Math.abs(stated - parts) <= Math.max(0.05, stated * 0.001);
+  };
+  const usePerBlock = sheetTotals.length
+    ? (blocksWithFigures.length >= 2 && (reconciles("kg") || reconciles("cbm")))
+    // No "共:" line anywhere - a single-lot sheet like the 2605126 CFS, whose only figures
+    // are the ones on its lot line. Nothing to reconcile against, so take it only when the
+    // page describes exactly one lot and there is no room for ambiguity.
+    : (blocksWithFigures.length === 1 && blocksWithFigures[0].lots.length === 1);
+  if (usePerBlock) {
     out.declaredTotalsList = [
       ...blocksWithFigures.map((b) => ({
         pkgs: b.pkgs, kg: b.kg, cbm: b.cbm,
