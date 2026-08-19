@@ -5106,13 +5106,37 @@ function declaredNum(v) {
 // separately (the ES1 Devan) or close several at once (the L7/L8/L9 delivery, whose only
 // total covers all twelve packages); the group is what the sheet actually states, and is
 // therefore the thing the user edits.
+// The order number identifies a consignment exactly where a lift code does not. Two
+// separate Incoming shipments can both be L32-01 - a part-load followed by the rest - so a
+// total the sheet states for "60759188/L32-01" belongs to the one carrying order 60759188
+// alone. Matching on the lift code alone claimed both, which turned a figure the sheet
+// stated for a single lot into a shared one, and a shared figure is treated as an estimate
+// that loses to real per-case weights: the 16,527 kg on the 2605126 CFS sheet was being
+// shown as a "share" and then quietly not used at all.
+function lotOrderNumbers(lot) {
+  const nums = new Set();
+  for (const p of lot.packages || []) {
+    const n = String(p.orderNo || "").trim();
+    if (/^\d{6,12}$/.test(n)) nums.add(n);
+  }
+  return nums;
+}
+function lotOrderMatches(context, lot) {
+  const keys = declaredContextTokens(context);
+  for (const n of lotOrderNumbers(lot)) if (keys.has(n)) return true;
+  return false;
+}
 function groupDeclaredLots(list, lots) {
   const all = list || [];
   const groups = [];
   const claimed = new Set();
   const unnamed = [];
   for (const line of all) {
-    const group = lots.filter((lot) => !claimed.has(lot.id) && lotIdentityMatches(line.context, lot));
+    const available = lots.filter((lot) => !claimed.has(lot.id));
+    // An order number named on the line is decisive: where some lots carry it, only those
+    // take the total. Everything else falls back to matching on lift/SHK identity.
+    const byOrder = available.filter((lot) => lotOrderMatches(line.context, lot));
+    const group = byOrder.length ? byOrder : available.filter((lot) => lotIdentityMatches(line.context, lot));
     if (group.length) {
       group.forEach((lot) => claimed.add(lot.id));
       groups.push({ line, lots: group });
