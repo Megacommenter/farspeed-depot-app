@@ -567,6 +567,11 @@ function parsePackingListSheet(rows, legend) {
     const weight = estVal != null && estVal > 0
       ? estVal
       : (grossVal != null && netVal != null ? Math.max(grossVal, netVal) : (grossVal != null ? grossVal : (netVal != null ? netVal : 0)));
+    // Which of the two columns the sheet's own total adds up is not consistent between
+    // files - HPL_0060759755 totals the estimated column, the L34-S2 booking totals the
+    // actual one. Carry both so the workbook can settle it against its declared total
+    // rather than this parser guessing.
+    const weightAlt = estVal != null && estVal > 0 && grossVal != null && grossVal > 0 ? grossVal : weight;
     let cbm = 0;
     if (colMap.dimensionCm !== undefined && row[colMap.dimensionCm]) cbm = plCbmFromDimension(row[colMap.dimensionCm], "cm");
     if (!cbm && colMap.dimension !== undefined && row[colMap.dimension]) cbm = plCbmFromDimension(row[colMap.dimension]);
@@ -577,6 +582,12 @@ function parsePackingListSheet(rows, legend) {
     // That row has no real weight or CBM data, so skip it rather than counting it as a case.
     if (i === headerIdx + 1 && !weight && !cbm) continue;
 
+    // A blank lift cell means "same lift as the row above" only while we're still inside
+    // the same order. On a mixed booking sheet the lift column is filled for the lift's
+    // own cases and left blank for the spare-parts orders around them - carrying the lift
+    // forward there swept every later spare part into it, turning L34-S1's nine cases
+    // into nineteen. A new order number ends the run.
+    if (orderNo && lastOrderNo && orderNo !== lastOrderNo) lastLot = "";
     if (lot) lastLot = lot;
     if (container) lastContainer = container;
     if (caseNo) lastCase = caseNo;
@@ -594,14 +605,16 @@ function parsePackingListSheet(rows, legend) {
     // above it, and would contribute nothing but an inflated package count anyway.
     if (!caseNo && !weight && !cbm && lastCase) continue;
 
-    // Schindler's booking workbooks carry no lift/SAP column - the lot identity is the
-    // OMC Sales Order no. (60789730, 60789890), one per lift. Without this the whole
-    // sheet collapsed into a single UNSPECIFIED group.
-    const key = translateLot(lastLot) || (colMap.lot === undefined ? lastOrderNo : "") || "UNSPECIFIED";
+    // Schindler's booking workbooks identify a lot by its OMC Sales Order no. Where a lift
+    // column exists it wins, but rows without a lift still belong to their own order -
+    // lumping them together under UNSPECIFIED merged unrelated spare-parts consignments
+    // into one entry.
+    const key = translateLot(lastLot) || lastOrderNo || "UNSPECIFIED";
     if (!groups[key]) { groups[key] = { lot: key, packages: [], containers: new Set(), totalWeight: 0, totalCbm: 0 }; order.push(key); }
-    groups[key].packages.push({ code: lastCase || String(groups[key].packages.length + 1), orderNo: lastOrderNo, description, weightKg: weight ? String(weight) : "", cbm: cbm ? String(cbm) : "" });
+    groups[key].packages.push({ code: lastCase || String(groups[key].packages.length + 1), orderNo: lastOrderNo, description, weightKg: weight ? String(weight) : "", weightAltKg: weightAlt ? String(weightAlt) : "", cbm: cbm ? String(cbm) : "" });
     if (lastContainer) groups[key].containers.add(lastContainer);
     groups[key].totalWeight += weight;
+    groups[key].totalWeightAlt = (groups[key].totalWeightAlt || 0) + weightAlt;
     groups[key].totalCbm += cbm;
   }
   // A single lot can combine multiple separate order numbers, each restarting its own case
@@ -694,6 +707,47 @@ function parsePackingListSummarySheet(rows) {
     hasLotColumn: !!lot,
   };
 }
+// Finds the weight the workbook itself declares, anchored on volume.
+//
+// The total is written in different places - a trailing row on the case table, or a
+// separate booking page - and rarely labelled the same way twice. Volume is the reliable
+// anchor: it comes from one unambiguous column, so a row carrying a number equal to the
+// volume we computed is the sheet's own total line, and the largest other number on that
+// row is the weight it declares.
+function findDeclaredTotals(workbook, totalCbm) {
+  if (!(totalCbm > 0)) return null;
+  const tol = Math.max(0.02, totalCbm * 0.005);
+  for (const sheetName of workbook.SheetNames) {
+    const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: "", raw: true });
+    for (const row of rows) {
+      const nums = (row || []).map(plNum).filter((v) => v > 0);
+      if (nums.length < 2 || nums.length > 8) continue;
+      if (!nums.some((v) => Math.abs(v - totalCbm) <= tol)) continue;
+      const others = nums.filter((v) => Math.abs(v - totalCbm) > tol);
+      if (!others.length) continue;
+      const weight = Math.max(...others);
+      if (weight > totalCbm) return { weight, cbm: totalCbm, sheetName };
+    }
+  }
+  return null;
+}
+// Swaps every package onto the alternate weight column when that is the one the
+// workbook's declared total actually adds up to.
+function reconcileWeightColumn(groups, workbook) {
+  if (!groups || !groups.length) return groups;
+  const totalCbm = groups.reduce((s, g) => s + (g.totalCbm || 0), 0);
+  const primary = groups.reduce((s, g) => s + (g.totalWeight || 0), 0);
+  const alt = groups.reduce((s, g) => s + (g.totalWeightAlt || 0), 0);
+  if (!(alt > 0) || Math.abs(alt - primary) < 0.5) return groups;
+  const declared = findDeclaredTotals(workbook, Math.round(totalCbm * 100) / 100);
+  if (!declared) return groups;
+  if (Math.abs(alt - declared.weight) >= Math.abs(primary - declared.weight)) return groups;
+  for (const g of groups) {
+    for (const p of g.packages) if (p.weightAltKg) p.weightKg = p.weightAltKg;
+    g.totalWeight = g.totalWeightAlt;
+  }
+  return groups;
+}
 function parsePackingListWorkbook(workbook) {
   let bestGroups = null;
   let bestHasLotColumn = false;
@@ -734,7 +788,7 @@ function parsePackingListWorkbook(workbook) {
       if (summary) { bestGroups = summary.groups; break; }
     }
   }
-  return { groups: bestGroups, client, project };
+  return { groups: reconcileWeightColumn(bestGroups, workbook), client, project };
 }
 
 function sigPart(v) {
