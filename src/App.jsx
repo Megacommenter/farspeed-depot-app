@@ -817,6 +817,14 @@ function remainingPackages(item) {
 function activeArrivals(item) {
   return item.arrivals || [];
 }
+// Cases that can actually leave on a delivery: not yet delivered, and already checked in
+// at the depot. An item tracked by arrival batches can carry cases that are on the packing
+// list but have not physically landed, and those must not be offered as deliverable - the
+// same rule the Delivery screen already applies.
+function deliverablePackages(item) {
+  const pending = new Set(notYetArrivedPackages(item).map((p) => p.code));
+  return remainingPackages(item).filter((p) => !pending.has(p.code));
+}
 function arrivedCodesSet(item) {
   return new Set(activeArrivals(item).flatMap((a) => a.codes || []));
 }
@@ -1596,6 +1604,9 @@ const TEXT = {
     legacyMatchedItem: (id) => `Delivering from ${id}`,
     legacyArrivalStaysOpenHint: "Stays open at the depot until a matching Delivery file is uploaded (or you record a delivery for it normally).",
     legacyNoReferralHint: "No \"Ref Job no.\" line detected \u2014 enter the arrival's job number manually, or this file will only be archived.",
+    legacySheetCasesNote: (mark, n) => `Sheet marks ${mark} \u2014 ${n} case${n === 1 ? "" : "s"} pre-selected`,
+    legacySheetCasesMissing: (list) => `case ${list} not at the depot`,
+    legacySomeArrivalsUnmatched: (jobs) => `No inventory entry found for arrival job ${jobs} \u2014 that part of this sheet won't be delivered. Upload its Devan/CFS file first, or correct the number above.`,
     legacyNoArrivalFoundHint: (job) => `No inventory entry found with job number ${job} \u2014 check the number is correct, or upload that Devan/CFS file first. This file will still be archived, but no delivery will be recorded against it.`,
   },
   zh: {
@@ -2191,6 +2202,9 @@ const TEXT = {
     legacyMatchedItem: (id) => `送出自 ${id}`,
     legacyArrivalStaysOpenHint: "此記錄會保持在倉狀態，直至上載對應的送貨檔案（或日後手動記錄送貨）為止。",
     legacyNoReferralHint: "未有偵測到「Ref Job no.」字句 — 請手動輸入到倉工單號，否則此檔案只會被存檔。",
+    legacySheetCasesNote: (mark, n) => `工單註明 ${mark} \u2014 已預先選取 ${n} 件`,
+    legacySheetCasesMissing: (list) => `第 ${list} 件不在倉內`,
+    legacySomeArrivalsUnmatched: (jobs) => `找不到到倉工單號 ${jobs} 的存倉記錄 \u2014 此工單該部分不會記錄送貨。請先上載該拆櫃/CFS檔案，或修正上方號碼。`,
     legacyNoArrivalFoundHint: (job) => `找不到工單號 ${job} 的存倉記錄 \u2014 請檢查號碼是否正確，或先上載該拆櫃/CFS檔案。此檔案仍會被存檔，但不會記錄任何送貨。`,
   },
 };
@@ -4571,6 +4585,124 @@ function getPrintAreaLastRow(wb, sheetIndex) {
   } catch (e) { /* fall back to using the whole sheet */ }
   return null;
 }
+// Job sheets write the referral date free-hand and day-first ("Ref Job no. 2605126 on
+// 16/5/2026"), which Date() reads month-first - it rejects 16/5 outright and would turn
+// 5/6 into the wrong day without complaining. Separators are inconsistent too ("29- /5/
+// 2026" is a real line from this file), so they are normalised before the parts are read
+// off directly.
+function parseSheetDayFirstDate(raw) {
+  const s = String(raw == null ? "" : raw).replace(/\s+/g, "").replace(/[\/\.\-]+/g, "/");
+  if (!s) return "";
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (!m) return "";
+  const yr = m[3].length === 2 ? `20${m[3]}` : m[3];
+  const day = Number(m[1]), mon = Number(m[2]);
+  if (day < 1 || day > 31 || mon < 1 || mon > 12) return "";
+  return `${yr}-${String(mon).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+// A case marking, as Irene writes them - and the separator carries meaning:
+//   "#3-7/34"   a hyphen is an inclusive range: cases 3,4,5,6,7 of a 34-case lot
+//   "#3,7/19"   a comma is a discrete list:     cases 3 and 7 only, of a 19-case lot
+//   "1-16/16"   the whole lot, written in the C/S NO. column rather than on its own line
+// The "/34" tail is the lot's case count, not another case number, so it is taken off
+// first. Cells typed with a leading apostrophe to stop Excel reformatting them keep that
+// apostrophe once parsed ("'60766021/L52#3,7/19"), so it is stripped as well.
+function parseCaseMark(text) {
+  const original = String(text == null ? "" : text).trim().replace(/^['\u2018\u2019]/, "").trim();
+  let s = original.replace(/^#/, "").trim();
+  if (!s) return null;
+  let lotCases = null;
+  const slash = s.lastIndexOf("/");
+  if (slash > -1) {
+    const tail = s.slice(slash + 1).trim();
+    if (/^\d+$/.test(tail)) { lotCases = Number(tail); s = s.slice(0, slash); }
+  }
+  s = s.replace(/#/g, "").trim();
+  if (!s || !/^[\d\s,\-]+$/.test(s)) return null;
+  const numbers = [...parseRangeInput(s)].sort((a, b) => a - b);
+  if (!numbers.length) return null;
+  return { numbers, lotCases, text: original };
+}
+function mergeLotMark(lot, mark) {
+  if (!mark) return;
+  lot.caseNumbers = [...new Set([...(lot.caseNumbers || []), ...mark.numbers])].sort((a, b) => a - b);
+  if (!lot.caseText) lot.caseText = `#${mark.text.replace(/^#/, "")}`;
+  if (lot.lotCases == null) lot.lotCases = mark.lotCases;
+}
+// One delivery job sheet can close out more than one arrival. Schindler's 2606033 sheet
+// carries "Ref Job no. 2605126" with a single lot, then "Ref Job no. 2605199" with two
+// more below it, and only then one "共:" line covering all eight packages between them.
+// Read as a single flat delivery the second arrival disappears entirely, and the figures
+// each block declares for itself (2,208kg/11.44cbm against the first, 2,228kg/6.80cbm
+// against the second) are lost behind the combined total. So the page is split here into
+// one block per "Ref Job no." line, each holding its own lots, case numbers and totals.
+function parseJobSheetBlocks(rows) {
+  const blocks = [];
+  let cur = null;
+  const startBlock = (refJobNumber, refDateRaw) => {
+    cur = {
+      refJobNumber: refJobNumber || "", refDateRaw: refDateRaw || "",
+      shkNumber: "", liftNo: "", lots: [], pkgs: "", kg: "", cbm: "",
+    };
+    blocks.push(cur);
+    return cur;
+  };
+  for (const raw of rows || []) {
+    const cells = (raw || []).map((c) => String(c == null ? "" : c).trim());
+    const line = cells.filter(Boolean).join(" ").trim();
+    if (!line) continue;
+
+    const refM = line.match(/ref(?:er)?\.?\s*(?:to\s+)?job\s*no\.?\s*([A-Za-z0-9\-]+)\s*(?:on\s*([\d\/\.\- ]+\d))?/i);
+    if (refM) { startBlock(refM[1].trim(), (refM[2] || "").trim()); continue; }
+
+    // A 共:/Total: line closes the block it belongs to; the grand total at the foot of the
+    // page belongs to no single arrival and must not overwrite the last block's figures.
+    if (/(?:共|total)\s*[:\uff1a]/i.test(line)) { cur = null; continue; }
+    if (!cur) {
+      // Sheets that name their lots without any "Ref Job no." heading still get read - the
+      // first lot line opens an anonymous block - but ordinary header rows do not.
+      if (!/^['\u2018\u2019]?\d{6,12}\s*\//.test(line)) continue;
+      startBlock("", "");
+    }
+
+    const shkM = line.match(/\bSHK\s*[-#]?\s*(\d{3,6})\s*\/\s*(\d{2})\b/i);
+    if (shkM && !cur.shkNumber) cur.shkNumber = `SHK${shkM[1]}/${shkM[2]}`;
+    const liftM = line.match(/lift\s*no\.?\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-\.\/]*)/i);
+    if (liftM && !cur.liftNo) cur.liftNo = liftM[1].trim();
+
+    // "60759188/L32-01", or with its cases written inline: "'60766021/L52#3,7/19"
+    const lotM = line.match(/^['\u2018\u2019]?(\d{6,12})\s*\/\s*([A-Za-z][A-Za-z0-9\-\.]*)\s*(?:#\s*([\d][\d\s,\-\/]*))?$/);
+    if (lotM) {
+      const lot = { lotRef: lotM[1], unitCode: lotM[2], caseNumbers: [], caseText: "", lotCases: null };
+      if (lotM[3]) mergeLotMark(lot, parseCaseMark(lotM[3]));
+      cur.lots.push(lot);
+      continue;
+    }
+
+    // A marking on a line of its own belongs to the lot named directly above it.
+    if (/^#/.test(line)) {
+      if (cur.lots.length) mergeLotMark(cur.lots[cur.lots.length - 1], parseCaseMark(line));
+      continue;
+    }
+
+    // The C/S NO. row states the block's own package/weight/volume figures, and on some
+    // sheets the case marking too, sitting in its own column: "C/S NO. | 1-16/16 | 16 | PKGS".
+    if (/^C\/S\s*NO\.?/i.test(cells.find(Boolean) || "")) {
+      for (const cell of cells.slice(1)) {
+        if (!/^#?\s*\d[\d\s,\-]*\/\s*\d+\s*$/.test(cell)) continue;
+        if (cur.lots.length) mergeLotMark(cur.lots[cur.lots.length - 1], parseCaseMark(cell));
+        break;
+      }
+      const pk = line.match(/(\d+)\s*PKGS?/i);
+      const kg = line.match(/([\d,]+(?:\.\d+)?)\s*KGS?/i);
+      const cb = line.match(/([\d,]+(?:\.\d+)?)\s*CBM/i);
+      if (pk && !cur.pkgs) cur.pkgs = pk[1];
+      if (kg && !cur.kg) cur.kg = kg[1].replace(/,/g, "");
+      if (cb && !cur.cbm) cur.cbm = cb[1].replace(/,/g, "");
+    }
+  }
+  return blocks;
+}
 function guessFieldsFromWorkbook(wb) {
   const sheetIndex = 0;
   const sheet = wb.Sheets[wb.SheetNames[sheetIndex]];
@@ -4615,11 +4747,50 @@ function guessFieldsFromWorkbook(wb) {
   if (referMatches.length) {
     out.referJobNumber = [...new Set(referMatches.map((m) => m[1].trim()))].join(", ");
     const firstWithDate = referMatches.find((m) => m[2]);
-    if (firstWithDate) {
-      const d = new Date(firstWithDate[2].trim());
-      if (!isNaN(d)) out.referDate = dateToLocalISO(d);
+    if (firstWithDate) out.referDate = parseSheetDayFirstDate(firstWithDate[2]);
+  }
+
+  // The per-arrival breakdown of the sheet - see parseJobSheetBlocks.
+  const blocks = parseJobSheetBlocks(rows);
+  out.refBlocks = blocks.map((b) => ({
+    refJobNumber: b.refJobNumber,
+    refDate: parseSheetDayFirstDate(b.refDateRaw),
+    shkNumber: b.shkNumber,
+    liftNo: b.liftNo,
+    lots: b.lots,
+    pkgs: b.pkgs, kg: b.kg, cbm: b.cbm,
+    caseNumbers: [...new Set(b.lots.flatMap((l) => l.caseNumbers || []))].sort((x, y) => x - y),
+  }));
+  // Case markings keyed both ways, because an arrival can be found either by the lot it
+  // holds (L52) or by the job number it came in under (2605199), depending on which of
+  // the two the delivery sheet managed to name.
+  out.caseMarksByLot = {};
+  out.caseMarksByRef = {};
+  for (const b of out.refBlocks) {
+    for (const lot of b.lots) {
+      if (!(lot.caseNumbers || []).length) continue;
+      for (const key of [lot.unitCode, lot.lotRef, `${lot.lotRef}/${lot.unitCode}`]) {
+        if (!key) continue;
+        const k = String(key).toUpperCase();
+        const prev = out.caseMarksByLot[k];
+        out.caseMarksByLot[k] = {
+          numbers: [...new Set([...(prev ? prev.numbers : []), ...lot.caseNumbers])].sort((x, y) => x - y),
+          text: [prev && prev.text, lot.caseText].filter(Boolean).join(" "),
+        };
+      }
+    }
+    if (b.refJobNumber && b.caseNumbers.length) {
+      out.caseMarksByRef[b.refJobNumber] = {
+        numbers: b.caseNumbers,
+        text: b.lots.map((l) => l.caseText).filter(Boolean).join(" "),
+      };
     }
   }
+  // A sheet closing one arrival names one SHK reference and it belongs on the row; a sheet
+  // closing several names one each, and picking either would be wrong, so the field is
+  // left for the user rather than guessed at.
+  const shkNumbers = [...new Set(out.refBlocks.map((b) => b.shkNumber).filter(Boolean))];
+  out.shkNumber = shkNumbers.length === 1 ? shkNumbers[0] : "";
 
   const liftMatch = flatText.match(/lift\s*no\.?\s*(?:phase\s*\d+\s*)?(#[0-9,\s]+)/i)
     || flatText.match(/unit\s*(?:no\.?|code)\s*[:\-]?\s*([A-Za-z0-9\-\.\/#, ]{2,30})/i)
@@ -4686,6 +4857,25 @@ function guessFieldsFromWorkbook(wb) {
     });
   }
 
+  // When one sheet closes several arrivals, its single "共:" line covers all of them, and
+  // sharing that figure out pro-rata invents numbers the sheet never stated. This file
+  // declares 11.44 cbm against 2605126 and 6.80 cbm against 2605199; splitting the 18.24
+  // total across four cases each would have put 9.12 on both. So where the page is
+  // genuinely multi-arrival, each block's own C/S NO. figures go in front of the grand
+  // total, which then finds every lot already claimed and drops out.
+  const namedBlocks = out.refBlocks.filter((b) => b.refJobNumber);
+  const blocksWithFigures = namedBlocks.filter((b) => b.kg || b.cbm);
+  if (namedBlocks.length >= 2 && blocksWithFigures.length) {
+    out.declaredTotalsList = [
+      ...blocksWithFigures.map((b) => ({
+        pkgs: b.pkgs, kg: b.kg, cbm: b.cbm,
+        context: [b.refJobNumber, b.shkNumber, b.liftNo, ...b.lots.map((l) => `${l.lotRef}/${l.unitCode}`)]
+          .filter(Boolean).join(" "),
+      })),
+      ...out.declaredTotalsList,
+    ];
+  }
+
   const ssShipMatch = flatText.match(/ex\s*ss\.?\s*"[^"]+"[^\n]*/i);
   if (ssShipMatch && !out.ssDoNo) out.ssDoNo = ssShipMatch[0].trim();
 
@@ -4737,6 +4927,29 @@ function sitesLooselyMatch(enA, zhA, enB, zhB) {
   const aZh = String(zhA || "").trim(), bZh = String(zhB || "").trim();
   if (aEn && bEn && (aEn.includes(bEn) || bEn.includes(aEn))) return true;
   if (aZh && bZh && (aZh.includes(bZh) || bZh.includes(aZh))) return true;
+  return false;
+}
+// Job numbers are the same number however they were typed - "2605199", "2605199 " and
+// "26-05199" all refer to one arrival - so they are compared on digits and letters alone.
+function jobNosMatch(a, b) {
+  const na = String(a || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const nb = String(b || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return !!na && na === nb;
+}
+// A delivery sheet may name a lot more loosely than the arrival record does - "L32" for
+// what was checked in as "L32-01". Matching allows one to be a prefix of the other only
+// where the next character is a separator, so "L32" finds "L32-01" while "L3" does not.
+function lotTokenMatches(a, b) {
+  const A = String(a || "").toUpperCase().replace(/\s+/g, "");
+  const B = String(b || "").toUpperCase().replace(/\s+/g, "");
+  if (!A || !B) return false;
+  for (const partA of A.split(/[,;]/).filter(Boolean)) {
+    for (const partB of B.split(/[,;]/).filter(Boolean)) {
+      if (partA === partB) return true;
+      const [s, l] = partA.length <= partB.length ? [partA, partB] : [partB, partA];
+      if (s.length >= 2 && l.startsWith(s) && /[^A-Z0-9]/.test(l.charAt(s.length))) return true;
+    }
+  }
   return false;
 }
 // Parses typed case-number input like "1,3-5,7" into a Set of integers, supporting
@@ -5230,17 +5443,89 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
   // Delivery: match against real inventory items (itemized, with cases still remaining)
   // instead of asking for a flat package count - prefer a typed "Refers to Arrival Job
   // No." if given, otherwise match by client + site the same way as Devan/CFS.
-  const matchedItems = row.docType === "Delivery" && row.client
-    ? items.filter((it) => {
-        if (it.client !== row.client) return false;
-        if (!(it.packages || []).length) return false;
-        if (remainingPackages(it).length === 0) return false;
-        const refNos = String(row.referJobNumber || "").split(",").map((s) => s.trim()).filter(Boolean);
-        if (refNos.length) return refNos.includes(String(it.jobNumber || "").trim());
-        return (row.projectEn || row.projectZh) && sitesLooselyMatch(row.projectEn, row.projectZh, it.project, it.constructionSite);
-      })
-    : [];
+  // One sheet can close out several arrivals at once, so each "Ref Job no." block is
+  // resolved on its own rather than the page being matched once as a whole. A block whose
+  // job number finds nothing falls back to the lot codes it names (60766021/L52), which is
+  // how an arrival filed under a different job number is still found; and a block that
+  // resolves to nothing at all is reported rather than silently vanishing, which is what
+  // used to happen - the sheet looked matched because its *other* block had matched.
+  const deliveryRefBlocks = (() => {
+    const fromSheet = (row.refBlocks || []).filter((b) => b.refJobNumber);
+    const typed = String(row.referJobNumber || "").split(/[,;]/).map((s) => s.trim()).filter(Boolean);
+    // A number typed in by hand that the sheet never mentioned still gets looked up.
+    const extra = typed
+      .filter((r) => !fromSheet.some((b) => jobNosMatch(b.refJobNumber, r)))
+      .map((r) => ({ refJobNumber: r, lots: [] }));
+    return [...fromSheet.filter((b) => typed.some((r) => jobNosMatch(b.refJobNumber, r))), ...extra];
+  })();
+  const deliveryMatch = (() => {
+    if (row.docType !== "Delivery" || !row.client) return { list: [], unmatched: [] };
+    const base = (items || []).filter((it) =>
+      it.client === row.client && (it.packages || []).length > 0 && deliverablePackages(it).length > 0);
+    const siteOk = (it) => !!(row.projectEn || row.projectZh)
+      && sitesLooselyMatch(row.projectEn, row.projectZh, it.project, it.constructionSite);
+    if (!deliveryRefBlocks.length) return { list: base.filter(siteOk), unmatched: [] };
+    const chosen = new Map();
+    const unmatched = [];
+    for (const b of deliveryRefBlocks) {
+      const byJob = base.filter((it) => jobNosMatch(it.jobNumber, b.refJobNumber));
+      if (byJob.length) { byJob.forEach((it) => chosen.set(it.id, it)); continue; }
+      const lotCodes = (b.lots || []).flatMap((l) => [l.unitCode, l.lotRef]).filter(Boolean);
+      const byLot = lotCodes.length
+        ? base.filter((it) => !chosen.has(it.id) && siteOk(it) && lotCodes.some((c) => lotTokenMatches(it.unitCode, c)))
+        : [];
+      if (byLot.length) { byLot.forEach((it) => chosen.set(it.id, it)); continue; }
+      unmatched.push(b.refJobNumber);
+    }
+    return { list: [...chosen.values()], unmatched };
+  })();
+  const matchedItems = deliveryMatch.list;
+  const unmatchedRefs = deliveryMatch.unmatched;
   const selectedByItem = row.selectedByItem || {};
+  // The sheet already says which cases are leaving, so tick them instead of making the
+  // user hunt for them among everything still at the depot. A case the sheet names but the
+  // depot does not hold is reported rather than quietly dropped: this file reads "#3-7/34"
+  // for L32-01 while case 3 has already gone, so four are ticked and case 3 is flagged -
+  // which is exactly the "4 PKGS" the sheet declares for that block.
+  function sheetCasesFor(it) {
+    const byLot = row.caseMarksByLot || {};
+    const lotKey = Object.keys(byLot).find((k) => lotTokenMatches(it.unitCode, k));
+    if (lotKey) return byLot[lotKey];
+    const byRef = row.caseMarksByRef || {};
+    const refKey = Object.keys(byRef).find((k) => jobNosMatch(it.jobNumber, k));
+    return refKey ? byRef[refKey] : null;
+  }
+  function sheetSelectionFor(it) {
+    const mark = sheetCasesFor(it);
+    if (!mark || !(mark.numbers || []).length) return null;
+    const deliverable = deliverablePackages(it);
+    const wanted = new Set(mark.numbers);
+    const codes = deliverable.filter((p) => wanted.has(codeLeadingNumber(p.code))).map((p) => p.code);
+    const present = new Set(deliverable.map((p) => codeLeadingNumber(p.code)));
+    return { codes, missing: mark.numbers.filter((n) => !present.has(n)), text: mark.text || "" };
+  }
+  const caseAutoApplied = row.caseAutoApplied || {};
+  const matchedItemKey = matchedItems.map((it) => it.id).join("|");
+  useEffect(() => {
+    if (row.docType !== "Delivery") return;
+    const pending = {};
+    for (const it of matchedItems) {
+      if (caseAutoApplied[it.id]) continue;
+      if ((selectedByItem[it.id] || []).length) continue;
+      const sel = sheetSelectionFor(it);
+      if (!sel || !sel.codes.length) continue;
+      pending[it.id] = sel.codes;
+    }
+    const ids = Object.keys(pending);
+    if (!ids.length) return;
+    onChange({
+      ...row,
+      selectedByItem: { ...selectedByItem, ...pending },
+      caseAutoApplied: { ...caseAutoApplied, ...Object.fromEntries(ids.map((id) => [id, true])) },
+    });
+    // Runs once per matched item: the applied flag survives further edits, so a case the
+    // user then unticks by hand is not silently ticked again on the next render.
+  }, [matchedItemKey, row.docType]);
   // A Delivery sheet declares its own totals just as a Devan does - the L7/L8/L9 sheet
   // closes with one line covering all twelve packages - and that figure is the accurate
   // one, so it drives the delivery instead of the packing-list sum of the cases ticked.
@@ -5577,7 +5862,8 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
           ))}
           <div className="flex flex-col gap-4">
             {matchedItems.map((it) => {
-              const remainingPkgs = remainingPackages(it);
+              const remainingPkgs = deliverablePackages(it);
+              const sheetSel = sheetSelectionFor(it);
               const selectedCodes = selectedByItem[it.id] || [];
               const derivedTotals = selectedItemTotals(it, selectedCodes);
               const itemDeclared = getDeclaredForItem(it);
@@ -5603,6 +5889,14 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
                       <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => selectAllItem(it.id, remainingPkgs)}>{t.selectAllBtn}</button>
                     </div>
                   </div>
+                  {sheetSel && (
+                    <div className="text-xs mb-2" style={{ color: colors.inkFaint }}>
+                      {t.legacySheetCasesNote(sheetSel.text, sheetSel.codes.length)}
+                      {sheetSel.missing.length > 0 && (
+                        <span style={{ color: colors.red }}> {"\u00b7"} {t.legacySheetCasesMissing(sheetSel.missing.join(", "))}</span>
+                      )}
+                    </div>
+                  )}
                   {selectedCodes.length > 0 && (
                     <div className="mb-2">
                       <div className="text-xs font-semibold mb-1.5" style={{ color: colors.ink }}>
@@ -5691,6 +5985,11 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
       {row.docType === "Delivery" && matchedItems.length === 0 && (
         <div className="px-2 py-1.5 rounded text-xs" style={{ background: colors.redSoft, color: colors.red }}>
           {row.referJobNumber ? t.legacyNoArrivalFoundHint(row.referJobNumber) : t.legacyNoReferralHint}
+        </div>
+      )}
+      {row.docType === "Delivery" && matchedItems.length > 0 && unmatchedRefs.length > 0 && (
+        <div className="px-2 py-1.5 rounded text-xs" style={{ background: colors.redSoft, color: colors.red }}>
+          {t.legacySomeArrivalsUnmatched(unmatchedRefs.join(", "))}
         </div>
       )}
     </div>
@@ -6001,6 +6300,11 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
         oversizeByLot: {},
         referJobNumber: "",
         referDate: "",
+        declaredTotalsList: [],
+        refBlocks: [],
+        caseMarksByLot: {},
+        caseMarksByRef: {},
+        caseAutoApplied: {},
         autoDetected: false,
       };
       const isExcel = /\.(xlsx|xls|csv)$/i.test(file.name);
@@ -6025,6 +6329,11 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
             oversizeByLot: guessed.oversizeByLot && Object.keys(guessed.oversizeByLot).length ? guessed.oversizeByLot : base.oversizeByLot,
             referJobNumber: guessed.referJobNumber || base.referJobNumber,
             referDate: guessed.referDate || base.referDate,
+            shkNumber: guessed.shkNumber || base.shkNumber,
+            declaredTotalsList: guessed.declaredTotalsList || base.declaredTotalsList,
+            refBlocks: guessed.refBlocks || base.refBlocks,
+            caseMarksByLot: guessed.caseMarksByLot || base.caseMarksByLot,
+            caseMarksByRef: guessed.caseMarksByRef || base.caseMarksByRef,
             autoDetected: true,
           });
           if (base.docType === "Delivery" && guessed.referJobNumber) base.jobNumber = base.jobNumber || guessed.referJobNumber;
