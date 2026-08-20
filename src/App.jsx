@@ -1661,6 +1661,8 @@ const TEXT = {
     legacyNoReferralHint: "No \"Ref Job no.\" line detected \u2014 enter the arrival's job number manually, or this file will only be archived.",
     legacySheetCasesNote: (mark, n) => `Sheet marks ${mark} \u2014 ${n} case${n === 1 ? "" : "s"} pre-selected`,
     legacySheetCasesMissing: (list) => `case ${list} not at the depot`,
+    legacyMisfiledCases: (codes, from) => `Case ${codes} sits under ${from}, but the lot size on the case number says it belongs here \u2014 the packing list's lift column had it wrong.`,
+    legacyMisfiledFixBtn: "Move it here",
     legacySomeArrivalsUnmatched: (jobs) => `No inventory entry found for arrival job ${jobs} \u2014 that part of this sheet won't be delivered. Upload its Devan/CFS file first, or correct the number above.`,
     legacyNoArrivalFoundHint: (job) => `No inventory entry found with job number ${job} \u2014 check the number is correct, or upload that Devan/CFS file first. This file will still be archived, but no delivery will be recorded against it.`,
   },
@@ -2261,6 +2263,8 @@ const TEXT = {
     legacyNoReferralHint: "未有偵測到「Ref Job no.」字句 — 請手動輸入到倉工單號，否則此檔案只會被存檔。",
     legacySheetCasesNote: (mark, n) => `工單註明 ${mark} \u2014 已預先選取 ${n} 件`,
     legacySheetCasesMissing: (list) => `第 ${list} 件不在倉內`,
+    legacyMisfiledCases: (codes, from) => `第 ${codes} 件現存於 ${from}，但件號所示之總件數顯示應屬此項 \u2014 裝箱單之梯號欄有誤。`,
+    legacyMisfiledFixBtn: "移至此項",
     legacySomeArrivalsUnmatched: (jobs) => `找不到到倉工單號 ${jobs} 的存倉記錄 \u2014 此工單該部分不會記錄送貨。請先上載該拆櫃/CFS檔案，或修正上方號碼。`,
     legacyNoArrivalFoundHint: (job) => `找不到工單號 ${job} 的存倉記錄 \u2014 請檢查號碼是否正確，或先上載該拆櫃/CFS檔案。此檔案仍會被存檔，但不會記錄任何送貨。`,
   },
@@ -5515,7 +5519,7 @@ function SharedDeclaredTotal({ group, value, onPatch, colors, t, inputClass, inp
     </div>
   );
 }
-function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAll, processing, processDisabled, colors, t, lang }) {
+function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnrich, onProcessAll, processing, processDisabled, colors, t, lang }) {
   const inputStyle = inputStyleFor(colors);
   const set = (k) => (e) => onChange({ ...row, [k]: e.target.value });
   const itemized = JOB_SHEET_ITEMIZED.includes(row.docType);
@@ -5641,6 +5645,88 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
     const codes = deliverable.filter((p) => wanted.has(codeLeadingNumber(p.code))).map((p) => p.code);
     const present = new Set(deliverable.map((p) => codeLeadingNumber(p.code)));
     return { codes, missing: mark.numbers.filter((n) => !present.has(n)), text: mark.text || "" };
+  }
+  // The Schindler booking for 60766021/60766022 mislabels its LIFT NO. column on four
+  // rows, so cases 4/20 and 6/20 were checked in under L52 and 18/19 and 19/19 under L53.
+  // The importer now reads that correctly, but entries created before it did are still
+  // wrong, and rebuilding them from the packing list forward is a lot to ask.
+  //
+  // The case number itself gives the proof: every case of a nineteen-case lot is numbered
+  // "n/19". So an entry whose cases are overwhelmingly out of 19, sitting beside one whose
+  // cases are overwhelmingly out of 20, can claim any stray "n/19" from its neighbour -
+  // and it works in both directions, whether or not this particular delivery happens to
+  // name the case. An entry with no clear lot size, or a neighbour with the same one, is
+  // left alone.
+  function dominantLotSize(it) {
+    const counts = new Map();
+    for (const p of it.packages || []) {
+      const m = String(p.code).match(/\/(\d+)\s*$/);
+      if (!m) continue;
+      const n = Number(m[1]);
+      counts.set(n, (counts.get(n) || 0) + 1);
+    }
+    if (!counts.size) return null;
+    const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+    if (ranked.length > 1 && ranked[0][1] === ranked[1][1]) return null;
+    return ranked[0][0];
+  }
+  function misfiledCasesFor(it) {
+    const mine = dominantLotSize(it);
+    if (!mine) return [];
+    const here = new Set((it.packages || []).map((p) => p.code));
+    const found = [];
+    for (const other of matchedItems) {
+      if (other.id === it.id) continue;
+      const theirs = dominantLotSize(other);
+      if (!theirs || theirs === mine) continue;
+      for (const p of other.packages || []) {
+        const m = String(p.code).match(/\/(\d+)\s*$/);
+        if (!m || Number(m[1]) !== mine || here.has(p.code)) continue;
+        found.push({ code: p.code, from: other });
+      }
+    }
+    return found.sort((a, b) => codeLeadingNumber(a.code) - codeLeadingNumber(b.code));
+  }
+  function repairMisfiled(target, moves) {
+    if (!onLegacyEnrich || !moves.length) return;
+    const bySource = new Map();
+    for (const m of moves) {
+      if (!bySource.has(m.from.id)) bySource.set(m.from.id, { item: m.from, codes: [] });
+      bySource.get(m.from.id).codes.push(m.code);
+    }
+    const entries = [];
+    const moved = [];
+    const nextSelected = { ...selectedByItem };
+    for (const { item, codes } of bySource.values()) {
+      const set = new Set(codes);
+      moved.push(...(item.packages || []).filter((p) => set.has(p.code)));
+      entries.push({
+        itemId: item.id,
+        patch: {
+          packages: (item.packages || []).filter((p) => !set.has(p.code)),
+          // The case leaves its old entry's arrival batches too, or that entry would go on
+          // believing it took delivery of a box it never held.
+          arrivals: (item.arrivals || []).map((a) => ({ ...a, codes: (a.codes || []).filter((c) => !set.has(c)) })),
+        },
+      });
+      nextSelected[item.id] = (nextSelected[item.id] || []).filter((c) => !set.has(c));
+    }
+    const denom = (c) => { const m = String(c).match(/\/(\d+)\s*$/); return m ? Number(m[1]) : 0; };
+    const patch = {
+      packages: [...(target.packages || []), ...moved]
+        .sort((a, b) => denom(a.code) - denom(b.code) || codeLeadingNumber(a.code) - codeLeadingNumber(b.code)),
+    };
+    // An entry tracked by arrival batches would treat an unlisted case as not yet landed,
+    // so the moved cases join its earliest batch and stay deliverable.
+    if (usesArrivalBatches(target)) {
+      const codes = moved.map((p) => p.code);
+      patch.arrivals = (target.arrivals || []).map((a, i) =>
+        i === 0 ? { ...a, codes: [...new Set([...(a.codes || []), ...codes])] } : a);
+    }
+    entries.push({ itemId: target.id, patch });
+    onLegacyEnrich(entries);
+    nextSelected[target.id] = [...new Set([...(nextSelected[target.id] || []), ...moved.map((p) => p.code)])];
+    onChange({ ...row, selectedByItem: nextSelected });
   }
   const caseAutoApplied = row.caseAutoApplied || {};
   const matchedItemKey = matchedItems.map((it) => it.id).join("|");
@@ -6063,6 +6149,21 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
                       )}
                     </div>
                   )}
+                  {(() => {
+                    const misfiled = misfiledCasesFor(it);
+                    if (!misfiled.length) return null;
+                    const from = [...new Set(misfiled.map((m) => m.from.unitCode || m.from.id))].join(", ");
+                    return (
+                      <div className="px-2 py-1.5 rounded text-xs mb-2 flex flex-wrap items-center gap-2"
+                        style={{ background: colors.amberSoft, color: colors.amberText }}>
+                        <span>{t.legacyMisfiledCases(misfiled.map((m) => m.code).join(", "), from)}</span>
+                        <button type="button" className="font-semibold underline"
+                          onClick={() => repairMisfiled(it, misfiled)}>
+                          {t.legacyMisfiledFixBtn}
+                        </button>
+                      </div>
+                    );
+                  })()}
                   {selectedCodes.length > 0 && (
                     <div className="mb-2">
                       <div className="text-xs font-semibold mb-1.5" style={{ color: colors.ink }}>
@@ -6855,7 +6956,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
       {rows.length > 0 && (
         <div className="flex flex-col gap-3">
           {rows.map((row, idx) => (
-            <LegacyUploadRow key={idx} row={row} onChange={(next) => updateRow(idx, next)} onRemove={() => removeRow(idx)} incoming={incoming} items={items} onProcessAll={processAll} processing={processing} processDisabled={processing || rows.some((r) => !r.projectEn && !r.projectZh) || rows.some((r) => !r.client)} colors={colors} t={t} lang={lang} />
+            <LegacyUploadRow key={idx} row={row} onChange={(next) => updateRow(idx, next)} onRemove={() => removeRow(idx)} incoming={incoming} items={items} onLegacyEnrich={onLegacyEnrich} onProcessAll={processAll} processing={processing} processDisabled={processing || rows.some((r) => !r.projectEn && !r.projectZh) || rows.some((r) => !r.client)} colors={colors} t={t} lang={lang} />
           ))}
           {rows.some((r) => !r.client) && (
             <div className="px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>
@@ -8567,7 +8668,16 @@ export default function FarspeedInventory() {
   // or duplicated, only enriched.
   function handleLegacyEnrich(entries) {
     const byItemId = new Map(entries.map((e) => [e.itemId, e.patch]));
-    persist(items.map((i) => (byItemId.has(i.id) ? { ...i, ...byItemId.get(i.id) } : i)));
+    // A patch that only fills in metadata (SS/D.O., site names) leaves the figures alone -
+    // recomputing there would overwrite a weight someone had corrected by hand. A patch
+    // that changes which cases the entry holds must recompute, because the packing-list
+    // weight and volume are sums over exactly those cases.
+    persist(items.map((i) => {
+      if (!byItemId.has(i.id)) return i;
+      const patch = byItemId.get(i.id);
+      const next = { ...i, ...patch };
+      return patch.packages ? recomputeItemTotals(next) : next;
+    }));
     return entries.map((e) => ({ itemId: e.itemId }));
   }
 
