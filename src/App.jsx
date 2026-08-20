@@ -1611,7 +1611,9 @@ const TEXT = {
     legacyColFile: "File",
     legacyColLinked: "Linked Entry",
     legacyArchivedOnly: "Archived only",
-    legacyEditLinkedHint: "Only fixes this archive listing \u2014 edit the linked FS-#### entry directly in Inventory if its data needs correcting too.",
+    legacyEditLinkedHint: "The fields above fix this archive listing. The depot records this file created are below \u2014 correcting them here changes the linked FS-#### entries directly.",
+    legacyLinkedRecordsLabel: "Records this file created",
+    legacyLinkedRecordsHint: "A weight or volume typed here is taken as stated for that lot, and replaces whatever the sheet was read as. Leave both blank to fall back to the packing-list figures. To change which cases are involved, open the entry in Inventory.",
     legacyClientUnresolved: "\u2014 select client \u2014",
     legacyClientRequiredSummaryMsg: "One or more files don't have a recognized client \u2014 select the correct client for each file before processing.",
     legacyDeliveredFrom: (id) => `Delivered from ${id}`,
@@ -2219,7 +2221,9 @@ const TEXT = {
     legacyColFile: "檔案",
     legacyColLinked: "連結記錄",
     legacyArchivedOnly: "僅存檔",
-    legacyEditLinkedHint: "只會修正此存檔記錄 \u2014 如需同時修正相應的 FS-#### 存倉記錄，請直接於存倉列表編輯。",
+    legacyEditLinkedHint: "上方欄位修正此存檔記錄。下方為此檔案所建立之倉存記錄 \u2014 於此修改會直接更新相應之 FS-#### 記錄。",
+    legacyLinkedRecordsLabel: "此檔案建立之記錄",
+    legacyLinkedRecordsHint: "於此輸入之重量或體積會視為該批次之實際數據，並取代由單據讀取之數值。兩者留空則回復使用裝箱單數據。如需更改所涉貨箱，請於存倉列表開啟該記錄。",
     legacyClientUnresolved: "— 請選擇客戶 —",
     legacyClientRequiredSummaryMsg: "部分檔案未能識別客戶 — 處理前請為每個檔案選擇正確客戶。",
     legacyDeliveredFrom: (id) => `送出自 ${id}`,
@@ -4990,6 +4994,9 @@ function parseJobSheetBlocks(rows) {
   // L32-02..05 under SHK0107/26 - so the heading in force is tracked as the page is read
   // rather than being pinned to whichever block happened to be open.
   let ctx = { shkNumber: "", liftNo: "" };
+  // Set when a C/S NO. row stated its figures but named no cases, so the line under it may
+  // be carrying that lot's case list without a leading "#".
+  let awaitingMark = false;
   const closed = (b) => !!(b && (b.pkgs || b.kg || b.cbm));
   const startBlock = (refJobNumber, refDateRaw) => {
     cur = {
@@ -5035,6 +5042,7 @@ function parseJobSheetBlocks(rows) {
       const lot = { lotRef: lotM[1], unitCode: lotM[2], caseNumbers: [], caseText: "", lotCases: null };
       if (lotM[3]) mergeLotMark(lot, parseCaseMark(lotM[3]));
       cur.lots.push(lot);
+      awaitingMark = false;
       continue;
     }
     if (!cur) continue; // ordinary header rows above the first lot or referral
@@ -5042,8 +5050,19 @@ function parseJobSheetBlocks(rows) {
     // A marking on a line of its own belongs to the lot named directly above it.
     if (/^#/.test(line)) {
       if (cur.lots.length) mergeLotMark(cur.lots[cur.lots.length - 1], parseCaseMark(line));
+      awaitingMark = false;
       continue;
     }
+    // Some sheets write that list without the "#", on the line under a C/S NO. row that
+    // stated no cases itself - "1-8,14,16-21,26,28-32" beneath L34-S1's row. A bare list of
+    // numbers is only read this way in that exact position, so an ordinary figure elsewhere
+    // on the page is never mistaken for a case marking.
+    if (awaitingMark && /^[\d][\d\s,\-]*$/.test(line)) {
+      if (cur.lots.length) mergeLotMark(cur.lots[cur.lots.length - 1], parseCaseMark(line));
+      awaitingMark = false;
+      continue;
+    }
+    awaitingMark = false;
 
     // The C/S NO. row states the block's own package/weight/volume figures, and on some
     // sheets the case marking too, sitting in its own column: "C/S NO. | 1-16/16 | 16 | PKGS".
@@ -5061,6 +5080,9 @@ function parseJobSheetBlocks(rows) {
       if (kg && !cur.kg) cur.kg = kg[1].replace(/,/g, "");
       if (cb && !cur.cbm) cur.cbm = cb[1].replace(/,/g, "");
       if (!hadFigures && closed(cur) && cur.lots.length > 0) cur.figuresAfterLots = true;
+      const lastLot = cur.lots[cur.lots.length - 1];
+      awaitingMark = !!lastLot && !(lastLot.caseNumbers || []).length;
+      continue;
     }
   }
   return blocks;
@@ -5144,7 +5166,12 @@ function guessFieldsFromWorkbook(wb) {
         };
       }
     }
-    if (b.refJobNumber && b.caseNumbers.length) {
+    // Keyed by job number only where the block names no lot at all. A job number covers
+    // every lot that arrived under it - 2605199 brought in L52, L53 and four L32 lots - so
+    // a block that does name its lot must be matched on that lot, or its case numbers get
+    // applied to every other lot on the same job.
+    const named = b.lots.some((l) => l.unitCode || l.lotRef);
+    if (b.refJobNumber && b.caseNumbers.length && !named) {
       const sizes = [...new Set(b.lots.map((l) => l.lotCases).filter((n) => n != null))];
       out.caseMarksByRef[b.refJobNumber] = {
         numbers: b.caseNumbers,
@@ -5246,14 +5273,15 @@ function guessFieldsFromWorkbook(wb) {
     // page describes exactly one lot and there is no room for ambiguity.
     : (blocksWithFigures.length === 1 && blocksWithFigures[0].lots.length === 1);
   if (usePerBlock) {
-    out.declaredTotalsList = [
-      ...blocksWithFigures.map((b) => ({
-        pkgs: b.pkgs, kg: b.kg, cbm: b.cbm,
-        context: [b.refJobNumber, b.shkNumber, b.liftNo, ...b.lots.map((l) => `${l.lotRef}/${l.unitCode}`)]
-          .filter(Boolean).join(" "),
-      })),
-      ...out.declaredTotalsList,
-    ];
+    // The per-lot lines already account for everything the sheet states, so the sheet-wide
+    // total is dropped rather than left to claim whatever lots they didn't. On this
+    // delivery the row matches seven entries by job number but the sheet only covers two
+    // of them, and the leftover total would otherwise attach itself to the other five.
+    out.declaredTotalsList = blocksWithFigures.map((b) => ({
+      pkgs: b.pkgs, kg: b.kg, cbm: b.cbm,
+      context: [b.refJobNumber, b.shkNumber, b.liftNo, ...b.lots.map((l) => `${l.lotRef}/${l.unitCode}`)]
+        .filter(Boolean).join(" "),
+    }));
   }
 
   const ssShipMatch = flatText.match(/ex\s*ss\.?\s*"[^"]+"[^\n]*/i);
@@ -5424,14 +5452,28 @@ function declaredContextTokens(context) {
   return keys;
 }
 function lotIdentityMatches(context, lot) {
+  return lotUnitMatches(context, lot) || lotShkMatches(context, lot);
+}
+// The lot code is what a total line names to say which lot it is for. It is matched on its
+// own, ahead of the SHK reference, because one SHK covers a whole consignment: SHK0395/26
+// spans L52 and L53, so a line naming "60766022/L53" would otherwise be claimed by every
+// lot filed under that reference - which is how a total stated for L53 ended up covering
+// L34-S1 and L34-S2 instead.
+function lotUnitMatches(context, lot) {
   const keys = declaredContextTokens(context);
   if (!keys.size) return false;
-  const candidates = [lot.unitCode, lot.shkNumber].filter(Boolean);
-  for (const raw of candidates) {
-    for (const part of String(raw).split(/[,;]/)) {
-      const needle = declaredContextKey(part);
-      if (needle.length >= 2 && keys.has(needle)) return true;
-    }
+  for (const part of String(lot.unitCode || "").split(/[,;]/)) {
+    const needle = declaredContextKey(part);
+    if (needle.length >= 2 && keys.has(needle)) return true;
+  }
+  return false;
+}
+function lotShkMatches(context, lot) {
+  const keys = declaredContextTokens(context);
+  if (!keys.size) return false;
+  for (const part of String(lot.shkNumber || "").split(/[,;]/)) {
+    const needle = declaredContextKey(part);
+    if (needle.length >= 2 && keys.has(needle)) return true;
   }
   return false;
 }
@@ -5470,10 +5512,16 @@ function groupDeclaredLots(list, lots) {
   const unnamed = [];
   for (const line of all) {
     const available = lots.filter((lot) => !claimed.has(lot.id));
-    // An order number named on the line is decisive: where some lots carry it, only those
-    // take the total. Everything else falls back to matching on lift/SHK identity.
-    const byOrder = available.filter((lot) => lotOrderMatches(line.context, lot));
-    const group = byOrder.length ? byOrder : available.filter((lot) => lotIdentityMatches(line.context, lot));
+    // Strongest identifier first. An order number pins a line to one consignment; a lot
+    // code pins it to one lot; an SHK reference only narrows it to a whole consignment and
+    // is a last resort for sheets that name nothing else.
+    const group = (() => {
+      for (const test of [lotOrderMatches, lotUnitMatches, lotShkMatches]) {
+        const hit = available.filter((lot) => test(line.context, lot));
+        if (hit.length) return hit;
+      }
+      return [];
+    })();
     if (group.length) {
       group.forEach((lot) => claimed.add(lot.id));
       groups.push({ line, lots: group });
@@ -6842,6 +6890,70 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
   const [backlogSearch, setBacklogSearch] = useState("");
   const [backlogTypeFilter, setBacklogTypeFilter] = useState("All");
   const [editingBacklogId, setEditingBacklogId] = useState(null);
+  // Every record a given archived file created, so it can be corrected from the archive
+  // listing rather than hunted down entry by entry in Inventory. A legacy check-in stamps
+  // its arrival batch with the file it came from, and a legacy delivery puts the file name
+  // in its notes, so each file can find its own records back. Date is the fallback for
+  // anything recorded before that stamping existed.
+  function linkedRecordsFor(r) {
+    const ids = (r.linkedItemIds && r.linkedItemIds.length)
+      ? r.linkedItemIds
+      : String(r.linkedItemId || "").split(",").map((s) => s.trim()).filter(Boolean);
+    const out = [];
+    for (const id of ids) {
+      const it = (items || []).find((i) => i.id === id);
+      if (!it) continue;
+      if (r.docType === "Delivery") {
+        const live = (it.deliveries || []).filter((d) => !d.cancelled);
+        const rec = live.find((d) => r.fileName && String(d.notes || "").includes(r.fileName))
+          || live.find((d) => r.jobNumber && d.jobNumber === r.jobNumber);
+        if (rec) out.push({ item: it, kind: "delivery", rec });
+      } else {
+        const rec = (it.arrivals || []).find((a) => r.fileName && a.declaredSource === r.fileName)
+          || (it.arrivals || []).find((a) => r.date && a.date === r.date);
+        if (rec) out.push({ item: it, kind: "arrival", rec });
+      }
+    }
+    return out;
+  }
+  function draftRecordsFor(r) {
+    return linkedRecordsFor(r).map(({ item, kind, rec }) => ({
+      itemId: item.id,
+      label: `${item.id}${item.unitCode ? ` \u00b7 ${item.unitCode}` : ""}`,
+      kind, recId: rec.id,
+      date: rec.date || "",
+      type: rec.type || ARRIVING_TYPES[0],
+      jobNumber: rec.jobNumber || "",
+      kg: (rec.declared && rec.declared.kg) || "",
+      cbm: (rec.declared && rec.declared.cbm) || "",
+    }));
+  }
+  // Writes the corrected records back onto their entries. A figure typed here is stated
+  // for this lot, so it drops the "share of a bigger total" flag that would otherwise mark
+  // it an estimate and see it overruled by per-case packing-list weights.
+  function saveLinkedRecords(records) {
+    if (!onLegacyEnrich || !records || !records.length) return;
+    const entries = [];
+    for (const rec of records) {
+      const it = (items || []).find((i) => i.id === rec.itemId);
+      if (!it) continue;
+      const declared = (String(rec.kg).trim() || String(rec.cbm).trim())
+        ? { kg: String(rec.kg).trim(), cbm: String(rec.cbm).trim(), split: false } : null;
+      if (rec.kind === "arrival") {
+        const arrivals = (it.arrivals || []).map((a) => (a.id === rec.recId
+          ? { ...a, date: rec.date, type: rec.type, declared: declared && { ...(a.declared || {}), ...declared }, declaredEdited: true }
+          : a));
+        const dates = arrivals.map((a) => a.date).filter(Boolean).sort();
+        entries.push({ itemId: it.id, patch: { arrivals, depotArrivalDate: dates[0] || it.depotArrivalDate } });
+      } else {
+        const deliveries = (it.deliveries || []).map((d) => (d.id === rec.recId
+          ? { ...d, date: rec.date, jobNumber: rec.jobNumber, declared }
+          : d));
+        entries.push({ itemId: it.id, patch: { deliveries } });
+      }
+    }
+    if (entries.length) onLegacyEnrich(entries);
+  }
   const [backlogEditDraft, setBacklogEditDraft] = useState(null);
   const fileInputRef = React.useRef(null);
 
@@ -7317,12 +7429,57 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
                         </Field>
                       </div>
                       <div className="text-xs mt-2" style={{ color: colors.inkFaint }}>{t.legacyEditLinkedHint}</div>
+                      {(d.records || []).length > 0 && (
+                        <div className="mt-3 rounded p-2" style={{ border: `1px dashed ${colors.line}` }}>
+                          <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
+                            {t.legacyLinkedRecordsLabel}
+                          </div>
+                          {(d.records || []).map((rec, ri) => {
+                            const patchRec = (patch) => setBacklogEditDraft((p) => ({
+                              ...p, records: p.records.map((x, i) => (i === ri ? { ...x, ...patch } : x)),
+                            }));
+                            return (
+                              <div key={`${rec.itemId}-${rec.recId}`} className="flex flex-wrap items-end gap-2 mb-2">
+                                <div className="text-xs font-semibold" style={{ color: colors.green, minWidth: 120 }}>{rec.label}</div>
+                                <Field label={t.colDate} colors={colors}>
+                                  <input type="date" className={inputClass} style={{ ...inputStyle, fontSize: 12, padding: "3px 6px" }}
+                                    value={rec.date} onChange={(e) => patchRec({ date: e.target.value })} />
+                                </Field>
+                                {rec.kind === "arrival" ? (
+                                  <Field label={t.fArrivingType} colors={colors}>
+                                    <select className={inputClass} style={{ ...inputStyle, fontSize: 12, padding: "3px 6px" }}
+                                      value={rec.type} onChange={(e) => patchRec({ type: e.target.value })}>
+                                      {ARRIVING_TYPES.map((x) => <option key={x}>{x}</option>)}
+                                    </select>
+                                  </Field>
+                                ) : (
+                                  <Field label={t.colJobNo} colors={colors}>
+                                    <input className={inputClass} style={{ ...inputStyle, width: 110, fontSize: 12, padding: "3px 6px" }}
+                                      value={rec.jobNumber} onChange={(e) => patchRec({ jobNumber: e.target.value })} />
+                                  </Field>
+                                )}
+                                <Field label={t.jsKgs} colors={colors}>
+                                  <input type="number" min="0" step="0.1" className={inputClass} style={{ ...inputStyle, width: 92, fontSize: 12, padding: "3px 6px" }}
+                                    value={rec.kg} onChange={(e) => patchRec({ kg: e.target.value })} />
+                                </Field>
+                                <Field label={t.jsCbm} colors={colors}>
+                                  <input type="number" min="0" step="0.001" className={inputClass} style={{ ...inputStyle, width: 88, fontSize: 12, padding: "3px 6px" }}
+                                    value={rec.cbm} onChange={(e) => patchRec({ cbm: e.target.value })} />
+                                </Field>
+                              </div>
+                            );
+                          })}
+                          <div className="text-[11px]" style={{ color: colors.inkFaint }}>{t.legacyLinkedRecordsHint}</div>
+                        </div>
+                      )}
                       <div className="mt-3">
                         <button
                           className="text-xs font-semibold mr-3"
                           style={{ color: colors.green }}
                           onClick={() => {
-                            setLegacyArchive((prev) => prev.map((row) => (row.id === r.id ? { ...row, ...backlogEditDraft } : row)));
+                            const { records, ...meta } = backlogEditDraft;
+                            setLegacyArchive((prev) => prev.map((row) => (row.id === r.id ? { ...row, ...meta } : row)));
+                            saveLinkedRecords(records);
                             setEditingBacklogId(null);
                             setBacklogEditDraft(null);
                           }}
@@ -7361,7 +7518,11 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
                     style={{ color: colors.inkFaint }}
                     onClick={() => {
                       setEditingBacklogId(r.id);
-                      setBacklogEditDraft({ docType: r.docType, client: r.client, project: r.project, jobNumber: r.jobNumber || "", date: r.date || "" });
+                      setBacklogEditDraft({
+                        docType: r.docType, client: r.client, project: r.project,
+                        jobNumber: r.jobNumber || "", date: r.date || "",
+                        records: draftRecordsFor(r),
+                      });
                     }}
                   >
                     {t.editBtn}
@@ -8995,7 +9156,7 @@ export default function FarspeedInventory() {
       if (!byItemId.has(i.id)) return i;
       const patch = byItemId.get(i.id);
       const next = { ...i, ...patch };
-      return patch.packages ? recomputeItemTotals(next) : next;
+      return (patch.packages || patch.arrivals) ? recomputeItemTotals(next) : next;
     }));
     return entries.map((e) => ({ itemId: e.itemId }));
   }
