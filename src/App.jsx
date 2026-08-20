@@ -1556,6 +1556,11 @@ const TEXT = {
     newEntryManual: "Manual",
     newEntryImport: "Import",
 
+    moveCasesLabel: "Move Cases to Another Entry",
+    moveCasesHint: "For cases filed under the wrong lift. Pick them, choose where they belong, and they move across with their arrival batch. Applies straight away, to both entries. Cases already delivered aren't shown - they belong to a delivery record.",
+    moveCasesDestPlaceholder: "Move to which entry...",
+    moveCasesBtn: "Move Cases",
+    moveCasesDoneMsg: (codes, dest) => `Moved ${codes} to ${dest}.`,
     splitArrivalLabel: "Split Arrival — Cases Arriving on Different Days",
     splitArrivalHint: "If this packing list isn't all devanned / delivered to the depot on the same day, record each batch here with its own date and type. The main Depot Arrival Date will follow the earliest batch automatically.",
     splitArrivalCasesCol: "Cases",
@@ -2159,6 +2164,11 @@ const TEXT = {
     newEntryManual: "手動輸入",
     newEntryImport: "匯入",
 
+    moveCasesLabel: "將貨箱移至其他記錄",
+    moveCasesHint: "適用於誤配梯號之貨箱。選取貨箱及目標記錄，貨箱連同到倉批次一併轉移。即時生效，兩邊記錄同時更新。已送出之貨箱不會顯示，因其已屬送貨記錄。",
+    moveCasesDestPlaceholder: "選擇目標記錄⋯",
+    moveCasesBtn: "移動貨箱",
+    moveCasesDoneMsg: (codes, dest) => `已將第 ${codes} 件移至 ${dest}。`,
     splitArrivalLabel: "分批到倉（貨箱不同日子到貨）",
     splitArrivalHint: "如同一張裝箱單不是同一日全部拆櫃／送到倉，可在此分批記錄，每批有自己的日期及類型。抵倉日期會自動跟隨最早一批。",
     splitArrivalCasesCol: "貨箱",
@@ -2482,7 +2492,7 @@ function PackagesEditor({ form, setForm, colors, t }) {
   );
 }
 
-function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, directory, employees, currentUser, items, colors, t, lang }) {
+function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, onMoveCases, directory, employees, currentUser, items, colors, t, lang }) {
   const [showOlderSites, setShowOlderSites] = useState(false);
   const [form, setForm] = useState(initial || { ...emptyForm(), recordedBy: currentUser || "" });
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -2687,6 +2697,13 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, directory, emplo
           <ArrivalBatchesEditor form={form} setForm={setForm} colors={colors} t={t} lang={lang} />
         )}
 
+        {onMoveCases && form.id && (form.packages || []).length > 0 && (
+          <MoveCasesEditor
+            form={form} setForm={setForm} items={items} onMoveCases={onMoveCases}
+            colors={colors} t={t} inputClass={inputClass}
+          />
+        )}
+
         {(form.deliveries || []).length > 0 && (
           <div className="col-span-2 md:col-span-3 px-3 py-2 rounded text-sm" style={{ background: colors.greenSoft, color: colors.green }}>
             {t.deliveryProgress(deliveredUnits(form), totalUnits(form), form.deliveries.length)}
@@ -2787,6 +2804,93 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, directory, emplo
   );
 }
 
+// Moves cases out of this entry and into another. A lot filed under the wrong lift used to
+// mean deleting the entry and rebuilding it from the packing list forward; this repairs it
+// in place. Only cases still at the depot are offered - one that has already gone out
+// belongs to a delivery record, and pulling it out of that record would rewrite history.
+function MoveCasesEditor({ form, setForm, items, onMoveCases, colors, t, inputClass }) {
+  const [picked, setPicked] = useState([]);
+  const [destId, setDestId] = useState("");
+  const [done, setDone] = useState("");
+  const inputStyle = inputStyleFor(colors);
+  const movable = remainingPackages(form);
+  // Somewhere sensible to move to: the same client, and either the same job number or the
+  // same site - the sibling lots that came in on one packing list.
+  const destinations = (items || []).filter((i) =>
+    i.id !== form.id && !i.cancelled && i.client === form.client &&
+    ((form.jobNumber && String(i.jobNumber || "").trim() === String(form.jobNumber).trim())
+      || sitesLooselyMatch(form.project, form.constructionSite, i.project, i.constructionSite)));
+  if (!movable.length || !destinations.length) return null;
+
+  function move() {
+    const dest = destinations.find((d) => d.id === destId);
+    if (!dest || !picked.length) return;
+    onMoveCases({ fromId: form.id, toId: dest.id, codes: picked });
+    // The form holds its own copy of the entry, so it has to lose the cases too or it
+    // would put them back the next time it is saved.
+    const gone = new Set(picked);
+    setForm((f) => ({
+      ...f,
+      packages: (f.packages || []).filter((p) => !gone.has(p.code)),
+      arrivals: (f.arrivals || []).map((a) => ({ ...a, codes: (a.codes || []).filter((c) => !gone.has(c)) })),
+    }));
+    setDone(t.moveCasesDoneMsg(picked.join(", "), dest.unitCode || dest.id));
+    setPicked([]);
+  }
+
+  return (
+    <div className="col-span-2 md:col-span-3 rounded p-3" style={{ border: `1px dashed ${colors.line}` }}>
+      <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
+        {t.moveCasesLabel}
+      </div>
+      <div className="text-[11px] mb-2" style={{ color: colors.inkFaint }}>{t.moveCasesHint}</div>
+      <div className="flex flex-wrap gap-2 mb-2">
+        {movable.map((p) => {
+          const on = picked.includes(p.code);
+          return (
+            <button
+              key={p.code}
+              type="button"
+              onClick={() => setPicked((prev) => on ? prev.filter((c) => c !== p.code) : [...prev, p.code])}
+              className="px-2.5 py-1.5 rounded text-xs font-semibold"
+              style={{
+                border: `1px solid ${on ? colors.amber : colors.line}`,
+                background: on ? colors.amberSoft : colors.surface,
+                color: on ? colors.amberText : colors.ink,
+              }}
+              title={p.description}
+            >
+              {p.code}
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <select className={inputClass} style={{ ...inputStyle, width: 260, fontSize: 12, padding: "4px 8px" }}
+          value={destId} onChange={(e) => { setDestId(e.target.value); setDone(""); }}>
+          <option value="">{t.moveCasesDestPlaceholder}</option>
+          {destinations.map((d) => (
+            <option key={d.id} value={d.id}>{`${d.id}${d.unitCode ? ` \u00b7 ${d.unitCode}` : ""}`}</option>
+          ))}
+        </select>
+        <button
+          type="button"
+          className="px-3 py-1.5 rounded text-xs font-semibold"
+          style={{
+            background: picked.length && destId ? colors.amber : colors.line,
+            color: picked.length && destId ? colors.ink : colors.inkFaint,
+            fontFamily: FONT_DISPLAY,
+            cursor: picked.length && destId ? "pointer" : "not-allowed",
+          }}
+          onClick={move}
+        >
+          {t.moveCasesBtn}
+        </button>
+      </div>
+      {done && <div className="text-xs mt-2" style={{ color: colors.green }}>{done}</div>}
+    </div>
+  );
+}
 function ArrivalBatchesEditor({ form, setForm, colors, t, lang }) {
   const inputStyle = inputStyleFor(colors);
   const [draft, setDraft] = useState({ date: todayStr(), type: ARRIVING_TYPES[0], codes: [] });
@@ -2811,6 +2915,23 @@ function ArrivalBatchesEditor({ form, setForm, colors, t, lang }) {
     const next = arrivals.filter((a) => a.id !== id);
     setForm((f) => ({ ...f, arrivals: next, depotArrivalDate: next.length ? syncEarliestDate(next) : f.depotArrivalDate }));
   }
+  // A batch recorded from a Devan/CFS job sheet was previously fixed for good: a mistyped
+  // date or a weight read off the wrong line meant deleting the entry and re-uploading
+  // everything. Each batch is editable here instead.
+  function patchBatch(id, patch) {
+    const next = arrivals.map((a) => (a.id === id ? { ...a, ...patch } : a));
+    setForm((f) => ({ ...f, arrivals: next, depotArrivalDate: syncEarliestDate(next) }));
+  }
+  // A figure typed in by hand is a figure stated for this lot, so it drops the "split"
+  // flag it may have carried. That flag marks a share of a total covering several lots,
+  // which is treated as an estimate and loses to per-case packing-list weights - leaving
+  // it set would mean the number someone just corrected still wasn't the one used.
+  function patchBatchDeclared(id, key, value) {
+    const cur = arrivals.find((a) => a.id === id);
+    const declared = { ...(cur && cur.declared ? cur.declared : {}), [key]: value, split: false };
+    const any = ["pkgs", "kg", "cbm"].some((k) => String(declared[k] || "").trim() !== "");
+    patchBatch(id, { declared: any ? declared : null, declaredEdited: true });
+  }
 
   return (
     <div className="col-span-2 md:col-span-3 rounded p-3" style={{ border: `1px dashed ${colors.line}` }}>
@@ -2824,7 +2945,7 @@ function ArrivalBatchesEditor({ form, setForm, colors, t, lang }) {
           <table className="w-full text-xs" style={{ background: colors.surface }}>
             <thead>
               <tr style={{ background: colors.surfaceDim }}>
-                {[t.colDate, t.fArrivingType, t.splitArrivalCasesCol, ""].map((h, idx) => (
+                {[t.colDate, t.fArrivingType, t.splitArrivalCasesCol, t.jsKgs, t.jsCbm, ""].map((h, idx) => (
                   <th key={idx} className="text-left px-2 py-1.5 font-semibold" style={{ color: colors.inkFaint }}>{h}</th>
                 ))}
               </tr>
@@ -2832,9 +2953,29 @@ function ArrivalBatchesEditor({ form, setForm, colors, t, lang }) {
             <tbody>
               {[...arrivals].sort((a, b) => (a.date || "").localeCompare(b.date || "")).map((a) => (
                 <tr key={a.id} style={{ borderTop: `1px solid ${colors.surfaceDim}` }}>
-                  <td className="px-2 py-1.5" style={{ color: colors.ink }}>{fmt(a.date)}</td>
-                  <td className="px-2 py-1.5" style={{ color: colors.ink }}>{a.type}</td>
+                  <td className="px-2 py-1.5">
+                    <input type="date" className={inputClass} style={{ ...inputStyle, fontSize: 12, padding: "3px 6px" }}
+                      value={a.date || ""} onChange={(e) => patchBatch(a.id, { date: e.target.value })} />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <select className={inputClass} style={{ ...inputStyle, fontSize: 12, padding: "3px 6px" }}
+                      value={a.type || ARRIVING_TYPES[0]} onChange={(e) => patchBatch(a.id, { type: e.target.value })}>
+                      {ARRIVING_TYPES.map((x) => <option key={x}>{x}</option>)}
+                    </select>
+                  </td>
                   <td className="px-2 py-1.5" style={{ color: colors.ink }}>{(a.codes || []).join(", ")}</td>
+                  <td className="px-2 py-1.5">
+                    <input type="number" min="0" step="0.1" className={inputClass}
+                      style={{ ...inputStyle, width: 88, fontSize: 12, padding: "3px 6px" }}
+                      value={(a.declared && a.declared.kg) || ""}
+                      onChange={(e) => patchBatchDeclared(a.id, "kg", e.target.value)} />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <input type="number" min="0" step="0.001" className={inputClass}
+                      style={{ ...inputStyle, width: 84, fontSize: 12, padding: "3px 6px" }}
+                      value={(a.declared && a.declared.cbm) || ""}
+                      onChange={(e) => patchBatchDeclared(a.id, "cbm", e.target.value)} />
+                  </td>
                   <td className="px-2 py-1.5 text-right">
                     <button type="button" className="text-xs font-semibold" style={{ color: colors.red }} onClick={() => removeBatch(a.id)}>{t.deleteBtn}</button>
                   </td>
@@ -2893,9 +3034,99 @@ function ArrivalBatchesEditor({ form, setForm, colors, t, lang }) {
   );
 }
 
-function DeliveryForm({ deliveryItems, onAddDelivery, onAddCombinedDelivery, onDeleteDelivery, onCancel, onPrintJobSheet, employees, currentUser, items, colors, t, lang }) {
+// Corrects a delivery that has already been recorded. The cases it may hold are the ones
+// it took plus whatever is still at the depot on this entry - anything else belongs to a
+// different delivery and is not this record's to claim.
+function DeliveryRecordEditor({ delivery, item, onPatch, onDone, colors, t }) {
+  const inputStyle = inputStyleFor(colors);
+  const [draft, setDraft] = useState({
+    date: delivery.date || "",
+    deliveredTo: delivery.deliveredTo || "",
+    receivedBy: delivery.receivedBy || "",
+    jobNumber: delivery.jobNumber || "",
+    kg: (delivery.declared && delivery.declared.kg) || "",
+    cbm: (delivery.declared && delivery.declared.cbm) || "",
+    codes: [...(delivery.codes || [])],
+  });
+  const mine = new Set(delivery.codes || []);
+  const choosable = [
+    ...(item.packages || []).filter((p) => mine.has(p.code)),
+    ...remainingPackages(item).filter((p) => !mine.has(p.code)),
+  ];
+  const set = (k) => (e) => setDraft((d) => ({ ...d, [k]: e.target.value }));
+  function save() {
+    const patch = {
+      date: draft.date, deliveredTo: draft.deliveredTo, receivedBy: draft.receivedBy,
+      jobNumber: draft.jobNumber,
+    };
+    if (delivery.codes) patch.codes = draft.codes;
+    // A figure corrected by hand is stated for this delivery, not a share of a bigger
+    // total, so it drops the split flag that would otherwise mark it an estimate.
+    const kg = String(draft.kg).trim(), cbm = String(draft.cbm).trim();
+    patch.declared = (kg || cbm) ? { kg, cbm, split: false } : null;
+    onPatch(patch);
+    onDone();
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-end gap-2">
+        <Field label={t.colDate} colors={colors}>
+          <input type="date" className={inputClass} style={{ ...inputStyle, fontSize: 12, padding: "3px 6px" }} value={draft.date} onChange={set("date")} />
+        </Field>
+        <Field label={t.colDeliveredTo} colors={colors}>
+          <input className={inputClass} style={{ ...inputStyle, width: 200, fontSize: 12, padding: "3px 6px" }} value={draft.deliveredTo} onChange={set("deliveredTo")} />
+        </Field>
+        <Field label={t.colReceivedBy} colors={colors}>
+          <input className={inputClass} style={{ ...inputStyle, width: 150, fontSize: 12, padding: "3px 6px" }} value={draft.receivedBy} onChange={set("receivedBy")} />
+        </Field>
+        <Field label={t.colJobNo} colors={colors}>
+          <input className={inputClass} style={{ ...inputStyle, width: 110, fontSize: 12, padding: "3px 6px" }} value={draft.jobNumber} onChange={set("jobNumber")} />
+        </Field>
+        <Field label={t.jsKgs} colors={colors}>
+          <input type="number" min="0" step="0.1" className={inputClass} style={{ ...inputStyle, width: 90, fontSize: 12, padding: "3px 6px" }} value={draft.kg} onChange={set("kg")} />
+        </Field>
+        <Field label={t.jsCbm} colors={colors}>
+          <input type="number" min="0" step="0.001" className={inputClass} style={{ ...inputStyle, width: 86, fontSize: 12, padding: "3px 6px" }} value={draft.cbm} onChange={set("cbm")} />
+        </Field>
+      </div>
+      {delivery.codes && choosable.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {choosable.map((p) => {
+            const on = draft.codes.includes(p.code);
+            return (
+              <button
+                key={p.code}
+                type="button"
+                onClick={() => setDraft((d) => ({ ...d, codes: on ? d.codes.filter((c) => c !== p.code) : [...d.codes, p.code] }))}
+                className="px-2 py-1 rounded text-xs font-semibold"
+                style={{
+                  border: `1px solid ${on ? colors.amber : colors.line}`,
+                  background: on ? colors.amberSoft : colors.surface,
+                  color: on ? colors.amberText : colors.ink,
+                }}
+                title={p.description}
+              >
+                {p.code}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <div className="flex gap-2">
+        <button type="button" className="px-3 py-1.5 rounded text-xs font-semibold"
+          style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY }}
+          onClick={save}>{t.saveBtn}</button>
+        <button type="button" className="px-3 py-1.5 rounded text-xs font-semibold"
+          style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY }}
+          onClick={onDone}>{t.cancelBtn}</button>
+      </div>
+    </div>
+  );
+}
+function DeliveryForm({ deliveryItems, onAddDelivery, onAddCombinedDelivery, onDeleteDelivery, onUpdateDelivery, onCancel, onPrintJobSheet, employees, currentUser, items, colors, t, lang }) {
   const firstItem = deliveryItems[0];
   const [extraItemIds, setExtraItemIds] = useState([]);
+  const [editingDeliveryId, setEditingDeliveryId] = useState(null);
   const [addPickerOpen, setAddPickerOpen] = useState(false);
   const [addSearch, setAddSearch] = useState("");
   const baseIds = new Set(deliveryItems.map((i) => i.id));
@@ -3025,7 +3256,8 @@ function DeliveryForm({ deliveryItems, onAddDelivery, onAddCombinedDelivery, onD
             </thead>
             <tbody>
               {[...activeDeliveries(firstItem)].sort((a, b) => (a.date || "").localeCompare(b.date || "")).map((d) => (
-                <tr key={d.id} style={{ borderTop: `1px solid ${colors.surfaceDim}` }}>
+                <React.Fragment key={d.id}>
+                <tr style={{ borderTop: `1px solid ${colors.surfaceDim}` }}>
                   <td className="px-2 py-1.5" style={{ color: colors.ink }}>{fmt(d.date)}</td>
                   <td className="px-2 py-1.5" style={{ color: colors.ink }}>{d.codes ? d.codes.join(", ") : d.packageCount}</td>
                   <td className="px-2 py-1.5" style={{ color: colors.ink }}>{d.deliveredTo || "—"}</td>
@@ -3033,9 +3265,26 @@ function DeliveryForm({ deliveryItems, onAddDelivery, onAddCombinedDelivery, onD
                   <td className="px-2 py-1.5" style={{ fontFamily: FONT_MONO, color: colors.ink }}>{d.jobNumber || "—"}</td>
                   <td className="px-2 py-1.5 text-right whitespace-nowrap">
                     <button className="text-xs font-semibold mr-2" style={{ color: colors.amberText }} onClick={() => onPrintJobSheet({ type: "Delivery", item: firstItem, delivery: d })}>{t.printBtn}</button>
+                    {onUpdateDelivery && (
+                      <button className="text-xs font-semibold mr-2" style={{ color: colors.amberText }}
+                        onClick={() => setEditingDeliveryId(editingDeliveryId === d.id ? null : d.id)}>{t.editBtn}</button>
+                    )}
                     <button className="text-xs font-semibold" style={{ color: colors.red }} onClick={() => onDeleteDelivery(d.id, firstItem.id)}>{t.cancelJobBtn}</button>
                   </td>
                 </tr>
+                {editingDeliveryId === d.id && onUpdateDelivery && (
+                  <tr style={{ background: colors.surfaceDim }}>
+                    <td colSpan={6} className="px-2 py-2">
+                      <DeliveryRecordEditor
+                        delivery={d} item={firstItem}
+                        onPatch={(patch) => onUpdateDelivery(d.id, firstItem.id, patch)}
+                        onDone={() => setEditingDeliveryId(null)}
+                        colors={colors} t={t}
+                      />
+                    </td>
+                  </tr>
+                )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>
@@ -8661,13 +8910,61 @@ export default function FarspeedInventory() {
 
   function handleSave(form) {
     if (editing) {
-      persist(items.map((i) => (i.id === editing.id ? { ...editing, ...form } : i)));
+      // An edit to the arrival batches or the case list changes what the headline weight
+      // and volume are a sum of, so they are recomputed. An edit that only touches other
+      // fields leaves them alone, so a figure someone typed in by hand survives.
+      const key = (o) => JSON.stringify(o || []);
+      const recompute = key(editing.arrivals) !== key(form.arrivals)
+        || key((editing.packages || []).map((p) => p.code)) !== key((form.packages || []).map((p) => p.code));
+      const next = { ...editing, ...form };
+      persist(items.map((i) => (i.id === editing.id ? (recompute ? recomputeItemTotals(next) : next) : i)));
     } else {
       const idFields = nextId();
       persist([...items, { ...idFields, ...form, createdAt: todayStr() }]);
     }
     setEditing(null);
     setView("inventory");
+  }
+
+  // Moves cases from one entry to another - the repair for a lot that was filed under the
+  // wrong lift. Only cases still at the depot can move: one already delivered is part of a
+  // delivery record, and quietly pulling it out of that record would rewrite history.
+  // The case takes its place in the destination's earliest arrival batch, or the
+  // destination would treat it as not yet landed and refuse to let it leave again.
+  function handleMoveCases({ fromId, toId, codes }) {
+    const wanted = new Set(codes || []);
+    const from = items.find((i) => i.id === fromId);
+    const to = items.find((i) => i.id === toId);
+    if (!from || !to || from.id === to.id || wanted.size === 0) return;
+    const movable = remainingPackages(from).filter((p) => wanted.has(p.code));
+    if (!movable.length) return;
+    const moving = new Set(movable.map((p) => p.code));
+    const denom = (c) => { const m = String(c).match(/\/(\d+)\s*$/); return m ? Number(m[1]) : 0; };
+    persist(items.map((i) => {
+      if (i.id === fromId) {
+        return recomputeItemTotals({
+          ...i,
+          packages: (i.packages || []).filter((p) => !moving.has(p.code)),
+          arrivals: (i.arrivals || []).map((a) => ({ ...a, codes: (a.codes || []).filter((c) => !moving.has(c)) })),
+        });
+      }
+      if (i.id === toId) {
+        const already = new Set((i.packages || []).map((p) => p.code));
+        const add = movable.filter((p) => !already.has(p.code));
+        const next = {
+          ...i,
+          packages: [...(i.packages || []), ...add]
+            .sort((a, b) => denom(a.code) - denom(b.code) || codeLeadingNumber(a.code) - codeLeadingNumber(b.code)),
+        };
+        if (usesArrivalBatches(i)) {
+          const addCodes = add.map((p) => p.code);
+          next.arrivals = (i.arrivals || []).map((a, idx) =>
+            idx === 0 ? { ...a, codes: [...new Set([...(a.codes || []), ...addCodes])] } : a);
+        }
+        return recomputeItemTotals(next);
+      }
+      return i;
+    }));
   }
 
   function handleDelete(id) {
@@ -8713,6 +9010,17 @@ export default function FarspeedInventory() {
     persist(items.map((i) => (byItemId.has(i.id) ? { ...i, deliveries: [...(i.deliveries || []), ...byItemId.get(i.id)] } : i)));
     setExitingItems((prev) => prev.map((i) => (byItemId.has(i.id) ? { ...i, deliveries: [...(i.deliveries || []), ...byItemId.get(i.id)] } : i)));
     return records;
+  }
+
+  // A recorded delivery could previously only be cancelled outright. Now it can be
+  // corrected in place - date, destination, receiver, job number, the cases that went, and
+  // the weight and volume the job sheet stated.
+  function handleUpdateDelivery(deliveryId, itemId, patch) {
+    const apply = (list) => list.map((i) => (i.id === itemId
+      ? { ...i, deliveries: (i.deliveries || []).map((d) => (d.id === deliveryId ? { ...d, ...patch } : d)) }
+      : i));
+    persist(apply(items));
+    setExitingItems((prev) => apply(prev));
   }
 
   function handleDeleteDelivery(deliveryId, itemId) {
@@ -9399,7 +9707,7 @@ export default function FarspeedInventory() {
         {view === "exit" && (
           <div className="flex flex-col gap-4">
             {exitingItems.length > 0 ? (
-              <DeliveryForm deliveryItems={exitingItems} onAddDelivery={handleAddDelivery} onAddCombinedDelivery={handleAddCombinedDelivery} onDeleteDelivery={handleDeleteDelivery}
+              <DeliveryForm deliveryItems={exitingItems} onAddDelivery={handleAddDelivery} onAddCombinedDelivery={handleAddCombinedDelivery} onDeleteDelivery={handleDeleteDelivery} onUpdateDelivery={handleUpdateDelivery}
                 onCancel={() => { setExitingItems([]); setDeliveryPickerSelection([]); setView("inventory"); }} onPrintJobSheet={setPrintJobSheet}
                 employees={employees} currentUser={currentUser} items={items} colors={colors} t={t} lang={lang} />
             ) : (
@@ -9657,6 +9965,7 @@ export default function FarspeedInventory() {
             onSave={handleSave}
             onCancel={() => { setEditing(null); setView("inventory"); }}
             onPrintJobSheet={setPrintJobSheet}
+            onMoveCases={handleMoveCases}
             directory={directory}
             employees={employees}
             currentUser={currentUser}
