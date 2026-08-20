@@ -1520,6 +1520,46 @@ const TEXT = {
     billingHandlingHaulageBasis: (c20, c40) => [c20 ? `${c20} \u00d7 20'` : "", c40 ? `${c40} \u00d7 40'` : ""].filter(Boolean).join(", "),
     billingHandlingQuoteBadge: "Quote separately",
     billingHandlingFootnote: "R/Ton = revenue ton = max(weight in tons, volume in CBM). Rates from the 2018 tariff sheets; zone and cargo type are set per item (edit in Manual Entry). Oversize multiplier reuses the same tiers shown on the printed job sheet.",
+    billingModeInvoices: "Invoices",
+    invoicesTitle: "Debit Notes \u2014 Checked Against Our Records",
+    invoicesDesc: "Record each debit note sent to a client, and it is set against what this app's own records produce for the same client, site, category and month. Anything that doesn't agree is flagged before the client finds it.",
+    invoicesNoneMsg: "No debit notes recorded for this month.",
+    invoicesFootnote: "Covers Storage, CFS, Devan and Delivery. Hoisting and Shifting are not billed from here yet. Click a row to see the charges behind our figure.",
+    invoiceAddBtn: "Add Debit Note",
+    invoiceColNo: "Debit Note No.",
+    invoiceColDate: "Date",
+    invoiceColSite: "Site",
+    invoiceColCategory: "Category",
+    invoiceColInvoiced: "Invoiced",
+    invoiceColExpected: "Our records",
+    invoiceColDifference: "Difference",
+    invoiceStatusMatch: "Agrees",
+    invoiceStatusOver: "Overcharged",
+    invoiceStatusUnder: "Undercharged",
+    invoiceStatusNothing: "No charges found",
+    invoiceNothingHint: "Our records show nothing chargeable for this client, site, category and month. Check the site name matches, and that the arrivals or deliveries were recorded.",
+    invoiceLinesLabel: (n) => `${n} charge${n === 1 ? "" : "s"} behind our figure`,
+    invoiceEstimatedTag: "estimated",
+    invoiceTotalInvoiced: "Total invoiced",
+    invoiceTotalExpected: "Total per our records",
+    invoiceTotalDifference: "Difference",
+    invoiceProblemCount: (n) => `${n} note${n === 1 ? "" : "s"} to check`,
+    invoiceUninvoicedLabel: "Charges this month with no debit note recorded",
+    invoiceViewScanBtn: "View scan",
+    invoiceDueDateLabel: "Payment due",
+    invoiceAmountLabel: "Amount (HK$)",
+    invoiceOrderedByLabel: "Ordered by",
+    invoiceOrderRefLabel: "Order reference",
+    invoiceChargeLineLabel: "Charge line",
+    invoiceChargeLineHint: "The wording that appears on the note, e.g. CHARGES FOR JANUARY 2026 AT LUMPSUM",
+    invoiceNarrativeLabel: "Extra line (optional)",
+    invoiceBillToLabel: "Bill to address",
+    invoiceRevisedDateLabel: "Revised on",
+    invoiceRevisedByLabel: "Revised by",
+    invoiceScanLabel: "Attach scan",
+    invoiceAttachingMsg: "Attaching scan\u2026",
+    invoicePreviewMsg: (expected, diff) => `Our records give ${expected} for this client, site, category and month \u2014 difference ${diff}.`,
+    debitNotePrintLabel: (no) => `Debit Note ${no}`,
     billingMonthLabel: "Month",
     billingYearLabel: "Year",
     billingMonthNoneMsg: "No storage charges fall in this month.",
@@ -2130,6 +2170,46 @@ const TEXT = {
     billingHandlingHaulageBasis: (c20, c40) => [c20 ? `${c20} \u00d7 20呎` : "", c40 ? `${c40} \u00d7 40呎` : ""].filter(Boolean).join("，"),
     billingHandlingQuoteBadge: "另行報價",
     billingHandlingFootnote: "R/Ton（運費噸）= max(重量噸數, CBM體積)。費率來自2018年收費表；地區及貨物類型於每項記錄設定（於手動輸入編輯）。超大件倍數與工作紙上顯示的相同級別一致。",
+    billingModeInvoices: "發票核對",
+    invoicesTitle: "客戶發票 \u2014 與系統記錄核對",
+    invoicesDesc: "記錄發給客戶之每張發票，系統會按同一客戶、地盤、類別及月份計算應收金額並作核對，如有差異會即時顯示。",
+    invoicesNoneMsg: "此月份未有發票記錄。",
+    invoicesFootnote: "涵蓋存倉、CFS、拆櫃及送貨。吊運及搬移暫未包括。點擊該行可查看系統金額之明細。",
+    invoiceAddBtn: "新增發票",
+    invoiceColNo: "發票編號",
+    invoiceColDate: "日期",
+    invoiceColSite: "地盤",
+    invoiceColCategory: "類別",
+    invoiceColInvoiced: "發票金額",
+    invoiceColExpected: "系統金額",
+    invoiceColDifference: "差異",
+    invoiceStatusMatch: "相符",
+    invoiceStatusOver: "多收",
+    invoiceStatusUnder: "少收",
+    invoiceStatusNothing: "無相關收費",
+    invoiceNothingHint: "系統於此客戶、地盤、類別及月份沒有任何應收項目。請檢查地盤名稱是否相符，以及到倉／送貨是否已記錄。",
+    invoiceLinesLabel: (n) => `系統金額由 ${n} 項收費組成`,
+    invoiceEstimatedTag: "估算",
+    invoiceTotalInvoiced: "發票總額",
+    invoiceTotalExpected: "系統總額",
+    invoiceTotalDifference: "差異",
+    invoiceProblemCount: (n) => `${n} 張發票需核對`,
+    invoiceUninvoicedLabel: "本月有收費但未有發票記錄",
+    invoiceViewScanBtn: "檢視掃描檔",
+    invoiceDueDateLabel: "付款到期日",
+    invoiceAmountLabel: "金額 (HK$)",
+    invoiceOrderedByLabel: "落單人",
+    invoiceOrderRefLabel: "訂單參考",
+    invoiceChargeLineLabel: "收費說明",
+    invoiceChargeLineHint: "顯示於發票之字句，例如 CHARGES FOR JANUARY 2026 AT LUMPSUM",
+    invoiceNarrativeLabel: "附加說明（可選）",
+    invoiceBillToLabel: "發票地址",
+    invoiceRevisedDateLabel: "修訂日期",
+    invoiceRevisedByLabel: "修訂人",
+    invoiceScanLabel: "上載掃描檔",
+    invoiceAttachingMsg: "正在上載掃描檔⋯",
+    invoicePreviewMsg: (expected, diff) => `系統於此客戶、地盤、類別及月份之金額為 ${expected}，差異 ${diff}。`,
+    debitNotePrintLabel: (no) => `發票 ${no}`,
     billingMonthLabel: "月份",
     billingYearLabel: "年份",
     billingMonthNoneMsg: "此月份沒有存倉收費。",
@@ -4320,7 +4400,559 @@ function JobSheetPrint({ sheet, onClose, directory, colors, t, lang }) {
   );
 }
 
-function BillingPanel({ items, onDeleteItem, authUser, colors, t, lang }) {
+// --- Debit notes -----------------------------------------------------------------
+// Farspeed bills a client per site per month, and the debit note that goes out is typed
+// up outside this app. Recording it here lets the amount charged be set against the
+// amount the depot's own records produce, so a wrong figure shows up before the client
+// finds it. Hoisting and Shifting are deliberately absent - they are a later job.
+const DEBIT_NOTE_CATEGORIES = ["Storage", "CFS", "Devan", "Delivery"];
+const NUM_WORDS_ONES = ["", "ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE", "TEN",
+  "ELEVEN", "TWELVE", "THIRTEEN", "FOURTEEN", "FIFTEEN", "SIXTEEN", "SEVENTEEN", "EIGHTEEN", "NINETEEN"];
+const NUM_WORDS_TENS = ["", "", "TWENTY", "THIRTY", "FORTY", "FIFTY", "SIXTY", "SEVENTY", "EIGHTY", "NINETY"];
+function numberToWordsUnder1000(n) {
+  const out = [];
+  if (n >= 100) { out.push(`${NUM_WORDS_ONES[Math.floor(n / 100)]} HUNDRED`); n %= 100; }
+  if (n >= 20) {
+    const tens = NUM_WORDS_TENS[Math.floor(n / 10)];
+    const ones = NUM_WORDS_ONES[n % 10];
+    out.push(ones ? `${tens}-${ones}` : tens);
+  } else if (n > 0) out.push(NUM_WORDS_ONES[n]);
+  return out.join(" ");
+}
+// "SAY TOTAL HONG KONG DOLLARS FOUR THOUSAND FIVE HUNDRED NINETY-FIVE AND ELEVEN CENTS ONLY."
+function amountInWordsHKD(amount) {
+  const value = Math.round((Number(amount) || 0) * 100) / 100;
+  const dollars = Math.floor(value);
+  const cents = Math.round((value - dollars) * 100);
+  const parts = [];
+  let rest = dollars;
+  const scales = [[1000000000, "BILLION"], [1000000, "MILLION"], [1000, "THOUSAND"]];
+  for (const [size, name] of scales) {
+    if (rest >= size) {
+      parts.push(`${numberToWordsUnder1000(Math.floor(rest / size))} ${name}`);
+      rest %= size;
+    }
+  }
+  if (rest > 0) parts.push(numberToWordsUnder1000(rest));
+  if (!parts.length) parts.push("ZERO");
+  const words = `SAY TOTAL HONG KONG DOLLARS ${parts.join(" ")}`;
+  return cents > 0
+    ? `${words} AND ${numberToWordsUnder1000(cents)} CENTS ONLY.`
+    : `${words} ONLY.`;
+}
+// What the depot's own records say this client should be charged for one site, one
+// category and one month. Storage comes off the per-case storage clock; CFS, Devan and
+// Delivery come off the handling tariff. Returns the lines behind the figure too, so a
+// mismatch can be looked into rather than just reported.
+function computeCategoryTotal(items, { client, project, category, year, month }) {
+  const lines = [];
+  const onSite = (item) => !project
+    || sitesLooselyMatch(project, "", item.project, item.constructionSite)
+    || sitesLooselyMatch(project, "", item.constructionSite, item.project);
+  const inPeriod = (dateStr) => {
+    if (!dateStr) return false;
+    const d = toDateOnly(dateStr);
+    return d.getFullYear() === year && d.getMonth() === month;
+  };
+  for (const item of items || []) {
+    if (item.cancelled) continue;
+    if (client && item.client !== client) continue;
+    if (!onSite(item)) continue;
+    if (category === "Storage") {
+      for (const row of computeItemBillingRows(item)) {
+        for (const line of row.breakdown) {
+          if (line.year !== year || line.month !== month) continue;
+          lines.push({
+            itemId: item.id, jobNumber: item.jobNumber || "", unitCode: item.unitCode || "",
+            detail: line.detail || line.label || "", amount: Math.round(line.amount * 100) / 100,
+            estimated: !!row.estimated,
+          });
+        }
+      }
+      continue;
+    }
+    if (category === "Devan" || category === "CFS") {
+      // The arrival charge is the same tariff either way; which of the two it is depends on
+      // how the cases were checked in.
+      if ((item.arrivingType || "") !== category) continue;
+      if (!inPeriod(effectiveDepotArrivalDate(item))) continue;
+      const c = computeHandlingCharge(item, "devan");
+      if (c && c.amount) lines.push({
+        itemId: item.id, jobNumber: item.jobNumber || "", unitCode: item.unitCode || "",
+        detail: c.detail || category, amount: Math.round(c.amount * 100) / 100, needsQuote: !!c.needsQuote,
+      });
+      continue;
+    }
+    if (category === "Delivery") {
+      if (!inPeriod(lastDeliveryDate(item))) continue;
+      const c = computeHandlingCharge(item, "delivery");
+      if (c && c.amount) lines.push({
+        itemId: item.id, jobNumber: item.jobNumber || "", unitCode: item.unitCode || "",
+        detail: c.detail || "Delivery", amount: Math.round(c.amount * 100) / 100, needsQuote: !!c.needsQuote,
+      });
+    }
+  }
+  const amount = Math.round(lines.reduce((s, l) => s + (l.amount || 0), 0) * 100) / 100;
+  return { amount, lines };
+}
+// Under a cent apart is the same number; anything more is a discrepancy worth showing.
+function reconcileInvoice(invoice, items) {
+  const expected = computeCategoryTotal(items, {
+    client: invoice.client, project: invoice.project, category: invoice.category,
+    year: Number(invoice.periodYear), month: Number(invoice.periodMonth),
+  });
+  const invoiced = Math.round((Number(invoice.amount) || 0) * 100) / 100;
+  const difference = Math.round((invoiced - expected.amount) * 100) / 100;
+  let status = "match";
+  if (!expected.lines.length) status = "nothing";
+  else if (Math.abs(difference) >= 0.01) status = difference > 0 ? "over" : "under";
+  return { ...expected, invoiced, difference, status };
+}
+function emptyInvoice() {
+  const now = new Date();
+  return {
+    id: "", number: "", date: todayStr(), dueDate: "", client: CLIENTS[0], project: "",
+    orderedBy: "", category: DEBIT_NOTE_CATEGORIES[0],
+    periodYear: now.getFullYear(), periodMonth: now.getMonth(),
+    amount: "", chargeLine: "", narrative: "", revisedDate: "", revisedBy: "", notes: "", hasFile: false,
+  };
+}
+// Reproduces the debit note as it goes out to the client: same header block, same
+// description column with the standard run of lines, same amount in words, same E.&O.E.
+// and total row, same signature block. The REVISED stamp only appears when the note has
+// actually been revised, matching how it is stamped on the paper ones.
+function DebitNotePrint({ invoice, onClose, colors, t }) {
+  const money = (n) => `$${(Math.round((Number(n) || 0) * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const dmy = (iso) => {
+    if (!iso) return "";
+    const [y, m, d] = String(iso).split("-");
+    return `${Number(d)}/${Number(m)}/${y}`;
+  };
+  const site = String(invoice.project || "").trim();
+  const siteLine = site ? (/^site\s+at/i.test(site) ? site.toUpperCase() : `SITE AT ${site.toUpperCase()}`) : "";
+  const addressLines = String(invoice.billTo || "").split("\n").filter(Boolean);
+  const cel = { border: "1px solid #111", padding: "6px 10px", verticalAlign: "top" };
+  return (
+    <div id="debit-note-print-root" className="fixed inset-0 z-50 flex flex-col" style={{ background: "rgba(0,0,0,0.5)" }}>
+      <style>{`
+        @media print {
+          body * { visibility: hidden; }
+          #debit-note-print-root, #debit-note-print-root * { visibility: visible; }
+          #debit-note-print-root { position: absolute; inset: auto; left: 0; top: 0; width: 100%; background: #fff !important; }
+          #debit-note-print-toolbar { display: none !important; }
+          #debit-note-print-scroll { overflow: visible !important; height: auto !important; padding: 0 !important; }
+          #debit-note-print-area { margin: 0 !important; max-width: 100% !important; }
+        }
+        @page { size: A4 portrait; margin: 12mm; }
+      `}</style>
+      <div id="debit-note-print-toolbar" className="flex flex-wrap items-center gap-2 p-3" style={{ background: colors.navy }}>
+        <span className="text-sm font-semibold" style={{ color: colors.onDark, fontFamily: FONT_DISPLAY }}>
+          {t.debitNotePrintLabel(invoice.number || "")}
+        </span>
+        <div className="ml-auto flex gap-2">
+          <button className="px-4 py-2 rounded text-sm font-semibold" style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }} onClick={() => window.print()}>
+            {t.printBtn}
+          </button>
+          <button className="px-4 py-2 rounded text-sm font-semibold" style={{ border: `1px solid ${colors.onDark}`, color: colors.onDark, fontFamily: FONT_DISPLAY }} onClick={onClose}>
+            {t.closePreviewBtn}
+          </button>
+        </div>
+      </div>
+      <div id="debit-note-print-scroll" className="flex-1 overflow-y-auto p-6" style={{ background: colors.bg }}>
+        <div id="debit-note-print-area" className="mx-auto" style={{ background: "#fff", color: "#111", maxWidth: 720, padding: 28, fontFamily: "Arial, sans-serif", fontSize: 13 }}>
+
+          <div className="flex items-start justify-between">
+            <div>
+              <div style={{ fontSize: 23, fontWeight: 700, letterSpacing: -0.4 }}>FARSPEED <span style={{ fontWeight: 400 }}>Contractors Limited</span></div>
+              <div style={{ fontSize: 11, marginTop: 2 }}>P.O.Box No. 1985, Yuen Long Post Office N.T., Hong Kong</div>
+              <div style={{ fontSize: 11 }}>Tel: 5337 9500&nbsp;&nbsp;&nbsp;Fax: 2402 4450&nbsp;&nbsp;&nbsp;www.farspeed.com</div>
+            </div>
+            <img src={FARSPEED_LOGO_DATA_URI} alt="Farspeed" style={{ height: 66, width: "auto" }} />
+          </div>
+
+          <div className="flex items-start justify-between" style={{ marginTop: 26 }}>
+            <div style={{ minHeight: 96, paddingTop: 6, fontSize: 13, lineHeight: 1.45 }}>
+              <div>{invoice.client}</div>
+              {addressLines.map((l, i) => <div key={i}>{l}</div>)}
+            </div>
+            <div style={{ textAlign: "left" }}>
+              {(invoice.revisedDate || invoice.revisedBy) && (
+                <div style={{ border: "1px solid #111", padding: "2px 8px", marginBottom: 8, fontSize: 11, width: 168 }}>
+                  <div style={{ letterSpacing: 2, textAlign: "center" }}>REVISED</div>
+                  <div className="flex justify-between" style={{ borderTop: "1px solid #111", paddingTop: 2 }}>
+                    <span>Date: {dmy(invoice.revisedDate)}</span>
+                    <span>By: {invoice.revisedBy}</span>
+                  </div>
+                </div>
+              )}
+              <div style={{ fontSize: 30, fontWeight: 700 }}>Debit Note</div>
+              <div style={{ fontSize: 13, marginTop: 14 }}>No. :{invoice.number}</div>
+              <div style={{ fontSize: 13, marginTop: 10 }}>Date: {dmy(invoice.date)}</div>
+            </div>
+          </div>
+
+          <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 18 }}>
+            <thead>
+              <tr>
+                <th style={{ ...cel, textAlign: "center", fontWeight: 400 }}>Description</th>
+                <th style={{ ...cel, textAlign: "center", fontWeight: 400, width: 150 }}>Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={{ ...cel, height: 520, lineHeight: 2.1 }}>
+                  <div>Your Order Reference:&nbsp; {invoice.orderReference || "STORAGE"}</div>
+                  <div>&nbsp;</div>
+                  {siteLine && <div>{siteLine}</div>}
+                  <div style={{ letterSpacing: -1, lineHeight: 1 }}>--------------------------------------------------------</div>
+                  {invoice.orderedBy && <div>ORDERED BY {invoice.orderedBy.toUpperCase()}</div>}
+                  {invoice.narrative && <div>{invoice.narrative.toUpperCase()}</div>}
+                  {invoice.chargeLine && <div>{invoice.chargeLine.toUpperCase()}</div>}
+                  <div>DETAILS AS PER OUR INVENTORY ATTACHED</div>
+                  <div style={{ lineHeight: 1.35, marginTop: 8, marginBottom: 8 }}>{amountInWordsHKD(invoice.amount)}</div>
+                  {invoice.dueDate && <div>PAYMENT DUE ON {dmy(invoice.dueDate)}</div>}
+                </td>
+                <td style={{ ...cel, textAlign: "right", paddingTop: 76 }}>{money(invoice.amount)}</td>
+              </tr>
+              <tr>
+                <td style={{ ...cel, textAlign: "center", borderTop: "none" }}>E. &amp; O. E.</td>
+                <td style={{ ...cel, borderTop: "none" }}></td>
+              </tr>
+              <tr>
+                <td style={{ ...cel, textAlign: "right" }}>Total Amount: HK$</td>
+                <td style={{ ...cel, textAlign: "right" }}>{money(invoice.amount)}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div style={{ textAlign: "right", marginTop: 12, fontWeight: 700, fontSize: 15 }}>FARSPEED Contractors Ltd.</div>
+          <div style={{ marginTop: 64, marginLeft: "auto", width: 260, borderTop: "1px solid #111" }} />
+          <div style={{ textAlign: "center", marginTop: 40, fontSize: 12 }}>a member of FARSPEED Group</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+// The debit notes issued for a month, set against what the depot's own records produce
+// for the same client, site, category and month. A note that does not agree is flagged so
+// it can be looked at before the client finds it. Storage, CFS, Devan and Delivery only -
+// Hoisting and Shifting are a later job.
+function InvoicesSection({ items, invoices, setInvoices, monthNames, yearOptions, colors, t, lang }) {
+  const now = new Date();
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth());
+  const [client, setClient] = useState("All");
+  const [editing, setEditing] = useState(null);
+  const [expanded, setExpanded] = useState(null);
+  const [printing, setPrinting] = useState(null);
+  const [busy, setBusy] = useState("");
+  const inputStyle = inputStyleFor(colors);
+  const money = (n) => `$${(Math.round((Number(n) || 0) * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  const inPeriod = (invoices || []).filter((inv) =>
+    Number(inv.periodYear) === Number(year) && Number(inv.periodMonth) === Number(month)
+    && (client === "All" || inv.client === client));
+  const rows = inPeriod.map((inv) => ({ invoice: inv, check: reconcileInvoice(inv, items) }));
+  const totalInvoiced = Math.round(rows.reduce((s, r) => s + r.check.invoiced, 0) * 100) / 100;
+  const totalExpected = Math.round(rows.reduce((s, r) => s + r.check.amount, 0) * 100) / 100;
+  const problems = rows.filter((r) => r.check.status !== "match").length;
+  const clientOptions = [...new Set((invoices || []).map((i) => i.client).filter(Boolean))].sort();
+
+  // What the depot produced for this month that no debit note covers yet - the other half
+  // of the check, since a charge nobody invoiced is as costly as one invoiced wrongly.
+  const uninvoiced = (() => {
+    const covered = new Set(inPeriod.map((i) => `${i.client}||${normalizeSiteForMatch(i.project)}||${i.category}`));
+    const out = [];
+    const sites = new Map();
+    for (const item of items || []) {
+      if (item.cancelled || !item.client) continue;
+      const site = item.constructionSite || item.project || "";
+      sites.set(`${item.client}||${site}`, { client: item.client, site });
+    }
+    for (const { client: c, site } of sites.values()) {
+      if (client !== "All" && c !== client) continue;
+      for (const category of DEBIT_NOTE_CATEGORIES) {
+        const key = `${c}||${normalizeSiteForMatch(site)}||${category}`;
+        if (covered.has(key)) continue;
+        const got = computeCategoryTotal(items, { client: c, project: site, category, year: Number(year), month: Number(month) });
+        if (got.amount > 0) out.push({ client: c, site, category, amount: got.amount });
+      }
+    }
+    return out;
+  })();
+
+  function saveInvoice(draft) {
+    const id = draft.id || `INV${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    setInvoices((prev) => {
+      const list = prev || [];
+      return list.some((i) => i.id === id)
+        ? list.map((i) => (i.id === id ? { ...draft, id } : i))
+        : [...list, { ...draft, id }];
+    });
+    setEditing(null);
+  }
+  function removeInvoice(id) {
+    setInvoices((prev) => (prev || []).filter((i) => i.id !== id));
+    storageSet(`invoiceDoc:${id}`, "").catch(() => {});
+  }
+  async function viewScan(id) {
+    setBusy(id);
+    try {
+      const res = await storageGet(`invoiceDoc:${id}`);
+      const doc = res && res.value ? JSON.parse(res.value) : null;
+      if (doc && doc.uri) {
+        const w = window.open();
+        if (w) w.document.write(`<iframe src="${doc.uri}" style="border:0;width:100%;height:100%"></iframe>`);
+      }
+    } catch (e) { /* nothing stored */ }
+    setBusy("");
+  }
+
+  const statusStyle = {
+    match: { color: colors.green, label: t.invoiceStatusMatch },
+    over: { color: colors.red, label: t.invoiceStatusOver },
+    under: { color: colors.red, label: t.invoiceStatusUnder },
+    nothing: { color: colors.amberText, label: t.invoiceStatusNothing },
+  };
+
+  return (
+    <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+      {printing && <DebitNotePrint invoice={printing} onClose={() => setPrinting(null)} colors={colors} t={t} />}
+      <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.invoicesTitle}</h3>
+      <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.invoicesDesc}</p>
+
+      <div className="flex flex-wrap items-end gap-3 mb-4">
+        <Field label={t.billingMonthLabel} colors={colors}>
+          <select className={inputClass} style={inputStyle} value={month} onChange={(e) => setMonth(Number(e.target.value))}>
+            {monthNames.map((m, i) => <option key={m} value={i}>{m}</option>)}
+          </select>
+        </Field>
+        <Field label={t.billingYearLabel} colors={colors}>
+          <select className={inputClass} style={inputStyle} value={year} onChange={(e) => setYear(Number(e.target.value))}>
+            {yearOptions.map((y) => <option key={y} value={y}>{y}</option>)}
+          </select>
+        </Field>
+        <Field label={t.clientLabel} colors={colors}>
+          <select className={inputClass} style={inputStyle} value={client} onChange={(e) => setClient(e.target.value)}>
+            <option value="All">{t.statusAll}</option>
+            {clientOptions.map((c) => <option key={c}>{c}</option>)}
+          </select>
+        </Field>
+        <button className="px-3 py-2 rounded text-sm font-semibold"
+          style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY }}
+          onClick={() => setEditing({ ...emptyInvoice(), periodYear: year, periodMonth: month, client: client === "All" ? CLIENTS[0] : client })}>
+          {t.invoiceAddBtn}
+        </button>
+      </div>
+
+      {editing && (
+        <InvoiceEditor
+          draft={editing} onChange={setEditing} onSave={saveInvoice} onCancel={() => setEditing(null)}
+          items={items} monthNames={monthNames} yearOptions={yearOptions} colors={colors} t={t}
+        />
+      )}
+
+      <div className="rounded overflow-hidden mb-3" style={{ border: `1px solid ${colors.line}` }}>
+        <table className="w-full text-xs">
+          <thead>
+            <tr style={{ background: colors.surfaceDim }}>
+              {[t.invoiceColNo, t.invoiceColDate, t.clientLabel, t.invoiceColSite, t.invoiceColCategory,
+                t.invoiceColInvoiced, t.invoiceColExpected, t.invoiceColDifference, ""].map((h, i) => (
+                <th key={i} className="text-left px-3 py-2 font-semibold" style={{ color: colors.inkFaint }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 && (
+              <tr><td colSpan={9} className="px-3 py-6 text-center text-sm" style={{ color: colors.inkFaint }}>{t.invoicesNoneMsg}</td></tr>
+            )}
+            {rows.map(({ invoice, check }) => {
+              const st = statusStyle[check.status];
+              const open = expanded === invoice.id;
+              return (
+                <React.Fragment key={invoice.id}>
+                  <tr style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink, cursor: "pointer" }}
+                    onClick={() => setExpanded(open ? null : invoice.id)}>
+                    <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{invoice.number || "—"}</td>
+                    <td className="px-3 py-2">{invoice.date ? fmt(invoice.date) : "—"}</td>
+                    <td className="px-3 py-2">{invoice.client}</td>
+                    <td className="px-3 py-2 max-w-[200px] truncate">{invoice.project || "—"}</td>
+                    <td className="px-3 py-2">{invoice.category}</td>
+                    <td className="px-3 py-2 text-right" style={{ fontFamily: FONT_MONO }}>{money(check.invoiced)}</td>
+                    <td className="px-3 py-2 text-right" style={{ fontFamily: FONT_MONO }}>{money(check.amount)}</td>
+                    <td className="px-3 py-2 text-right" style={{ fontFamily: FONT_MONO, color: st.color, fontWeight: 600 }}>
+                      {check.status === "match" ? st.label : `${check.difference > 0 ? "+" : ""}${money(check.difference)}`}
+                    </td>
+                    <td className="px-3 py-2 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                      {invoice.hasFile && (
+                        <button className="text-xs font-semibold mr-2" style={{ color: colors.amberText }} onClick={() => viewScan(invoice.id)}>
+                          {busy === invoice.id ? "…" : t.invoiceViewScanBtn}
+                        </button>
+                      )}
+                      <button className="text-xs font-semibold mr-2" style={{ color: colors.amberText }} onClick={() => setPrinting(invoice)}>{t.printBtn}</button>
+                      <button className="text-xs font-semibold mr-2" style={{ color: colors.inkFaint }} onClick={() => setEditing(invoice)}>{t.editBtn}</button>
+                      <button className="text-xs font-semibold" style={{ color: colors.red }} onClick={() => removeInvoice(invoice.id)}>{t.deleteBtn}</button>
+                    </td>
+                  </tr>
+                  {open && (
+                    <tr style={{ background: colors.surfaceDim }}>
+                      <td colSpan={9} className="px-3 py-2">
+                        <div className="text-xs font-semibold mb-1" style={{ color: st.color }}>
+                          {check.status === "nothing" ? t.invoiceNothingHint : `${st.label} \u00b7 ${t.invoiceLinesLabel(check.lines.length)}`}
+                        </div>
+                        {check.lines.map((l, i) => (
+                          <div key={i} className="text-xs flex gap-3" style={{ color: colors.ink }}>
+                            <span style={{ fontFamily: FONT_MONO, minWidth: 70 }}>{l.itemId}</span>
+                            <span style={{ minWidth: 90 }}>{l.unitCode || l.jobNumber || ""}</span>
+                            <span className="flex-1">{l.detail}{l.estimated ? ` \u00b7 ${t.invoiceEstimatedTag}` : ""}</span>
+                            <span style={{ fontFamily: FONT_MONO }}>{money(l.amount)}</span>
+                          </div>
+                        ))}
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="flex flex-wrap gap-4 text-sm mb-2" style={{ color: colors.ink }}>
+        <span>{t.invoiceTotalInvoiced}: <strong style={{ fontFamily: FONT_MONO }}>{money(totalInvoiced)}</strong></span>
+        <span>{t.invoiceTotalExpected}: <strong style={{ fontFamily: FONT_MONO }}>{money(totalExpected)}</strong></span>
+        <span style={{ color: Math.abs(totalInvoiced - totalExpected) >= 0.01 ? colors.red : colors.green }}>
+          {t.invoiceTotalDifference}: <strong style={{ fontFamily: FONT_MONO }}>{money(totalInvoiced - totalExpected)}</strong>
+        </span>
+        {problems > 0 && <span style={{ color: colors.red }}>{t.invoiceProblemCount(problems)}</span>}
+      </div>
+
+      {uninvoiced.length > 0 && (
+        <div className="rounded p-3 mt-3" style={{ background: colors.redSoft }}>
+          <div className="text-xs font-semibold mb-1" style={{ color: colors.red }}>{t.invoiceUninvoicedLabel}</div>
+          {uninvoiced.map((u, i) => (
+            <div key={i} className="text-xs flex gap-3" style={{ color: colors.ink }}>
+              <span style={{ minWidth: 110 }}>{u.client}</span>
+              <span className="flex-1 truncate">{u.site}</span>
+              <span style={{ minWidth: 70 }}>{u.category}</span>
+              <span style={{ fontFamily: FONT_MONO }}>{money(u.amount)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="text-xs mt-3" style={{ color: colors.inkFaint }}>{t.invoicesFootnote}</div>
+    </div>
+  );
+}
+// The debit note's own fields. The site, category and month decide which of the depot's
+// charges the note is checked against, so those three matter more than the rest.
+function InvoiceEditor({ draft, onChange, onSave, onCancel, items, monthNames, yearOptions, colors, t }) {
+  const inputStyle = inputStyleFor(colors);
+  const [attaching, setAttaching] = useState(false);
+  const set = (k) => (e) => onChange({ ...draft, [k]: e.target.value });
+  const siteOptions = [...new Set((items || []).map((i) => i.constructionSite || i.project).filter(Boolean))].sort();
+  const preview = reconcileInvoice(draft, items);
+  const money = (n) => `$${(Math.round((Number(n) || 0) * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  async function attach(file) {
+    if (!file) return;
+    setAttaching(true);
+    const id = draft.id || `INV${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    try {
+      const uri = await compressFileToDataUri(file, 1600, 0.7);
+      await storageSet(`invoiceDoc:${id}`, JSON.stringify({ uri, name: file.name, at: todayStr() }));
+      onChange({ ...draft, id, hasFile: true, scanName: file.name });
+    } catch (e) { /* leave unattached */ }
+    setAttaching(false);
+  }
+
+  return (
+    <div className="rounded p-3 mb-4" style={{ border: `1px dashed ${colors.line}`, background: colors.amberSoft }}>
+      <div className="flex flex-wrap gap-3 mb-2">
+        <Field label={t.invoiceColNo} colors={colors}>
+          <input className={inputClass} style={{ ...inputStyle, width: 130 }} value={draft.number} onChange={set("number")} placeholder="02608003" />
+        </Field>
+        <Field label={t.invoiceColDate} colors={colors}>
+          <input type="date" className={inputClass} style={inputStyle} value={draft.date} onChange={set("date")} />
+        </Field>
+        <Field label={t.invoiceDueDateLabel} colors={colors}>
+          <input type="date" className={inputClass} style={inputStyle} value={draft.dueDate} onChange={set("dueDate")} />
+        </Field>
+        <Field label={t.clientLabel} colors={colors}>
+          <select className={inputClass} style={inputStyle} value={draft.client} onChange={set("client")}>
+            {CLIENTS.map((c) => <option key={c}>{c}</option>)}
+          </select>
+        </Field>
+        <Field label={t.invoiceColCategory} colors={colors}>
+          <select className={inputClass} style={inputStyle} value={draft.category} onChange={set("category")}>
+            {DEBIT_NOTE_CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+          </select>
+        </Field>
+        <Field label={t.billingMonthLabel} colors={colors}>
+          <select className={inputClass} style={inputStyle} value={draft.periodMonth} onChange={(e) => onChange({ ...draft, periodMonth: Number(e.target.value) })}>
+            {monthNames.map((m, i) => <option key={m} value={i}>{m}</option>)}
+          </select>
+        </Field>
+        <Field label={t.billingYearLabel} colors={colors}>
+          <select className={inputClass} style={inputStyle} value={draft.periodYear} onChange={(e) => onChange({ ...draft, periodYear: Number(e.target.value) })}>
+            {yearOptions.map((y) => <option key={y} value={y}>{y}</option>)}
+          </select>
+        </Field>
+        <Field label={t.invoiceAmountLabel} colors={colors}>
+          <input type="number" min="0" step="0.01" className={inputClass} style={{ ...inputStyle, width: 130 }} value={draft.amount} onChange={set("amount")} />
+        </Field>
+      </div>
+      <div className="flex flex-wrap gap-3 mb-2">
+        <Field label={t.invoiceColSite} colors={colors}>
+          <input className={inputClass} style={{ ...inputStyle, width: 360 }} value={draft.project} onChange={set("project")} list="invoice-site-options" />
+          <datalist id="invoice-site-options">{siteOptions.map((s) => <option key={s} value={s} />)}</datalist>
+        </Field>
+        <Field label={t.invoiceOrderedByLabel} colors={colors}>
+          <input className={inputClass} style={{ ...inputStyle, width: 200 }} value={draft.orderedBy} onChange={set("orderedBy")} />
+        </Field>
+        <Field label={t.invoiceOrderRefLabel} colors={colors}>
+          <input className={inputClass} style={{ ...inputStyle, width: 140 }} value={draft.orderReference || ""} onChange={set("orderReference")} placeholder="STORAGE" />
+        </Field>
+      </div>
+      <div className="flex flex-wrap gap-3 mb-2">
+        <Field label={t.invoiceChargeLineLabel} hint={t.invoiceChargeLineHint} colors={colors}>
+          <input className={inputClass} style={{ ...inputStyle, width: 460 }} value={draft.chargeLine} onChange={set("chargeLine")}
+            placeholder="CHARGES FOR OPEN YARD STORAGE AREA AUG 2026 AT LUMPSUM" />
+        </Field>
+        <Field label={t.invoiceNarrativeLabel} colors={colors}>
+          <input className={inputClass} style={{ ...inputStyle, width: 380 }} value={draft.narrative} onChange={set("narrative")}
+            placeholder="COVERED AREA STORAGE AT FARSPEED DEPOT AS INSTRUCTED." />
+        </Field>
+      </div>
+      <div className="flex flex-wrap gap-3 mb-2">
+        <Field label={t.invoiceBillToLabel} colors={colors}>
+          <textarea className={inputClass} style={{ ...inputStyle, width: 340, height: 70 }} value={draft.billTo || ""} onChange={set("billTo")} />
+        </Field>
+        <Field label={t.invoiceRevisedDateLabel} colors={colors}>
+          <input type="date" className={inputClass} style={inputStyle} value={draft.revisedDate} onChange={set("revisedDate")} />
+        </Field>
+        <Field label={t.invoiceRevisedByLabel} colors={colors}>
+          <input className={inputClass} style={{ ...inputStyle, width: 120 }} value={draft.revisedBy} onChange={set("revisedBy")} />
+        </Field>
+        <Field label={t.invoiceScanLabel} colors={colors}>
+          <input type="file" accept="image/*,application/pdf" className="text-xs" onChange={(e) => attach(e.target.files && e.target.files[0])} />
+        </Field>
+      </div>
+      <div className="text-xs mb-2" style={{ color: preview.status === "match" ? colors.green : colors.red }}>
+        {attaching ? t.invoiceAttachingMsg : t.invoicePreviewMsg(money(preview.amount), money(preview.difference))}
+      </div>
+      <div className="flex gap-2">
+        <button className="px-3 py-1.5 rounded text-xs font-semibold"
+          style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY }}
+          onClick={() => onSave(draft)}>{t.saveBtn}</button>
+        <button className="px-3 py-1.5 rounded text-xs font-semibold"
+          style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY }}
+          onClick={onCancel}>{t.cancelBtn}</button>
+      </div>
+    </div>
+  );
+}
+function BillingPanel({ items, invoices, setInvoices, onDeleteItem, authUser, colors, t, lang }) {
   const now = new Date();
   const [mode, setMode] = useState("search");
   const [search, setSearch] = useState("");
@@ -4433,7 +5065,7 @@ function BillingPanel({ items, onDeleteItem, authUser, colors, t, lang }) {
         <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.billingTitle}</h3>
         <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.billingDesc}</p>
         <div className="flex gap-1 rounded-lg p-1 mb-3" style={{ background: colors.surfaceDim, width: "fit-content" }}>
-          {[["search", t.billingModeSearch], ["monthly", t.billingModeMonthly], ["handling", t.billingModeHandling]].map(([k, label]) => (
+          {[["search", t.billingModeSearch], ["monthly", t.billingModeMonthly], ["handling", t.billingModeHandling], ["invoices", t.billingModeInvoices]].map(([k, label]) => (
             <button key={k} onClick={() => setMode(k)} className="px-3 py-1.5 rounded text-sm font-semibold"
               style={{ fontFamily: FONT_DISPLAY, background: mode === k ? colors.surface : "transparent", color: colors.ink }}>
               {label}
@@ -4641,6 +5273,12 @@ function BillingPanel({ items, onDeleteItem, authUser, colors, t, lang }) {
         </div>
         <div className="text-xs" style={{ color: colors.inkFaint }}>{t.billingFootnote}</div>
       </>
+      )}
+      {mode === "invoices" && (
+        <InvoicesSection
+          items={items} invoices={invoices} setInvoices={setInvoices}
+          monthNames={monthNames} yearOptions={yearOptions} colors={colors} t={t} lang={lang}
+        />
       )}
       {mode === "handling" && (
         <>
@@ -8724,6 +9362,7 @@ export default function FarspeedInventory() {
   const [authUser, setAuthUser] = useState(undefined); // undefined = checking session, null = logged out, string = logged in
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [items, setItems] = useState([]);
+  const [invoices, setInvoicesState] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [view, setView] = useState("dashboard");
   const [editing, setEditing] = useState(null);
@@ -8832,6 +9471,12 @@ export default function FarspeedInventory() {
         setLegacyArchiveState([]);
       }
       try {
+        const res = await storageGet("invoices");
+        setInvoicesState(res ? JSON.parse(res.value) : []);
+      } catch (e) {
+        setInvoicesState([]);
+      }
+      try {
         const res = await storageGet("incoming");
         revs.current.incoming = res ? res.rev : null;
         setIncomingState(res ? JSON.parse(res.value) : []);
@@ -8849,6 +9494,13 @@ export default function FarspeedInventory() {
     setDirectoryState((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater;
       storageSet("directory", JSON.stringify(next));
+      return next;
+    });
+  }
+  function setInvoices(updater) {
+    setInvoicesState((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      storageSet("invoices", JSON.stringify(next));
       return next;
     });
   }
@@ -10025,7 +10677,7 @@ export default function FarspeedInventory() {
         )}
 
         {view === "billing" && (
-          <BillingPanel items={items} onDeleteItem={handleDelete} authUser={authUser} colors={colors} t={t} lang={lang} />
+          <BillingPanel items={items} invoices={invoices} setInvoices={setInvoices} onDeleteItem={handleDelete} authUser={authUser} colors={colors} t={t} lang={lang} />
         )}
 
         {view === "directory" && (
