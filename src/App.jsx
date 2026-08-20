@@ -1215,6 +1215,13 @@ const TEXT = {
 
     noneFoundMsg: "No duplicates found. Entries are flagged when client, project, unit code, item type, depot arrival date, and invoice number all match another entry.",
     matchingEntries: (n) => `${n} matching entries`,
+    dupSharedLine: (arrival, type, jobs) => `Same arrival ${arrival} \u00b7 ${type} \u00b7 job no. ${jobs}`,
+    dupColCases: "Cases",
+    dupColDeliveries: "Deliveries",
+    dupFlatCount: (n) => `${n} (no case list)`,
+    dupSourceLabel: "From",
+    dupHasDeliveriesWarn: (n) => `${n} delivery record${n === 1 ? "" : "s"} on this entry \u2014 deleting it removes them too`,
+    dupDiffHint: "Highlighted values are the ones that differ between these entries. Everything else already matches, which is why they were flagged.",
     deleteAllBtn: (n) => `Delete all ${n}`,
     colInvoiceNo: "Invoice No.",
     colAddedOn: "Added On",
@@ -1871,6 +1878,13 @@ const TEXT = {
 
     noneFoundMsg: "未發現重複記錄。當客戶、項目、單位編號、貨物類型、抵倉日期及發票編號均與另一記錄相同時，系統會標示為重複。",
     matchingEntries: (n) => `${n} 個相符記錄`,
+    dupSharedLine: (arrival, type, jobs) => `同一抵倉日 ${arrival} \u00b7 ${type} \u00b7 工單號 ${jobs}`,
+    dupColCases: "貨箱",
+    dupColDeliveries: "送貨",
+    dupFlatCount: (n) => `${n}（無貨箱清單）`,
+    dupSourceLabel: "來源",
+    dupHasDeliveriesWarn: (n) => `此記錄有 ${n} 筆送貨記錄 \u2014 刪除將一併移除`,
+    dupDiffHint: "以顏色標示者為各記錄之間有差異的欄位；其餘欄位已相同，故被判定為重複。",
     deleteAllBtn: (n) => `全部刪除（${n}項）`,
     colInvoiceNo: "發票編號",
     colAddedOn: "新增日期",
@@ -10772,41 +10786,103 @@ export default function FarspeedInventory() {
               duplicateGroups.map((group, gi) => {
                 const groupIds = group.map((i) => i.id);
                 const sorted = [...group].sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+                // Everything in a group already shares client, project, unit, type, arrival
+                // date and invoice number - that is what made them a group - so those tell
+                // you nothing about which to keep. What matters is where each one came from
+                // and what it is carrying, with the fields that actually differ picked out.
+                const differs = (get) => new Set(sorted.map((i) => String(get(i) ?? ""))).size > 1;
+                const caseSummary = (i) => {
+                  const pkgs = i.packages || [];
+                  if (!pkgs.length) return i.packageCount ? t.dupFlatCount(i.packageCount) : "\u2014";
+                  const first = pkgs[0].code, last = pkgs[pkgs.length - 1].code;
+                  return `${pkgs.length} \u00b7 ${first}${pkgs.length > 1 ? `\u2013${last}` : ""}`;
+                };
+                const sourceOf = (i) => i.notes || "";
+                const cols = [
+                  { h: t.colId, get: (i) => i.id, mono: true },
+                  { h: t.fJobNumber, get: (i) => i.jobNumber || "\u2014", mono: true },
+                  { h: t.fJobRef, get: (i) => i.jobRef || "\u2014" },
+                  { h: t.fReference, get: (i) => i.shkNumber || "\u2014" },
+                  { h: t.fArrivingType, get: (i) => i.arrivingType || "\u2014" },
+                  { h: t.colDepot, get: (i) => depotDisplay(i.depot, lang) },
+                  { h: t.dupColCases, get: caseSummary },
+                  { h: t.fWeight, get: (i) => i.weightKg || "\u2014", mono: true },
+                  { h: t.fVolume, get: (i) => i.volumeCbm || "\u2014", mono: true },
+                  { h: t.dupColDeliveries, get: (i) => String(activeDeliveries(i).length) },
+                  { h: t.colAddedOn, get: (i) => fmt(i.createdAt) },
+                ];
+                const jobNumbers = [...new Set(group.map((i) => i.jobNumber).filter(Boolean))];
                 return (
                   <div key={gi} className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.amber}` }}>
                     <div className="px-4 py-2 flex items-center justify-between flex-wrap gap-2" style={{ background: colors.amberSoft }}>
-                      <span className="text-sm font-semibold" style={{ color: colors.amberText }}>
-                        {group[0].client} · {group[0].project}{group[0].unitCode ? ` · ${group[0].unitCode}` : ""} — {t.matchingEntries(group.length)}
-                      </span>
+                      <div>
+                        <div className="text-sm font-semibold" style={{ color: colors.amberText }}>
+                          {group[0].client} · {group[0].project}{group[0].unitCode ? ` · ${group[0].unitCode}` : ""} — {t.matchingEntries(group.length)}
+                        </div>
+                        <div className="text-xs" style={{ color: colors.amberText }}>
+                          {t.dupSharedLine(fmt(group[0].depotArrivalDate), group[0].itemType || "\u2014", jobNumbers.length ? jobNumbers.join(", ") : "\u2014")}
+                        </div>
+                      </div>
                       <button className="text-xs font-semibold underline" style={{ color: colors.red }} onClick={() => handleDeleteGroup(groupIds)}>
                         {t.deleteAllBtn(group.length)}
                       </button>
                     </div>
+                    <div className="overflow-x-auto">
                     <table className="w-full text-sm" style={{ background: colors.surface }}>
                       <thead>
                         <tr style={{ background: colors.surfaceDim }}>
-                          {[t.colId, t.colDepot, t.colDepotArrival, t.colInvoiceNo, t.colAddedOn, t.colStatus, ""].map((h) => (
-                            <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
+                          {[...cols.map((c) => c.h), t.colStatus, ""].map((h, hi) => (
+                            <th key={hi} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider whitespace-nowrap" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
-                        {sorted.map((i) => (
-                          <tr key={i.id} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
-                            <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{i.id}</td>
-                            <td className="px-3 py-2">{depotDisplay(i.depot, lang)}</td>
-                            <td className="px-3 py-2">{fmt(i.depotArrivalDate)}</td>
-                            <td className="px-3 py-2">{i.invoiceNumber || "—"}</td>
-                            <td className="px-3 py-2">{fmt(i.createdAt)}</td>
-                            <td className="px-3 py-2"><StatusBadge item={i} colors={colors} t={t} /></td>
-                            <td className="px-3 py-2 text-right whitespace-nowrap">
-                              <button className="text-xs font-semibold mr-3" style={{ color: colors.green }} onClick={() => handleKeepOne(groupIds, i.id)}>{t.keepDeleteBtn}</button>
-                              <button className="text-xs font-semibold" style={{ color: colors.red }} onClick={() => handleDelete(i.id)}>{t.deleteBtn}</button>
-                            </td>
-                          </tr>
-                        ))}
+                        {sorted.map((i) => {
+                          const source = sourceOf(i);
+                          const hasDeliveries = activeDeliveries(i).length > 0;
+                          return (
+                            <React.Fragment key={i.id}>
+                              <tr style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
+                                {cols.map((c, ci) => {
+                                  const diff = differs(c.get);
+                                  return (
+                                    <td key={ci} className="px-3 py-2 whitespace-nowrap"
+                                      style={{
+                                        fontFamily: c.mono ? FONT_MONO : undefined,
+                                        color: diff ? colors.amberText : colors.ink,
+                                        fontWeight: diff ? 600 : 400,
+                                      }}>
+                                      {c.get(i)}
+                                    </td>
+                                  );
+                                })}
+                                <td className="px-3 py-2"><StatusBadge item={i} colors={colors} t={t} /></td>
+                                <td className="px-3 py-2 text-right whitespace-nowrap">
+                                  <button className="text-xs font-semibold mr-3" style={{ color: colors.green }} onClick={() => handleKeepOne(groupIds, i.id)}>{t.keepDeleteBtn}</button>
+                                  <button className="text-xs font-semibold" style={{ color: colors.red }} onClick={() => handleDelete(i.id)}>{t.deleteBtn}</button>
+                                </td>
+                              </tr>
+                              {(source || hasDeliveries) && (
+                                <tr style={{ color: colors.inkFaint }}>
+                                  <td colSpan={cols.length + 2} className="px-3 pb-2 text-xs">
+                                    {source && <span>{t.dupSourceLabel}: {source}</span>}
+                                    {hasDeliveries && (
+                                      <span style={{ color: colors.red }}>
+                                        {source ? " \u00b7 " : ""}{t.dupHasDeliveriesWarn(activeDeliveries(i).length)}
+                                      </span>
+                                    )}
+                                  </td>
+                                </tr>
+                              )}
+                            </React.Fragment>
+                          );
+                        })}
                       </tbody>
                     </table>
+                    </div>
+                    <div className="px-4 py-2 text-xs" style={{ background: colors.surfaceDim, color: colors.inkFaint }}>
+                      {t.dupDiffHint}
+                    </div>
                   </div>
                 );
               })
