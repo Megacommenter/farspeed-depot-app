@@ -8846,13 +8846,15 @@ Follow these extraction rules exactly - they keep the output compact even for lo
    - "lot": the lift/unit number. This is very often printed right next to the case number in parentheses, like "(#.01)" or "(#.23)" - extract just the number (e.g. "01", "23"). Different cases sharing the same case-number prefix (e.g. multiple "C21" cases) but different lift numbers are DIFFERENT packages in DIFFERENT lots. If there's no such lift marker anywhere, use the shop order number or another batch identifier as the lot instead.
    - "description": ONLY the general category/heading text for that case (e.g. "Guide Rail", "Rail Bracket", "Traction Machine", "Installation Material"). Do NOT list the individual part numbers or sub-components underneath it even if the document itemizes many - this is the single most important rule for keeping output size manageable on long documents.
    - "weightKg": use the GROSS weight (毛重 / GROSS column), not net weight - gross is what matters here.
-   - "cbm": if a CBM/volume figure is already given directly for that case, use it as-is. Otherwise read that case's dimensions (often shown as "L*W*H", e.g. "500*20*20") and check the column header/label to see whether dimensions are in cm or mm. If in cm, compute cbm = (L*W*H) / 1,000,000. If in mm, compute cbm = (L*W*H) / 1,000,000,000.
+   - "cbm": ONLY if a CBM/volume/m3 figure is printed directly for that case. If the document does not give one, use '' - do NOT try to work it out yourself.
+   - "length", "width", "height": that case's dimensions exactly as printed, as plain numbers. These are very often three separate columns headed "Length cm", "Width cm", "Height cm" (or L/W/H, 長/闊/高), but may instead be one combined cell like "500*20*20" or "500x20x20" - read either form. Use '' for any you cannot find. Do not convert or round them.
+   - "dimUnit": the unit those dimensions are printed in - "cm" or "mm". Take it from the column heading or a nearby note. If nothing says, use "" rather than guessing.
 2. Group all cases by their lot/lift number into the "groups" array - one entry per distinct lot.
 2b. Also look for shipping/bill-of-lading details anywhere on the document: vessel/ship name (often after "ex ss." or 船名), voyage number, and container numbers. Combine them into one line for "ssDoNo" in roughly this style: ex ss."SHIP NAME" V.VOYAGE; CONTAINERS NO. XXXX/40GP. If none present, use ''.
 3. Keep everything as compact as possible: short descriptions, no commentary, no repeated sub-item lists.
 
 Respond with ONLY a raw JSON object in EXACTLY this shape and nothing else (no markdown fences, no commentary, no explanation before or after):
-{"client": "best-guess client name or ''", "project": "site/building/project name found in the document, or ''", "ssDoNo": "vessel + voyage + container line or ''", "groups": [{"lot": "lift/lot/shop-order number identifying this batch", "containers": ["container numbers if any, else empty array"], "packages": [{"code": "case/package number", "description": "short category name, a few words only", "weightKg": number_or_empty_string, "cbm": number_or_empty_string}]}]}
+{"client": "best-guess client name or ''", "project": "site/building/project name found in the document, or ''", "ssDoNo": "vessel + voyage + container line or ''", "groups": [{"lot": "lift/lot/shop-order number identifying this batch", "containers": ["container numbers if any, else empty array"], "packages": [{"code": "case/package number", "description": "short category name, a few words only", "weightKg": number_or_empty_string, "cbm": number_or_empty_string, "length": number_or_empty_string, "width": number_or_empty_string, "height": number_or_empty_string, "dimUnit": "cm_or_mm_or_empty"}]}]}
 If the document only has one overall lot/shipment with no explicit lift/case breakdown, put everything under a single group with a sensible lot name.`;
       const response = await fetch("/api/scan-pdf", {
         method: "POST",
@@ -8876,18 +8878,42 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
       } catch (parseErr) {
         throw new Error("truncated-or-invalid-json");
       }
-      const normalizedGroups = (parsed.groups || []).map((g) => ({
-        lot: g.lot || "UNSPECIFIED",
-        containers: g.containers || [],
-        totalWeight: (g.packages || []).reduce((s, p) => s + (Number(p.weightKg) || 0), 0),
-        totalCbm: (g.packages || []).reduce((s, p) => s + (Number(p.cbm) || 0), 0),
-        packages: (g.packages || []).map((p) => ({
-          code: p.code || "",
-          description: p.description || "",
-          weightKg: p.weightKg !== "" && p.weightKg != null ? String(p.weightKg) : "",
-          cbm: p.cbm !== "" && p.cbm != null ? String(p.cbm) : "",
-        })),
-      }));
+      // Work the volume out here rather than asking the scan to do the arithmetic. The
+      // Gage Street packing list prints its dimensions in three separate columns headed
+      // "Length cm", "Width cm", "Height cm", and the scan simply left CBM blank for all
+      // twenty-five cases. Reading the numbers off is what a scan is good at; multiplying
+      // them is not, so the model now returns them as printed and the sum happens here.
+      //
+      // A centimetre cube is a millionth of a cubic metre and a millimetre cube a
+      // billionth. Where the document doesn't name its unit, the size of the numbers
+      // decides: a case measured in millimetres runs to hundreds or thousands, so a
+      // largest dimension under 400 is centimetres.
+      const cbmFromDims = (p) => {
+        const l = Number(p.length), w = Number(p.width), h = Number(p.height);
+        if (!(l > 0 && w > 0 && h > 0)) return 0;
+        const unit = String(p.dimUnit || "").toLowerCase();
+        const divisor = unit === "cm" ? 1e6 : unit === "mm" ? 1e9 : (Math.max(l, w, h) < 400 ? 1e6 : 1e9);
+        return Math.round((l * w * h / divisor) * 10000) / 10000;
+      };
+      const normalizedGroups = (parsed.groups || []).map((g) => {
+        const packages = (g.packages || []).map((p) => {
+          const stated = p.cbm !== "" && p.cbm != null ? Number(p.cbm) : null;
+          const cbm = stated != null && stated > 0 ? stated : cbmFromDims(p);
+          return {
+            code: p.code || "",
+            description: p.description || "",
+            weightKg: p.weightKg !== "" && p.weightKg != null ? String(p.weightKg) : "",
+            cbm: cbm > 0 ? String(cbm) : "",
+          };
+        });
+        return {
+          lot: g.lot || "UNSPECIFIED",
+          containers: g.containers || [],
+          totalWeight: packages.reduce((s, p) => s + (Number(p.weightKg) || 0), 0),
+          totalCbm: packages.reduce((s, p) => s + (Number(p.cbm) || 0), 0),
+          packages,
+        };
+      });
       const ok = applyParsedResult({ groups: normalizedGroups, client: parsed.client, project: parsed.project, ssDoNo: parsed.ssDoNo || "" });
       if (!ok) setPdfError(t.packingListNoStructure);
       setPdfStatus("idle");
