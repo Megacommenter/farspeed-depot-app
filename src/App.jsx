@@ -1449,6 +1449,7 @@ const TEXT = {
     fRecordedBy: "Recorded By",
     fRecordedByHint: "Required \u2014 who is doing this Devan / CFS / Delivery",
     recordedByRequiredMsg: "Select who is recording this before saving.",
+    saveBlockedMsg: (fields) => `Fill in ${fields} before saving.`,
 
     resetBtn: "Reset All Deliveries (demo)",
     resetConfirmMsg: "This clears every delivery record on every item so everything shows as not yet delivered. It does not delete any manifest entries. Continue?",
@@ -2051,6 +2052,7 @@ const TEXT = {
     fRecordedBy: "記錄人",
     fRecordedByHint: "必填 — 由誰負責此次拆櫃／CFS／送貨",
     recordedByRequiredMsg: "儲存前請選擇記錄人。",
+    saveBlockedMsg: (fields) => `儲存前請先填寫：${fields}。`,
 
     resetBtn: "重設所有送貨記錄（示範用）",
     resetConfirmMsg: "此操作將清除所有項目之送貨記錄，令所有貨物顯示為尚未送貨，但不會刪除任何倉存記錄。是否繼續？",
@@ -2485,6 +2487,16 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, directory, emplo
   const [form, setForm] = useState(initial || { ...emptyForm(), recordedBy: currentUser || "" });
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const inputStyle = inputStyleFor(colors);
+  // Saving used to fail silently: the button tested these conditions and simply returned,
+  // so an entry missing one just would not save and gave no reason for it. Every entry
+  // created by a Devan/CFS check-in is born with an empty Description, which made all of
+  // them unsaveable the moment anyone opened one to correct something.
+  // A description is what tells you what an entry holds, so it is still required - but an
+  // entry with an itemised case list already says that, case by case, and doesn't need one.
+  const saveBlockers = [];
+  if (!form.project) saveBlockers.push(t.fProject);
+  if (!form.description && !(form.packages || []).length) saveBlockers.push(t.fDescription);
+  if (form.depotArrivalDate && !form.recordedBy) saveBlockers.push(t.fRecordedBy);
   const siteSuggestions = useMemo(() => {
     const fromDirectory = (directory || []).map((s) => s.siteEn).filter(Boolean);
     const fromItems = (items || []).map((i) => i.project).filter(Boolean);
@@ -2741,13 +2753,23 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, directory, emplo
         </div>
       )}
 
+      {saveBlockers.filter((b) => b !== t.fRecordedBy).length > 0 && (
+        <div className="mt-3 px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>
+          {t.saveBlockedMsg(saveBlockers.filter((b) => b !== t.fRecordedBy).join(", "))}
+        </div>
+      )}
+
       <div className="flex gap-2 mt-5">
         <button
           className="px-4 py-2 rounded text-sm font-semibold"
-          style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY }}
+          style={{
+            background: saveBlockers.length ? colors.line : colors.navy,
+            color: saveBlockers.length ? colors.inkFaint : colors.onDark,
+            fontFamily: FONT_DISPLAY,
+            cursor: saveBlockers.length ? "not-allowed" : "pointer",
+          }}
           onClick={() => {
-            if (!form.project || !form.description) return;
-            if (form.depotArrivalDate && !form.recordedBy) return;
+            if (saveBlockers.length) return;
             onSave(form);
           }}
         >
