@@ -560,16 +560,16 @@ function parsePackingListSheet(rows, legend) {
     const grossVal = colMap.grossWeight !== undefined && row[colMap.grossWeight] !== "" && row[colMap.grossWeight] != null ? plNum(row[colMap.grossWeight]) : null;
     const netVal = colMap.netWeight !== undefined && row[colMap.netWeight] !== "" && row[colMap.netWeight] != null ? plNum(row[colMap.netWeight]) : null;
     const estVal = colMap.estimatedWeight !== undefined && row[colMap.estimatedWeight] !== "" && row[colMap.estimatedWeight] != null ? plNum(row[colMap.estimatedWeight]) : null;
-    // An explicit estimated-weight column is the packing list's gross weight and is the
-    // figure the depot works to - confirmed on L32-02 (9,254.6) and L34-S1 (8,768.8),
-    // both of which are estimated-column sums. Take it outright.
+    // Schindler's sheets carry an Estimated weight beside an Actual weight, and the depot
+    // works to whichever of the two is heavier. That choice is made per lot on the column
+    // totals, not row by row: taking the larger figure case by case mixes the two measures
+    // and overshoots both - on this lot it would read 8,702.04 against an actual column of
+    // 8,404.84 and an estimated column of 7,517.48. The columns are summed below and the
+    // heavier one wins whole, so 60717017 reads 8,404.84 while L32-02, whose estimated
+    // column is the heavier at 9,254.6, keeps that.
     //
-    // Deliberately not compared against the actual column. Keeping the larger of the two
-    // mixes measures row by row and overshoots both (L32-02 would read 9,331). Nor is it
-    // reconciled against a booking page's own total: the L34-S2 booking totals its actual
-    // column and reports 9,198.8, but that is the shipper's figure, not the one Farspeed
-    // stores and bills on. Where there is no estimated column, use whichever of gross/net
-    // is bigger, which doesn't assume gross is.
+    // Where there is no estimated column, use whichever of gross/net is bigger, which
+    // doesn't assume gross is.
     const weight = estVal != null && estVal > 0
       ? estVal
       : (grossVal != null && netVal != null ? Math.max(grossVal, netVal) : (grossVal != null ? grossVal : (netVal != null ? netVal : 0)));
@@ -612,7 +612,14 @@ function parsePackingListSheet(rows, legend) {
     // into one entry.
     const key = translateLot(lastLot) || lastOrderNo || "UNSPECIFIED";
     if (!groups[key]) { groups[key] = { lot: key, packages: [], containers: new Set(), totalWeight: 0, totalCbm: 0 }; order.push(key); }
-    groups[key].packages.push({ code: lastCase || String(groups[key].packages.length + 1), orderNo: lastOrderNo, description, weightKg: weight ? String(weight) : "", cbm: cbm ? String(cbm) : "" });
+    groups[key].packages.push({
+      code: lastCase || String(groups[key].packages.length + 1), orderNo: lastOrderNo, description,
+      weightKg: weight ? String(weight) : "", cbm: cbm ? String(cbm) : "",
+      // Both readings are kept on the case so the heavier column can be picked per lot
+      // once every row has been read. Stripped again below.
+      __est: estVal != null && estVal > 0 ? estVal : null,
+      __act: grossVal != null && grossVal > 0 ? grossVal : null,
+    });
     if (lastContainer) groups[key].containers.add(lastContainer);
     groups[key].totalWeight += weight;
     groups[key].totalCbm += cbm;
@@ -631,6 +638,28 @@ function parsePackingListSheet(rows, legend) {
         p.code = `${p.orderNo}/${p.code}`;
       }
     }
+  }
+  // Now that every row is in, settle the Estimated-vs-Actual choice per lot on the column
+  // totals. A lot whose rows carry both readings takes the heavier column whole; where a
+  // case is missing a figure in the winning column, its other reading stands in rather
+  // than leaving the case at zero.
+  for (const key of order) {
+    const pkgs = groups[key].packages;
+    let estTotal = 0, actTotal = 0, both = false;
+    for (const p of pkgs) {
+      if (p.__est != null) estTotal += p.__est;
+      if (p.__act != null) actTotal += p.__act;
+      if (p.__est != null && p.__act != null) both = true;
+    }
+    if (both && estTotal > 0 && actTotal > 0) {
+      const useActual = actTotal > estTotal;
+      for (const p of pkgs) {
+        const chosen = useActual ? (p.__act != null ? p.__act : p.__est) : (p.__est != null ? p.__est : p.__act);
+        p.weightKg = chosen ? String(chosen) : "";
+      }
+      groups[key].totalWeight = pkgs.reduce((s, p) => s + (Number(p.weightKg) || 0), 0);
+    }
+    for (const p of pkgs) { delete p.__est; delete p.__act; }
   }
   // A shipper's lift column is not always right. On the 60766021/60766022 booking, four
   // rows carry the wrong lift: cases 4/20 and 6/20 are labelled L52 though their order is
