@@ -1689,7 +1689,8 @@ const TEXT = {
     legacyOversizeDeliveryHint: "Prints in the OVERSIZE CASES box on this delivery sheet",
     legacyDeliveryDeclaredGap: (declaredKg, listedKg, pct, heavier) =>
       `Sheet declares ${declaredKg} kg; the cases selected come to ${listedKg} kg on the packing list (${heavier ? "+" : "\u2212"}${pct}%). The sheet's figure is recorded.`,
-    legacySheetTotalLabel: (lots) => `Total stated on this sheet \u2014 covers ${lots}`,
+    legacySheetTotalLabel: (lots, ref) => `Total stated on this sheet${ref ? ` \u00b7 ${ref}` : ""} \u2014 covers ${lots}`,
+    legacySheetTotalJob: (job) => `Job ${job}`,
     legacySheetTotalHint: "The sheet gives one total for these lots. Edit it here; each lot's share below is worked out from it, pro-rata on the packing list.",
     legacyDeclaredShareNote: (kg, cbm) => `Share of the sheet total: ${kg} kg \u00b7 ${cbm} cbm`,
     incomingDeclaredLabel: "Totals on the Devan/CFS sheet (optional)",
@@ -2339,7 +2340,8 @@ const TEXT = {
     legacyOversizeDeliveryHint: "會列印於此送貨單的「超大件」欄",
     legacyDeliveryDeclaredGap: (declaredKg, listedKg, pct, heavier) =>
       `單據列明 ${declaredKg} kg；所選件號按裝箱單合計 ${listedKg} kg（${heavier ? "+" : "\u2212"}${pct}%）。記錄以單據為準。`,
-    legacySheetTotalLabel: (lots) => `單據總數 \u2014 涵蓋 ${lots}`,
+    legacySheetTotalLabel: (lots, ref) => `單據總數${ref ? ` \u00b7 ${ref}` : ""} \u2014 涵蓋 ${lots}`,
+    legacySheetTotalJob: (job) => `工單 ${job}`,
     legacySheetTotalHint: "單據就這幾個梯號只列一個總數。請在此修改，下方各梯號的分攤額會按裝箱單比例自動計算。",
     legacyDeclaredShareNote: (kg, cbm) => `分攤自單據總數：${kg} kg \u00b7 ${cbm} cbm`,
     incomingDeclaredLabel: "拆櫃／CFS 單據總數（可留空）",
@@ -5635,7 +5637,19 @@ function parseJobSheetBlocks(rows) {
   // Set when a C/S NO. row stated its figures but named no cases, so the line under it may
   // be carrying that lot's case list without a leading "#".
   let awaitingMark = false;
-  const closed = (b) => !!(b && (b.pkgs || b.kg || b.cbm));
+  // Counts C/S NO. rows carrying a weight that could not be placed on a lot because that
+  // lot had already stated one. A sheet whose C/S rows are per-case rather than per-lot
+  // produces these in quantity, and that is the signal not to trust per-lot figures.
+  let orphanFigureRows = 0;
+  // A block counts as closed once figures have been stated for it - either over the block
+  // as a whole, or on the last lot it named. Lot-level figures have to count, or a heading
+  // restated further down the page would be read as belonging to the lots above it.
+  const closed = (b) => {
+    if (!b) return false;
+    if (b.pkgs || b.kg || b.cbm) return true;
+    const last = b.lots[b.lots.length - 1];
+    return !!(last && (last.pkgs || last.kg || last.cbm));
+  };
   const startBlock = (refJobNumber, refDateRaw) => {
     cur = {
       refJobNumber: refJobNumber || "", refDateRaw: refDateRaw || "",
@@ -5667,8 +5681,10 @@ function parseJobSheetBlocks(rows) {
       if (liftM) { ctx.liftNo = liftM[1].trim(); if (cur) cur.liftNo = ctx.liftNo; }
     }
 
-    // "60759188/L32-01", or with its cases written inline: "'60766021/L52#3,7/19"
-    const lotM = line.match(/^['\u2018\u2019]?(\d{6,12})\s*\/\s*([A-Za-z][A-Za-z0-9\-\.]*)\s*(?:#\s*([\d][\d\s,\-\/]*))?$/);
+    // "60759188/L32-01", with its cases written inline ("'60766021/L52#3,7/19"), and/or its
+    // own weight and volume trailing on the same line - "60778397/L34-02  3018.58 KGS  6.36
+    // CBM" - which is how a sheet states figures per lot without a C/S NO. row for each.
+    const lotM = line.match(/^['\u2018\u2019]?(\d{6,12})\s*\/\s*([A-Za-z][A-Za-z0-9\-\.]*)\s*(?:#\s*([\d][\d\s,\-\/]*?))?\s*(?:([\d,]+(?:\.\d+)?)\s*KGS?\b)?\s*(?:([\d,]+(?:\.\d+)?)\s*CBM\b)?\s*$/i);
     if (lotM) {
       // A CFS sheet names a lot and then closes it with its own C/S NO. figures before
       // naming the next, so a lot arriving after a block was closed that way starts a new
@@ -5677,9 +5693,14 @@ function parseJobSheetBlocks(rows) {
       // lots already open, not merely whether figures exist.
       if (closed(cur) && cur.figuresAfterLots) startBlock(cur.refJobNumber, cur.refDateRaw);
       if (!cur) startBlock("", "");
-      const lot = { lotRef: lotM[1], unitCode: lotM[2], caseNumbers: [], caseText: "", lotCases: null };
+      const lot = {
+        lotRef: lotM[1], unitCode: lotM[2], caseNumbers: [], caseText: "", lotCases: null,
+        pkgs: "", kg: lotM[4] ? lotM[4].replace(/,/g, "") : "", cbm: lotM[5] ? lotM[5].replace(/,/g, "") : "",
+        shkNumber: ctx.shkNumber,
+      };
       if (lotM[3]) mergeLotMark(lot, parseCaseMark(lotM[3]));
       cur.lots.push(lot);
+      if (lot.kg || lot.cbm) cur.figuresAfterLots = true;
       awaitingMark = false;
       continue;
     }
@@ -5713,17 +5734,31 @@ function parseJobSheetBlocks(rows) {
       const pk = line.match(/(\d+)\s*PKGS?/i);
       const kg = line.match(/([\d,]+(?:\.\d+)?)\s*KGS?/i);
       const cb = line.match(/([\d,]+(?:\.\d+)?)\s*CBM/i);
+      const kgVal = kg ? kg[1].replace(/,/g, "") : "";
+      const cbVal = cb ? cb[1].replace(/,/g, "") : "";
+      const lot = cur.lots[cur.lots.length - 1];
+      // A C/S NO. row under a lot states that lot's own figures. Where the row instead
+      // comes before any lot is named - a delivery sheet gives the figures first and then
+      // lists the lots they cover - it belongs to the block as a whole.
+      if (lot) {
+        if (pk && !lot.pkgs) lot.pkgs = pk[1];
+        if (kgVal && !lot.kg) lot.kg = kgVal;
+        else if (kgVal) orphanFigureRows += 1;
+        if (cbVal && !lot.cbm) lot.cbm = cbVal;
+        if (lot.kg || lot.cbm) cur.figuresAfterLots = true;
+      } else if (kgVal || cbVal) {
+        if (pk && !cur.pkgs) cur.pkgs = pk[1];
+        if (kgVal && !cur.kg) cur.kg = kgVal;
+        if (cbVal && !cur.cbm) cur.cbm = cbVal;
+      } else if (pk && !cur.pkgs) cur.pkgs = pk[1];
       const hadFigures = closed(cur);
-      if (pk && !cur.pkgs) cur.pkgs = pk[1];
-      if (kg && !cur.kg) cur.kg = kg[1].replace(/,/g, "");
-      if (cb && !cur.cbm) cur.cbm = cb[1].replace(/,/g, "");
       if (!hadFigures && closed(cur) && cur.lots.length > 0) cur.figuresAfterLots = true;
       const lastLot = cur.lots[cur.lots.length - 1];
       awaitingMark = !!lastLot && !(lastLot.caseNumbers || []).length;
       continue;
     }
   }
-  return blocks;
+  return { blocks, orphanFigureRows };
 }
 function guessFieldsFromWorkbook(wb) {
   const sheetIndex = 0;
@@ -5773,7 +5808,7 @@ function guessFieldsFromWorkbook(wb) {
   }
 
   // The per-arrival breakdown of the sheet - see parseJobSheetBlocks.
-  const blocks = parseJobSheetBlocks(rows);
+  const { blocks, orphanFigureRows } = parseJobSheetBlocks(rows);
   out.refBlocks = blocks.map((b) => ({
     refJobNumber: b.refJobNumber,
     refDate: parseSheetDayFirstDate(b.refDateRaw),
@@ -5821,7 +5856,9 @@ function guessFieldsFromWorkbook(wb) {
   // A sheet closing one arrival names one SHK reference and it belongs on the row; a sheet
   // closing several names one each, and picking either would be wrong, so the field is
   // left for the user rather than guessed at.
-  const shkNumbers = [...new Set(out.refBlocks.map((b) => b.shkNumber).filter(Boolean))];
+  const shkNumbers = [...new Set(out.refBlocks
+    .flatMap((b) => (b.lots.length ? b.lots.map((l) => l.shkNumber || b.shkNumber) : [b.shkNumber]))
+    .filter(Boolean))];
   out.shkNumber = shkNumbers.length === 1 ? shkNumbers[0] : "";
 
   const liftMatch = flatText.match(/lift\s*no\.?\s*(?:phase\s*\d+\s*)?(#[0-9,\s]+)/i)
@@ -5896,30 +5933,44 @@ function guessFieldsFromWorkbook(wb) {
   // real figure, so those are used in front of the grand total - but only once they have
   // been checked back against it, because a sheet whose C/S rows are per-case rather than
   // per-lot would otherwise have a single case's weight read as a whole lot's.
-  const blocksWithFigures = out.refBlocks.filter((b) => (b.lots.length || b.refJobNumber) && (b.kg || b.cbm));
-  const sheetTotals = out.declaredTotalsList;
-  const reconciles = (key) => {
-    const stated = sheetTotals.reduce((s, l) => s + (Number(l[key]) || 0), 0);
-    const parts = blocksWithFigures.reduce((s, b) => s + (Number(b[key]) || 0), 0);
-    if (!(stated > 0) || !(parts > 0)) return false;
-    return Math.abs(stated - parts) <= Math.max(0.05, stated * 0.001);
-  };
-  const usePerBlock = sheetTotals.length
-    ? (blocksWithFigures.length >= 2 && (reconciles("kg") || reconciles("cbm")))
-    // No "共:" line anywhere - a single-lot sheet like the 2605126 CFS, whose only figures
-    // are the ones on its lot line. Nothing to reconcile against, so take it only when the
-    // page describes exactly one lot and there is no room for ambiguity.
-    : (blocksWithFigures.length === 1 && blocksWithFigures[0].lots.length === 1);
-  if (usePerBlock) {
-    // The per-lot lines already account for everything the sheet states, so the sheet-wide
-    // total is dropped rather than left to claim whatever lots they didn't. On this
-    // delivery the row matches seven entries by job number but the sheet only covers two
-    // of them, and the leftover total would otherwise attach itself to the other five.
-    out.declaredTotalsList = blocksWithFigures.map((b) => ({
-      pkgs: b.pkgs, kg: b.kg, cbm: b.cbm,
-      context: [b.refJobNumber, b.shkNumber, b.liftNo, ...b.lots.map((l) => `${l.lotRef}/${l.unitCode}`)]
-        .filter(Boolean).join(" "),
-    }));
+  // What the sheet states its figures for. A lot that carries its own weight or volume -
+  // whether trailing on its own line or on the C/S NO. row beneath it - is a unit in its
+  // own right; a block that states one figure over several lots is a single unit covering
+  // all of them. Each unit keeps the job and SHK numbers it was stated under, so the
+  // figure can be labelled with them rather than only by lot.
+  const declaredUnits = [];
+  for (const b of out.refBlocks) {
+    const lotsWithFigures = b.lots.filter((l) => l.kg || l.cbm);
+    if (lotsWithFigures.length) {
+      for (const l of lotsWithFigures) {
+        declaredUnits.push({
+          pkgs: l.pkgs || "", kg: l.kg || "", cbm: l.cbm || "",
+          refJobNumber: b.refJobNumber, shkNumber: l.shkNumber || b.shkNumber,
+          context: [b.refJobNumber, l.shkNumber || b.shkNumber, b.liftNo, `${l.lotRef}/${l.unitCode}`].filter(Boolean).join(" "),
+        });
+      }
+      continue;
+    }
+    if ((b.lots.length || b.refJobNumber) && (b.kg || b.cbm)) {
+      declaredUnits.push({
+        pkgs: b.pkgs, kg: b.kg, cbm: b.cbm,
+        refJobNumber: b.refJobNumber, shkNumber: b.shkNumber,
+        context: [b.refJobNumber, b.shkNumber, b.liftNo, ...b.lots.map((l) => `${l.lotRef}/${l.unitCode}`)]
+          .filter(Boolean).join(" "),
+      });
+    }
+  }
+  // Trust those figures only when every weight the sheet stated found a lot to belong to.
+  // A sheet whose C/S NO. rows are per-case rather than per-lot leaves weights stranded
+  // once the first has claimed the lot, and those strays are the signal to fall back to
+  // the sheet's own "共:" total instead of reading a single case as a whole lot.
+  //
+  // Reconciling against that total is not the test: this delivery states 9,063.74 kg in
+  // its 共: line, which covers only the three lots of its first referral and leaves the
+  // 5,825.5 kg of the second out entirely. Requiring the two to agree would have thrown
+  // away every per-lot figure on the page.
+  if (declaredUnits.length && orphanFigureRows === 0) {
+    out.declaredTotalsList = declaredUnits;
   }
 
   const ssShipMatch = flatText.match(/ex\s*ss\.?\s*"[^"]+"[^\n]*/i);
@@ -6450,10 +6501,17 @@ function OversizeCasesEditor({ value, onToggle, onCases, colors, t, inputClass, 
 // One editable set of figures for a total the sheet states once across several lots.
 function SharedDeclaredTotal({ group, value, onPatch, colors, t, inputClass, inputStyle }) {
   const names = group.lots.map((l) => l.unitCode || l.id).join(", ");
+  // Name the figure by the job and SHK it was stated under, not only by the lots it lands
+  // on - a sheet closing several referrals has more than one of these boxes, and the lot
+  // codes alone do not say which referral each one came from.
+  const ref = [
+    group.line.refJobNumber ? t.legacySheetTotalJob(group.line.refJobNumber) : "",
+    group.line.shkNumber || "",
+  ].filter(Boolean).join(" \u00b7 ");
   return (
     <div className="mb-2 px-2 py-2 rounded" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
       <div className="text-xs font-semibold mb-1.5" style={{ color: colors.ink, fontFamily: FONT_DISPLAY }}>
-        {t.legacySheetTotalLabel(names)}
+        {t.legacySheetTotalLabel(names, ref)}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {[
