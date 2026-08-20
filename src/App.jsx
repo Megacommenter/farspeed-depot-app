@@ -632,6 +632,59 @@ function parsePackingListSheet(rows, legend) {
       }
     }
   }
+  // A shipper's lift column is not always right. On the 60766021/60766022 booking, four
+  // rows carry the wrong lift: cases 4/20 and 6/20 are labelled L52 though their order is
+  // 60766022 (L53's), and cases 18/19 and 19/19 are labelled L53 though their order is
+  // 60766021 (L52's). Grouping on the lift alone put four boxes in the wrong lot, so the
+  // depot showed L52 holding a 4/20 it never received and L53 short of the cases the
+  // delivery sheet asked for.
+  //
+  // The order number is the reliable identifier - every case of order 60766021 is numbered
+  // out of 19 and every case of 60766022 out of 20, which the case codes themselves
+  // confirm - so where an order sits overwhelmingly under one lift, the stragglers filed
+  // under another are moved back to it. A lift that legitimately combines several orders
+  // is untouched: each of its orders appears under that lift only, so none has a majority
+  // anywhere else.
+  if (colMap.orderNo !== undefined && colMap.lot !== undefined) {
+    const homeOf = new Map(); // orderNo -> lot key holding most of its cases
+    const counts = new Map(); // orderNo -> Map(lot key -> count)
+    for (const key of order) {
+      for (const p of groups[key].packages) {
+        if (!p.orderNo) continue;
+        if (!counts.has(p.orderNo)) counts.set(p.orderNo, new Map());
+        const m = counts.get(p.orderNo);
+        m.set(key, (m.get(key) || 0) + 1);
+      }
+    }
+    for (const [orderNo, m] of counts) {
+      if (m.size < 2) continue;
+      const ranked = [...m.entries()].sort((a, b) => b[1] - a[1]);
+      // Only a clear majority moves anything - a genuine even split is left alone for a
+      // person to look at rather than guessed at.
+      if (ranked[0][1] > ranked[1][1]) homeOf.set(orderNo, ranked[0][0]);
+    }
+    const touched = new Set();
+    for (const key of order) {
+      const stay = [];
+      for (const p of groups[key].packages) {
+        const home = p.orderNo ? homeOf.get(p.orderNo) : null;
+        if (!home || home === key || !groups[home]) { stay.push(p); continue; }
+        groups[home].packages.push(p);
+        touched.add(home);
+        touched.add(key);
+      }
+      if (stay.length !== groups[key].packages.length) groups[key].packages = stay;
+    }
+    for (const key of touched) {
+      const g = groups[key];
+      // Sort on the lot size first so that if a group does end up holding two case series
+      // they stay in their own runs rather than interleaving 1/2 between 1/3 and 2/3.
+      const denom = (c) => { const m = String(c).match(/\/(\d+)\s*$/); return m ? Number(m[1]) : 0; };
+      g.packages.sort((a, b) => denom(a.code) - denom(b.code) || codeLeadingNumber(a.code) - codeLeadingNumber(b.code));
+      g.totalWeight = g.packages.reduce((s, p) => s + (Number(p.weightKg) || 0), 0);
+      g.totalCbm = g.packages.reduce((s, p) => s + (Number(p.cbm) || 0), 0);
+    }
+  }
   // Where the order number stood in as the lot, repeating it as a per-package order
   // heading would just print "60789730 / 60789730" above its own cases.
   for (const key of order) {
@@ -1178,6 +1231,8 @@ const TEXT = {
     downloadTemplateBtn: "Download blank template",
     selectedCount: (sel, tot) => `${sel} of ${tot} selected to import.`,
     selectAllBtn: "Select all",
+    clearBtn: "Clear",
+    legacyRangeTapHint: "Tap a case, then shift-tap another to take everything between them.",
     selectNonDupBtn: "Select non-duplicates only",
     unmatchedMsg: "Columns not recognized (skipped): ",
     prevColClient: "Client",
@@ -1776,6 +1831,8 @@ const TEXT = {
     downloadTemplateBtn: "下載空白範本",
     selectedCount: (sel, tot) => `已選擇 ${sel} 項，共 ${tot} 項可匯入。`,
     selectAllBtn: "全選",
+    clearBtn: "清除",
+    legacyRangeTapHint: "點選一件，再按住 Shift 點選另一件，即可選取兩者之間全部。",
     selectNonDupBtn: "只選擇非重複項目",
     unmatchedMsg: "無法識別之欄位（已略過）：",
     prevColClient: "客戶",
@@ -4806,13 +4863,18 @@ function guessFieldsFromWorkbook(wb) {
         out.caseMarksByLot[k] = {
           numbers: [...new Set([...(prev ? prev.numbers : []), ...lot.caseNumbers])].sort((x, y) => x - y),
           text: [prev && prev.text, lot.caseText].filter(Boolean).join(" "),
+          // "#3,7/19" says these are cases of a 19-case lot. Kept so a case can be matched
+          // on its full code rather than its number alone - 3 of 19 is not 3 of 20.
+          lotCases: prev && prev.lotCases && prev.lotCases !== lot.lotCases ? null : lot.lotCases,
         };
       }
     }
     if (b.refJobNumber && b.caseNumbers.length) {
+      const sizes = [...new Set(b.lots.map((l) => l.lotCases).filter((n) => n != null))];
       out.caseMarksByRef[b.refJobNumber] = {
         numbers: b.caseNumbers,
         text: b.lots.map((l) => l.caseText).filter(Boolean).join(" "),
+        lotCases: sizes.length === 1 ? sizes[0] : null,
       };
     }
   }
@@ -5565,7 +5627,16 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
   function sheetSelectionFor(it) {
     const mark = sheetCasesFor(it);
     if (!mark || !(mark.numbers || []).length) return null;
-    const deliverable = deliverablePackages(it);
+    // A case number only means something together with its lot size: "#4,6/20" is case 4
+    // of a twenty-case lot, and case 4/19 sitting in the same entry is a different box on
+    // a different lift. Where the sheet states the lot size, cases numbered against a
+    // different one are ignored rather than picked up by their leading number.
+    const sameLot = (code) => {
+      if (!mark.lotCases) return true;
+      const m = String(code).match(/\/(\d+)\s*$/);
+      return !m || Number(m[1]) === mark.lotCases;
+    };
+    const deliverable = deliverablePackages(it).filter((p) => sameLot(p.code));
     const wanted = new Set(mark.numbers);
     const codes = deliverable.filter((p) => wanted.has(codeLeadingNumber(p.code))).map((p) => p.code);
     const present = new Set(deliverable.map((p) => codeLeadingNumber(p.code)));
@@ -5641,13 +5712,37 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
     const cur = normaliseOversize(getDeliveryOversizeFor(it));
     onChange({ ...row, oversizeByDeliveryItem: { ...oversizeByDeliveryItem, [it.id]: { ...cur, ...patch } } });
   }
-  function toggleItemCode(itemId, code) {
+  // Picking cases one tap at a time is slow on a lot of thirty-four. Three shortcuts sit
+  // alongside the typed "1,3-5,7" box: tapping one case and then shift-tapping another
+  // takes everything between them, Clear empties the lot, and tapping a description takes
+  // every case of that kind at once - which is how these deliveries are usually described
+  // in the first place ("the landing doors and the mech").
+  const [lastTappedByItem, setLastTappedByItem] = useState({});
+  function toggleItemCode(itemId, code, index, extend, remainingPkgs) {
     const cur = selectedByItem[itemId] || [];
-    const next = cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code];
+    const from = lastTappedByItem[itemId];
+    let next;
+    if (extend && from != null && remainingPkgs && from !== index) {
+      const span = remainingPkgs.slice(Math.min(from, index), Math.max(from, index) + 1).map((p) => p.code);
+      next = [...new Set([...cur, ...span])];
+    } else {
+      next = cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code];
+    }
+    setLastTappedByItem((prev) => ({ ...prev, [itemId]: index }));
     onChange({ ...row, selectedByItem: { ...selectedByItem, [itemId]: next } });
   }
   function selectAllItem(itemId, remainingPkgs) {
     onChange({ ...row, selectedByItem: { ...selectedByItem, [itemId]: remainingPkgs.map((p) => p.code) } });
+  }
+  function clearItem(itemId) {
+    onChange({ ...row, selectedByItem: { ...selectedByItem, [itemId]: [] } });
+  }
+  function toggleItemDescription(itemId, description, remainingPkgs) {
+    const codes = remainingPkgs.filter((p) => (p.description || "") === description).map((p) => p.code);
+    const cur = selectedByItem[itemId] || [];
+    const allOn = codes.every((c) => cur.includes(c));
+    const next = allOn ? cur.filter((c) => !codes.includes(c)) : [...new Set([...cur, ...codes])];
+    onChange({ ...row, selectedByItem: { ...selectedByItem, [itemId]: next } });
   }
   const [typeSelectText, setTypeSelectText] = useState({});
   function applyTypeSelectItem(itemId, remainingPkgs) {
@@ -5927,6 +6022,9 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
               colors={colors} t={t} inputClass={inputClass} inputStyle={inputStyleFor(colors)}
             />
           ))}
+          {matchedItems.length > 0 && (
+            <div className="text-xs mb-2" style={{ color: colors.inkFaint }}>{t.legacyRangeTapHint}</div>
+          )}
           <div className="flex flex-col gap-4">
             {matchedItems.map((it) => {
               const remainingPkgs = deliverablePackages(it);
@@ -5954,6 +6052,7 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
                       />
                       <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => applyTypeSelectItem(it.id, remainingPkgs)}>{t.legacyTypeSelectBtn}</button>
                       <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => selectAllItem(it.id, remainingPkgs)}>{t.selectAllBtn}</button>
+                      <button type="button" className="text-xs font-semibold" style={{ color: colors.inkFaint }} onClick={() => clearItem(it.id)}>{t.clearBtn}</button>
                     </div>
                   </div>
                   {sheetSel && (
@@ -6017,12 +6116,45 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onProcessAl
                       </div>
                     </div>
                   )}
+                  {(() => {
+                    const kinds = [];
+                    for (const p of remainingPkgs) {
+                      const d = p.description || "";
+                      if (!d) continue;
+                      const hit = kinds.find((k) => k.description === d);
+                      if (hit) hit.count += 1; else kinds.push({ description: d, count: 1 });
+                    }
+                    if (kinds.length < 2) return null;
+                    return (
+                      <div className="flex flex-wrap gap-1.5 mb-2">
+                        {kinds.map((k) => {
+                          const codes = remainingPkgs.filter((p) => (p.description || "") === k.description).map((p) => p.code);
+                          const allOn = codes.every((c) => selectedCodes.includes(c));
+                          return (
+                            <button
+                              key={k.description}
+                              type="button"
+                              onClick={() => toggleItemDescription(it.id, k.description, remainingPkgs)}
+                              className="px-2 py-1 rounded text-xs"
+                              style={{
+                                border: `1px dashed ${allOn ? colors.amber : colors.line}`,
+                                background: allOn ? colors.amberSoft : "transparent",
+                                color: allOn ? colors.amberText : colors.inkFaint,
+                              }}
+                            >
+                              {k.description} · {k.count}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
                   <div className="flex flex-wrap gap-2">
-                    {remainingPkgs.map((p) => (
+                    {remainingPkgs.map((p, idx) => (
                       <button
                         key={p.code}
                         type="button"
-                        onClick={() => toggleItemCode(it.id, p.code)}
+                        onClick={(e) => toggleItemCode(it.id, p.code, idx, e.shiftKey, remainingPkgs)}
                         className="px-2.5 py-1.5 rounded text-xs font-semibold text-left"
                         style={{
                           border: `1px solid ${selectedCodes.includes(p.code) ? colors.amber : colors.line}`,
