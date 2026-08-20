@@ -1648,6 +1648,11 @@ const TEXT = {
     legacyBacklogTitle: "Backlog",
     legacyBacklogDesc: "Every file uploaded through Legacy Upload, whether it created an inventory entry or was archived only.",
     legacyBacklogNoneMsg: "No legacy files uploaded yet.",
+    legacyBacklogNoMatchMsg: "No uploaded files match these filters.",
+    legacyBacklogSortLabel: "Order",
+    legacyBacklogSortRecent: "Most recent first",
+    legacyBacklogSortJobNo: "By job number",
+    legacyBacklogCount: (shown, total) => shown === total ? `${total} file${total === 1 ? "" : "s"}` : `${shown} of ${total} files`,
     legacyColFile: "File",
     legacyColLinked: "Linked Entry",
     legacyArchivedOnly: "Archived only",
@@ -2299,6 +2304,11 @@ const TEXT = {
     legacyBacklogTitle: "待處理記錄",
     legacyBacklogDesc: "所有透過舊資料上載的檔案，不論是否建立了存倉記錄。",
     legacyBacklogNoneMsg: "尚未上載任何舊資料檔案。",
+    legacyBacklogNoMatchMsg: "沒有符合篩選條件的檔案。",
+    legacyBacklogSortLabel: "排序",
+    legacyBacklogSortRecent: "最新在前",
+    legacyBacklogSortJobNo: "按工單號",
+    legacyBacklogCount: (shown, total) => shown === total ? `共 ${total} 個檔案` : `${total} 個檔案中的 ${shown} 個`,
     legacyColFile: "檔案",
     legacyColLinked: "連結記錄",
     legacyArchivedOnly: "僅存檔",
@@ -7584,6 +7594,12 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
   const [processing, setProcessing] = useState(false);
   const [results, setResults] = useState(null);
   const [backlogSearch, setBacklogSearch] = useState("");
+  const [backlogJobFilter, setBacklogJobFilter] = useState("All");
+  const [backlogSiteFilter, setBacklogSiteFilter] = useState("All");
+  const [backlogJobRefFilter, setBacklogJobRefFilter] = useState("All");
+  const [backlogClientFilter, setBacklogClientFilter] = useState("All");
+  const [backlogFileFilter, setBacklogFileFilter] = useState("All");
+  const [backlogSort, setBacklogSort] = useState("recent");
   const [backlogTypeFilter, setBacklogTypeFilter] = useState("All");
   const [editingBacklogId, setEditingBacklogId] = useState(null);
   // Every record a given archived file created, so it can be corrected from the archive
@@ -7776,7 +7792,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
       const archiveEntry = {
         id, rowIndex: i, fileName: row.file.name, docType: row.docType, client: row.client,
         project: [row.projectEn, row.projectZh].filter(Boolean).join(" / "),
-        jobNumber: row.jobNumber, date: row.date, uploadedAt: todayStr(), hasFile: !!fileUri,
+        jobNumber: row.jobNumber, jobRef: row.jobRef || "", date: row.date, uploadedAt: todayStr(), hasFile: !!fileUri,
         linkedItemId: null, linkedItemIds: [], __linkedItemIndex: null,
       };
       archiveEntries.push(archiveEntry);
@@ -7991,14 +8007,50 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
     setProcessing(false);
   }
 
+  // Each dropdown offers only what has actually been uploaded, so a filter can never come
+  // back empty. Job numbers run in order - they are issued sequentially, so reading them
+  // in order is how a gap or a duplicate shows itself.
+  const backlogOptions = (() => {
+    const grab = (key) => [...new Set((legacyArchive || []).map((r) => String(r[key] || "").trim()).filter(Boolean))];
+    return {
+      jobNumbers: grab("jobNumber").sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+      sites: grab("project").sort((a, b) => a.localeCompare(b)),
+      jobRefs: grab("jobRef").sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+      clients: grab("client").sort((a, b) => a.localeCompare(b)),
+      fileNames: grab("fileName").sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+    };
+  })();
   const backlogFiltered = (legacyArchive || []).filter((r) => {
     if (backlogTypeFilter !== "All" && r.docType !== backlogTypeFilter) return false;
+    if (backlogJobFilter !== "All" && String(r.jobNumber || "").trim() !== backlogJobFilter) return false;
+    if (backlogSiteFilter !== "All" && String(r.project || "").trim() !== backlogSiteFilter) return false;
+    if (backlogJobRefFilter !== "All" && String(r.jobRef || "").trim() !== backlogJobRefFilter) return false;
+    if (backlogClientFilter !== "All" && String(r.client || "").trim() !== backlogClientFilter) return false;
+    if (backlogFileFilter !== "All" && String(r.fileName || "").trim() !== backlogFileFilter) return false;
     if (!backlogSearch.trim()) return true;
     const q = backlogSearch.toLowerCase();
-    return r.fileName?.toLowerCase().includes(q) || r.client?.toLowerCase().includes(q) ||
-      r.project?.toLowerCase().includes(q) || r.jobNumber?.toLowerCase().includes(q) ||
-      r.linkedItemId?.toLowerCase().includes(q);
+    return [r.fileName, r.client, r.project, r.jobNumber, r.jobRef, r.docType, r.linkedItemId, r.unmatchedReferral]
+      .some((v) => String(v || "").toLowerCase().includes(q));
   });
+  // Job numbers are issued in sequence, so reading the list in that order is how a gap or a
+  // duplicate shows itself. Uploads arrive in whatever order the files were found, which is
+  // why that is not the default but is a click away.
+  const backlogSorted = backlogSort === "jobNumber"
+    ? [...backlogFiltered].sort((a, b) =>
+        String(a.jobNumber || "\uffff").localeCompare(String(b.jobNumber || "\uffff"), undefined, { numeric: true })
+        || String(a.fileName || "").localeCompare(String(b.fileName || ""), undefined, { numeric: true }))
+    : backlogFiltered;
+  const backlogFiltersOn = [backlogTypeFilter, backlogJobFilter, backlogSiteFilter, backlogJobRefFilter,
+    backlogClientFilter, backlogFileFilter].some((v) => v !== "All") || !!backlogSearch.trim();
+  function clearBacklogFilters() {
+    setBacklogSearch("");
+    setBacklogTypeFilter("All");
+    setBacklogJobFilter("All");
+    setBacklogSiteFilter("All");
+    setBacklogJobRefFilter("All");
+    setBacklogClientFilter("All");
+    setBacklogFileFilter("All");
+  }
 
   async function viewArchivedFile(id) {
     try {
@@ -8072,12 +8124,56 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
           <Field label={t.searchLabel} colors={colors}>
             <input className={inputClass} style={{ ...inputStyleFor(colors), minWidth: 220 }} value={backlogSearch} onChange={(e) => setBacklogSearch(e.target.value)} />
           </Field>
+          <Field label={t.fJobNumber} colors={colors}>
+            <select className={inputClass} style={inputStyleFor(colors)} value={backlogJobFilter} onChange={(e) => setBacklogJobFilter(e.target.value)}>
+              <option value="All">{t.statusAll}</option>
+              {backlogOptions.jobNumbers.map((v) => <option key={v}>{v}</option>)}
+            </select>
+          </Field>
+          <Field label={t.legacyProjectSite} colors={colors}>
+            <select className={inputClass} style={{ ...inputStyleFor(colors), maxWidth: 240 }} value={backlogSiteFilter} onChange={(e) => setBacklogSiteFilter(e.target.value)}>
+              <option value="All">{t.statusAll}</option>
+              {backlogOptions.sites.map((v) => <option key={v}>{v}</option>)}
+            </select>
+          </Field>
+          <Field label={t.fJobRef} colors={colors}>
+            <select className={inputClass} style={inputStyleFor(colors)} value={backlogJobRefFilter} onChange={(e) => setBacklogJobRefFilter(e.target.value)}>
+              <option value="All">{t.statusAll}</option>
+              {backlogOptions.jobRefs.map((v) => <option key={v}>{v}</option>)}
+            </select>
+          </Field>
+          <Field label={t.clientLabel} colors={colors}>
+            <select className={inputClass} style={inputStyleFor(colors)} value={backlogClientFilter} onChange={(e) => setBacklogClientFilter(e.target.value)}>
+              <option value="All">{t.statusAll}</option>
+              {backlogOptions.clients.map((v) => <option key={v}>{v}</option>)}
+            </select>
+          </Field>
           <Field label={t.legacyDocType} colors={colors}>
             <select className={inputClass} style={inputStyleFor(colors)} value={backlogTypeFilter} onChange={(e) => setBacklogTypeFilter(e.target.value)}>
-              <option>All</option>
+              <option value="All">{t.statusAll}</option>
               {LEGACY_DOC_TYPES.map((tp) => <option key={tp}>{tp}</option>)}
             </select>
           </Field>
+          <Field label={t.legacyColFile} colors={colors}>
+            <select className={inputClass} style={{ ...inputStyleFor(colors), maxWidth: 240 }} value={backlogFileFilter} onChange={(e) => setBacklogFileFilter(e.target.value)}>
+              <option value="All">{t.statusAll}</option>
+              {backlogOptions.fileNames.map((v) => <option key={v}>{v}</option>)}
+            </select>
+          </Field>
+          <Field label={t.legacyBacklogSortLabel} colors={colors}>
+            <select className={inputClass} style={inputStyleFor(colors)} value={backlogSort} onChange={(e) => setBacklogSort(e.target.value)}>
+              <option value="recent">{t.legacyBacklogSortRecent}</option>
+              <option value="jobNumber">{t.legacyBacklogSortJobNo}</option>
+            </select>
+          </Field>
+          {backlogFiltersOn && (
+            <button className="text-xs font-semibold pb-2" style={{ color: colors.amberText }} onClick={clearBacklogFilters}>
+              {t.clearBtn}
+            </button>
+          )}
+        </div>
+        <div className="text-xs mt-2" style={{ color: colors.inkFaint }}>
+          {t.legacyBacklogCount(backlogFiltered.length, (legacyArchive || []).length)}
         </div>
       </div>
 
@@ -8085,23 +8181,23 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
         <table className="w-full text-sm" style={{ background: colors.surface }}>
           <thead>
             <tr style={{ background: colors.surfaceDim }}>
-              {[t.legacyColFile, t.legacyDocType, t.clientLabel, t.legacyProjectSite, t.fJobNumber, t.colDate, t.legacyColLinked, ""].map((h) => (
+              {[t.legacyColFile, t.legacyDocType, t.clientLabel, t.legacyProjectSite, t.fJobNumber, t.fJobRef, t.colDate, t.legacyColLinked, ""].map((h) => (
                 <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {backlogFiltered.length === 0 && (
-              <tr><td colSpan={8} className="px-3 py-6 text-center text-sm" style={{ color: colors.inkFaint }}>{t.legacyBacklogNoneMsg}</td></tr>
+              <tr><td colSpan={9} className="px-3 py-6 text-center text-sm" style={{ color: colors.inkFaint }}>{backlogFiltersOn ? t.legacyBacklogNoMatchMsg : t.legacyBacklogNoneMsg}</td></tr>
             )}
-            {backlogFiltered.map((r) => {
+            {backlogSorted.map((r) => {
               const isEditing = editingBacklogId === r.id;
               const inputStyle = inputStyleFor(colors);
               if (isEditing) {
                 const d = backlogEditDraft;
                 return (
                   <tr key={r.id} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink, background: colors.amberSoft }}>
-                    <td colSpan={8} className="px-3 py-3">
+                    <td colSpan={9} className="px-3 py-3">
                       <div className="text-xs font-semibold mb-2 truncate" style={{ color: colors.inkFaint }}>{r.fileName}</div>
                       <div className="flex flex-wrap gap-3">
                         <Field label={t.legacyDocType} colors={colors}>
@@ -8197,6 +8293,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
                 <td className="px-3 py-2">{r.client}</td>
                 <td className="px-3 py-2 max-w-[180px] truncate">{r.project}</td>
                 <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{r.jobNumber || "—"}</td>
+                <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{r.jobRef || "—"}</td>
                 <td className="px-3 py-2">{r.date ? fmt(r.date) : "—"}</td>
                 <td className="px-3 py-2">
                   {r.linkedItemId ? (
