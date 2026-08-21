@@ -1449,6 +1449,7 @@ const TEXT = {
     selectFromDirectoryPlaceholder: "\u2014 pick a site to auto-fill \u2014",
     showOlderJobs: "Show older jobs",
     showOlderJobsCount: (n) => ` (${n} finished ${n === 1 ? "site" : "sites"} hidden)`,
+    manualLinkedToDirectory: "Linked to this site in the Directory \u2014 its Chinese name, job ref and ordered-by have been filled in.",
     saveNewSiteToDirectory: (name) => `Save "${name}" as a new site in the Directory, so future imports recognize it automatically`,
 
     siteTotalsTitle: "CBM & KG Remaining by Construction Site",
@@ -2128,6 +2129,7 @@ const TEXT = {
     selectFromDirectoryPlaceholder: "— 選擇地盤以自動填寫 —",
     showOlderJobs: "顯示舊工程",
     showOlderJobsCount: (n) => `（已隱藏 ${n} 個已完成地盤）`,
+    manualLinkedToDirectory: "已連結至目錄中的地盤 \u2014 中文名稱、地盤代號及落單人已自動填入。",
     saveNewSiteToDirectory: (name) => `將「${name}」儲存為目錄中的新地盤，日後匯入將自動識別`,
 
     siteTotalsTitle: "各地盤存倉之CBM及KG",
@@ -7526,11 +7528,39 @@ function ManualPackingListEntry({ onClose, onAddIncoming, existingItems, directo
   const [manualLots, setManualLots] = useState([]);
   const [manualLotDraft, setManualLotDraft] = useState({ orderNo: "", caseSpec: "", description: "ELEVATOR PARTS", kg: "", cbm: "" });
   const inputStyle = inputStyleFor(colors);
+  // Directory sites first: those are the ones that carry a Chinese name, job ref and
+  // ordered-by to fill in behind them. Site names only ever seen on existing entries come
+  // after, so a job that was never added to the directory can still be typed.
   const siteSuggestions = useMemo(() => {
     const fromDirectory = (directory || []).map((s) => s.siteEn).filter(Boolean);
     const fromItems = (existingItems || []).map((i) => i.project).filter(Boolean);
-    return [...new Set([...fromDirectory, ...fromItems])].sort();
+    return [...new Set([...fromDirectory, ...fromItems.sort()])];
   }, [directory, existingItems]);
+  // Picking a name from the list is the same as picking it from the directory select
+  // above: matching it back to its directory entry is what fills the Chinese name, job ref
+  // and ordered-by, and what stops the form offering to save a site that already exists.
+  // Matching ignores case, punctuation and a leading "SITE AT", since a name typed off a
+  // job sheet rarely matches the directory character for character.
+  function findDirectorySite(name) {
+    const key = normalizeSiteForMatch(name);
+    if (!key) return null;
+    const hit = (d) => normalizeSiteForMatch(d.siteEn) === key || normalizeSiteForMatch(d.siteZh) === key;
+    return (directory || []).find((d) => d.client === manualForm.client && hit(d))
+      || (directory || []).find(hit) || null;
+  }
+  function applyProjectName(value) {
+    const site = findDirectorySite(value);
+    setManualForm((f) => (site ? {
+      ...f,
+      project: site.siteEn || value,
+      directoryId: site.id,
+      client: site.client || f.client,
+      constructionSite: site.siteZh || f.constructionSite,
+      jobRef: site.jobRef || f.jobRef,
+      orderedBy: site.orderedBy || f.orderedBy,
+      saveToDirectory: false,
+    } : { ...f, project: value, directoryId: "" }));
+  }
   // Builds a lot's cases from the C/S NO. marking as written on the sheet, spreading the
   // lot's stated weight and volume evenly across them. A job sheet gives a figure per lot,
   // not per case, and an even split is the only honest reading of that - the per-case
@@ -7660,7 +7690,7 @@ function ManualPackingListEntry({ onClose, onAddIncoming, existingItems, directo
               </select>
             </Field>
             <Field label={t.legacyProjectSiteEn} colors={colors}>
-              <input list="manual-site-suggestions" className={inputClass} style={inputStyle} value={manualForm.project} onChange={(e) => setManualForm((f) => ({ ...f, project: e.target.value, directoryId: "" }))} />
+              <input list="manual-site-suggestions" className={inputClass} style={inputStyle} value={manualForm.project} onChange={(e) => applyProjectName(e.target.value)} />
               <datalist id="manual-site-suggestions">
                 {siteSuggestions.map((s) => <option key={s} value={s} />)}
               </datalist>
@@ -7679,12 +7709,14 @@ function ManualPackingListEntry({ onClose, onAddIncoming, existingItems, directo
             </Field>
 
           </div>
-          {!manualForm.directoryId && manualForm.project && (
+          {manualForm.directoryId ? (
+            <div className="mt-3 text-xs" style={{ color: colors.green }}>{t.manualLinkedToDirectory}</div>
+          ) : manualForm.project ? (
             <label className="flex items-center gap-2 mt-4 text-sm" style={{ color: colors.inkFaint }}>
               <input type="checkbox" checked={manualForm.saveToDirectory} onChange={(e) => setManualForm((f) => ({ ...f, saveToDirectory: e.target.checked }))} />
               {t.saveNewSiteToDirectory(manualForm.project)}
             </label>
-          )}
+          ) : null}
           <div className="rounded p-3 mt-4" style={{ border: `1px dashed ${colors.line}` }}>
             <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
               {t.manualLotBuilderLabel}
