@@ -1271,6 +1271,7 @@ const TEXT = {
     legacySameOrderWarn: (orders) => `Order no. ${orders} also appears on another shipment at this site \u2014 the same lot is filed twice under different names, so check which one this file's cases belong to.`,
     legacySameOrderSibling: (id, unit, n) => `${id} \u00b7 ${unit} \u00b7 ${n} case${n === 1 ? "" : "s"} not yet checked in`,
     legacySameOrderOnlyThere: (codes) => `has ${codes}, which this one does not`,
+    manualPackingListOpenBtn: "Enter a packing list by hand",
     manualPackingListDesc: "For older jobs with no packing list file, or one that's incomplete \u2014 type in the case list by hand. This creates one Incoming shipment the same way an uploaded file would, ready to check in via Devan/CFS.",
     legacyManualEntryNote: "Manually entered \u2014 no packing list file on file for this shipment.",
     excelTitle: "Import from Excel",
@@ -1950,6 +1951,7 @@ const TEXT = {
     legacySameOrderWarn: (orders) => `訂單號 ${orders} 亦見於本地盤另一批到貨記錄 \u2014 同一批貨以不同名稱重複記錄，請確認此檔案之貨箱屬於哪一項。`,
     legacySameOrderSibling: (id, unit, n) => `${id} \u00b7 ${unit} \u00b7 尚有 ${n} 件未入倉`,
     legacySameOrderOnlyThere: (codes) => `該項有 ${codes}，此項則沒有`,
+    manualPackingListOpenBtn: "手動輸入裝箱單",
     manualPackingListDesc: "適用於較舊、沒有裝箱單檔案或資料不完整的工作 \u2014 直接手動輸入件號清單。此操作會建立一項待到倉貨件，效果與上載檔案相同，可於拆櫃/CFS辦理到倉。",
     legacyManualEntryNote: "手動輸入 \u2014 此貨件沒有裝箱單檔案存檔。",
     excelTitle: "從Excel匯入",
@@ -7510,6 +7512,231 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
   );
 }
 
+// The manual packing list lives with Incoming because that is what it produces: a shipment
+// waiting to be checked in, exactly as an uploaded packing list would leave one. It is for
+// the older jobs whose packing list was never filed - the Gage Street work whose account
+// officer left before the records were entered - so the Devan/CFS sheet has something to
+// check its cases into.
+function ManualPackingListEntry({ onAddIncoming, existingItems, directory, setDirectory, colors, t }) {
+  const [open, setOpen] = useState(false);
+  const [manualForm, setManualForm] = useState({
+    client: CLIENTS[0], project: "", constructionSite: "", orderedBy: "", jobRef: "", shkNumber: "", unitCode: "", directoryId: "", saveToDirectory: false, packages: [],
+  });
+  // A job sheet names several lots under one heading - the 2512079 CFS covers four - so
+  // lots finished here are parked in this list while the next is entered, and all of them
+  // go to Incoming together.
+  const [manualLots, setManualLots] = useState([]);
+  const [manualLotDraft, setManualLotDraft] = useState({ orderNo: "", caseSpec: "", description: "ELEVATOR PARTS", kg: "", cbm: "" });
+  const inputStyle = inputStyleFor(colors);
+  const siteSuggestions = useMemo(() => {
+    const fromDirectory = (directory || []).map((s) => s.siteEn).filter(Boolean);
+    const fromItems = (existingItems || []).map((i) => i.project).filter(Boolean);
+    return [...new Set([...fromDirectory, ...fromItems])].sort();
+  }, [directory, existingItems]);
+  // Builds a lot's cases from the C/S NO. marking as written on the sheet, spreading the
+  // lot's stated weight and volume evenly across them. A job sheet gives a figure per lot,
+  // not per case, and an even split is the only honest reading of that - the per-case
+  // figures stay editable afterwards for anyone who knows better.
+  function buildLotCases() {
+    const { codes } = parseCaseSpec(manualLotDraft.caseSpec);
+    if (!codes.length) return;
+    const n = codes.length;
+    const kg = Number(manualLotDraft.kg) || 0;
+    const cbm = Number(manualLotDraft.cbm) || 0;
+    const per = (total, i) => {
+      if (!total) return "";
+      // The last case carries the rounding so the cases still add up to the stated total.
+      const each = Math.round((total / n) * 100) / 100;
+      return String(i === n - 1 ? Math.round((total - each * (n - 1)) * 100) / 100 : each);
+    };
+    setManualForm((f) => ({
+      ...f,
+      packages: codes.map((code, i) => ({
+        code, orderNo: manualLotDraft.orderNo || "",
+        description: manualLotDraft.description || "",
+        weightKg: per(kg, i), cbm: per(cbm, i),
+      })),
+    }));
+  }
+  function stashManualLot() {
+    if (!(manualForm.packages || []).length) return;
+    setManualLots((prev) => [...prev, {
+      unitCode: manualForm.unitCode || "",
+      orderNo: manualLotDraft.orderNo || "",
+      packages: manualForm.packages,
+    }]);
+    setManualForm((f) => ({ ...f, unitCode: "", packages: [] }));
+    setManualLotDraft({ orderNo: "", caseSpec: "", description: "ELEVATOR PARTS", kg: "", cbm: "" });
+  }
+  const manualPendingCount = manualLots.length + ((manualForm.packages || []).length ? 1 : 0);
+  function addManualToIncoming() {
+    let effectiveDirectoryId = manualForm.directoryId || "";
+    if (manualForm.saveToDirectory && !manualForm.directoryId && manualForm.project) {
+      const newSite = {
+        id: `SITE${Date.now()}`,
+        siteEn: manualForm.project,
+        siteZh: manualForm.constructionSite && manualForm.constructionSite !== manualForm.project ? manualForm.constructionSite : "",
+        client: manualForm.client,
+        jobRef: manualForm.jobRef || "",
+        orderedBy: manualForm.orderedBy || "",
+        accountOfficer: "",
+      };
+      setDirectory((d) => [...d, newSite]);
+      effectiveDirectoryId = newSite.id;
+    }
+    const lots = [
+      ...manualLots,
+      ...((manualForm.packages || []).length
+        ? [{ unitCode: manualForm.unitCode || "", orderNo: manualLotDraft.orderNo || "", packages: manualForm.packages }]
+        : []),
+    ];
+    onAddIncoming(lots.map((lot) => ({
+      client: manualForm.client,
+      project: manualForm.project,
+      constructionSite: manualForm.constructionSite || "",
+      jobRef: manualForm.jobRef || "",
+      orderedBy: manualForm.orderedBy || "",
+      shkNumber: manualForm.shkNumber || "",
+      directoryId: effectiveDirectoryId,
+      unitCode: lot.unitCode,
+      packages: lot.packages,
+      notes: t.legacyManualEntryNote,
+    })));
+    setManualForm({ client: CLIENTS[0], project: "", constructionSite: "", orderedBy: "", jobRef: "", shkNumber: "", unitCode: "", directoryId: "", saveToDirectory: false, packages: [] });
+    setManualLots([]);
+    setManualLotDraft({ orderNo: "", caseSpec: "", description: "ELEVATOR PARTS", kg: "", cbm: "" });
+  }
+  if (!open) {
+    return (
+      <button
+        className="px-3 py-2 rounded text-sm font-semibold w-fit"
+        style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY, background: colors.surface }}
+        onClick={() => setOpen(true)}
+      >
+        {t.manualPackingListOpenBtn}
+      </button>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <span />
+        <button className="text-xs font-semibold" style={{ color: colors.inkFaint }} onClick={() => setOpen(false)}>{t.cancelBtn}</button>
+      </div>
+        <div className="flex flex-col gap-4">
+        <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+          <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.tabManualPackingList}</h3>
+          <p className="text-sm mb-4" style={{ color: colors.inkFaint }}>{t.manualPackingListDesc}</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+            <Field label={t.packingListApplyClient} colors={colors}>
+              <select className={inputClass} style={inputStyle} value={manualForm.client} onChange={(e) => setManualForm((f) => ({ ...f, client: e.target.value }))}>
+                {CLIENTS.map((c) => <option key={c}>{c}</option>)}
+              </select>
+            </Field>
+            <Field label={t.legacyProjectSiteEn} colors={colors}>
+              <input list="manual-site-suggestions" className={inputClass} style={inputStyle} value={manualForm.project} onChange={(e) => setManualForm((f) => ({ ...f, project: e.target.value, directoryId: "" }))} />
+              <datalist id="manual-site-suggestions">
+                {siteSuggestions.map((s) => <option key={s} value={s} />)}
+              </datalist>
+            </Field>
+            <Field label={t.legacyProjectSiteZh} colors={colors}>
+              <input className={inputClass} style={inputStyle} value={manualForm.constructionSite} onChange={(e) => setManualForm((f) => ({ ...f, constructionSite: e.target.value }))} />
+            </Field>
+            <Field label={t.fOrderedBy} colors={colors}>
+              <input className={inputClass} style={inputStyle} value={manualForm.orderedBy} onChange={(e) => setManualForm((f) => ({ ...f, orderedBy: e.target.value }))} />
+            </Field>
+            <Field label={t.fJobRef} hint={t.fJobRefHint} colors={colors}>
+              <input className={inputClass} style={inputStyle} value={manualForm.jobRef} onChange={(e) => setManualForm((f) => ({ ...f, jobRef: e.target.value }))} />
+            </Field>
+            <Field label={t.fReference} hint={t.fReferenceHint} colors={colors}>
+              <input className={inputClass} style={inputStyle} value={manualForm.shkNumber} onChange={(e) => setManualForm((f) => ({ ...f, shkNumber: e.target.value }))} />
+            </Field>
+            <Field label={t.legacyUnitCode} colors={colors}>
+              <input className={inputClass} style={inputStyle} value={manualForm.unitCode} onChange={(e) => setManualForm((f) => ({ ...f, unitCode: e.target.value }))} />
+            </Field>
+          </div>
+          {!manualForm.directoryId && manualForm.project && (
+            <label className="flex items-center gap-2 mt-4 text-sm" style={{ color: colors.inkFaint }}>
+              <input type="checkbox" checked={manualForm.saveToDirectory} onChange={(e) => setManualForm((f) => ({ ...f, saveToDirectory: e.target.checked }))} />
+              {t.saveNewSiteToDirectory(manualForm.project)}
+            </label>
+          )}
+          <div className="rounded p-3 mt-4" style={{ border: `1px dashed ${colors.line}` }}>
+            <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
+              {t.manualLotBuilderLabel}
+            </div>
+            <div className="text-[11px] mb-2" style={{ color: colors.inkFaint }}>{t.manualLotBuilderHint}</div>
+            <div className="flex flex-wrap items-end gap-2">
+              <Field label={t.manualOrderNoLabel} colors={colors}>
+                <input className={inputClass} style={{ ...inputStyle, width: 130 }} value={manualLotDraft.orderNo}
+                  onChange={(e) => setManualLotDraft((d) => ({ ...d, orderNo: e.target.value }))} placeholder="60737177" />
+              </Field>
+              <Field label={t.manualCaseSpecLabel} colors={colors}>
+                <input className={inputClass} style={{ ...inputStyle, width: 150 }} value={manualLotDraft.caseSpec}
+                  onChange={(e) => setManualLotDraft((d) => ({ ...d, caseSpec: e.target.value }))} placeholder="1,2,3/3" />
+              </Field>
+              <Field label={t.fDescription} colors={colors}>
+                <input className={inputClass} style={{ ...inputStyle, width: 180 }} value={manualLotDraft.description}
+                  onChange={(e) => setManualLotDraft((d) => ({ ...d, description: e.target.value }))} />
+              </Field>
+              <Field label={t.jsKgs} colors={colors}>
+                <input type="number" min="0" step="0.01" className={inputClass} style={{ ...inputStyle, width: 110 }} value={manualLotDraft.kg}
+                  onChange={(e) => setManualLotDraft((d) => ({ ...d, kg: e.target.value }))} />
+              </Field>
+              <Field label={t.jsCbm} colors={colors}>
+                <input type="number" min="0" step="0.001" className={inputClass} style={{ ...inputStyle, width: 100 }} value={manualLotDraft.cbm}
+                  onChange={(e) => setManualLotDraft((d) => ({ ...d, cbm: e.target.value }))} />
+              </Field>
+              <button className="px-3 py-2 rounded text-xs font-semibold"
+                style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}
+                onClick={buildLotCases}>
+                {t.manualBuildCasesBtn}
+              </button>
+            </div>
+            {parseCaseSpec(manualLotDraft.caseSpec).codes.length > 0 && (
+              <div className="text-xs mt-2" style={{ color: colors.green }}>
+                {t.manualCaseSpecPreview(parseCaseSpec(manualLotDraft.caseSpec).codes.length, parseCaseSpec(manualLotDraft.caseSpec).codes.join(", "))}
+              </div>
+            )}
+          </div>
+          <PackagesEditor form={manualForm} setForm={setManualForm} colors={colors} t={t} />
+          {manualLots.length > 0 && (
+            <div className="rounded p-3 mt-3" style={{ background: colors.surfaceDim }}>
+              <div className="text-xs font-semibold mb-1" style={{ color: colors.ink }}>{t.manualPendingLotsLabel(manualLots.length)}</div>
+              {manualLots.map((lot, li) => (
+                <div key={li} className="text-xs flex items-center gap-3" style={{ color: colors.ink }}>
+                  <span style={{ fontFamily: FONT_MONO, minWidth: 150 }}>{[lot.orderNo, lot.unitCode].filter(Boolean).join(" / ") || t.manualUnnamedLot}</span>
+                  <span className="flex-1">{lot.packages.map((p) => p.code).join(", ")}</span>
+                  <button className="font-semibold" style={{ color: colors.red }}
+                    onClick={() => setManualLots((prev) => prev.filter((_, i) => i !== li))}>{t.deleteBtn}</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <button
+            className="px-4 py-2 rounded text-sm font-semibold w-fit"
+            style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY, opacity: (!manualForm.client || !(manualForm.project || manualForm.constructionSite) || manualPendingCount === 0) ? 0.5 : 1 }}
+            disabled={!manualForm.client || !(manualForm.project || manualForm.constructionSite) || manualPendingCount === 0}
+            onClick={addManualToIncoming}
+          >
+            {t.packingListAddToIncomingBtn(manualPendingCount)}
+          </button>
+          <button
+            className="px-4 py-2 rounded text-sm font-semibold w-fit"
+            style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY, opacity: (manualForm.packages || []).length ? 1 : 0.5 }}
+            disabled={!(manualForm.packages || []).length}
+            onClick={stashManualLot}
+          >
+            {t.manualAddAnotherLotBtn}
+          </button>
+        </div>
+      </div>
+
+    </div>
+  );
+}
 function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, onCheckIn, onAddIncoming, colors, t, lang }) {
   const [search, setSearch] = useState("");
   const [filterClient, setFilterClient] = useState("All");
@@ -7576,6 +7803,12 @@ function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, 
       <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
         <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.incomingTitle}</h3>
         <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.incomingDesc}</p>
+        <div className="mb-4">
+          <ManualPackingListEntry
+            onAddIncoming={onAddIncoming} existingItems={items}
+            directory={directory} setDirectory={setDirectory} colors={colors} t={t}
+          />
+        </div>
         <div className="flex flex-wrap gap-3 items-end">
           <Field label={t.searchLabel} colors={colors}>
             <input className={inputClass} style={{ ...inputStyle, minWidth: 220 }} value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -8937,14 +9170,6 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
   const [plCommon, setPlCommon] = useState(null);
   const [pdfStatus, setPdfStatus] = useState("idle"); // idle | scanning
   const [pdfError, setPdfError] = useState("");
-  const [manualForm, setManualForm] = useState({
-    client: CLIENTS[0], project: "", constructionSite: "", orderedBy: "", jobRef: "", shkNumber: "", unitCode: "", directoryId: "", saveToDirectory: false, packages: [],
-  });
-  // A job sheet names several lots under one heading - the 2512079 CFS covers four - so
-  // lots finished here are parked in this list while the next is entered, and all of them
-  // go to Incoming together.
-  const [manualLots, setManualLots] = useState([]);
-  const [manualLotDraft, setManualLotDraft] = useState({ orderNo: "", caseSpec: "", description: "ELEVATOR PARTS", kg: "", cbm: "" });
   const inputStyle = inputStyleFor(colors);
   const siteSuggestions = useMemo(() => {
     const fromDirectory = (directory || []).map((s) => s.siteEn).filter(Boolean);
@@ -9176,84 +9401,13 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
     setPlCommon(null);
   }
 
-  // Builds a lot's cases from the C/S NO. marking as written on the sheet, spreading the
-  // lot's stated weight and volume evenly across them. A job sheet gives a figure per lot,
-  // not per case, and an even split is the only honest reading of that - the per-case
-  // figures stay editable afterwards for anyone who knows better.
-  function buildLotCases() {
-    const { codes } = parseCaseSpec(manualLotDraft.caseSpec);
-    if (!codes.length) return;
-    const n = codes.length;
-    const kg = Number(manualLotDraft.kg) || 0;
-    const cbm = Number(manualLotDraft.cbm) || 0;
-    const per = (total, i) => {
-      if (!total) return "";
-      // The last case carries the rounding so the cases still add up to the stated total.
-      const each = Math.round((total / n) * 100) / 100;
-      return String(i === n - 1 ? Math.round((total - each * (n - 1)) * 100) / 100 : each);
-    };
-    setManualForm((f) => ({
-      ...f,
-      packages: codes.map((code, i) => ({
-        code, orderNo: manualLotDraft.orderNo || "",
-        description: manualLotDraft.description || "",
-        weightKg: per(kg, i), cbm: per(cbm, i),
-      })),
-    }));
-  }
-  function stashManualLot() {
-    if (!(manualForm.packages || []).length) return;
-    setManualLots((prev) => [...prev, {
-      unitCode: manualForm.unitCode || "",
-      orderNo: manualLotDraft.orderNo || "",
-      packages: manualForm.packages,
-    }]);
-    setManualForm((f) => ({ ...f, unitCode: "", packages: [] }));
-    setManualLotDraft({ orderNo: "", caseSpec: "", description: "ELEVATOR PARTS", kg: "", cbm: "" });
-  }
-  const manualPendingCount = manualLots.length + ((manualForm.packages || []).length ? 1 : 0);
-  function addManualToIncoming() {
-    let effectiveDirectoryId = manualForm.directoryId || "";
-    if (manualForm.saveToDirectory && !manualForm.directoryId && manualForm.project) {
-      const newSite = {
-        id: `SITE${Date.now()}`,
-        siteEn: manualForm.project,
-        siteZh: manualForm.constructionSite && manualForm.constructionSite !== manualForm.project ? manualForm.constructionSite : "",
-        client: manualForm.client,
-        jobRef: manualForm.jobRef || "",
-        orderedBy: manualForm.orderedBy || "",
-        accountOfficer: "",
-      };
-      setDirectory((d) => [...d, newSite]);
-      effectiveDirectoryId = newSite.id;
-    }
-    const lots = [
-      ...manualLots,
-      ...((manualForm.packages || []).length
-        ? [{ unitCode: manualForm.unitCode || "", orderNo: manualLotDraft.orderNo || "", packages: manualForm.packages }]
-        : []),
-    ];
-    onAddIncoming(lots.map((lot) => ({
-      client: manualForm.client,
-      project: manualForm.project,
-      constructionSite: manualForm.constructionSite || "",
-      jobRef: manualForm.jobRef || "",
-      orderedBy: manualForm.orderedBy || "",
-      shkNumber: manualForm.shkNumber || "",
-      directoryId: effectiveDirectoryId,
-      unitCode: lot.unitCode,
-      packages: lot.packages,
-      notes: t.legacyManualEntryNote,
-    })));
-    setManualForm({ client: CLIENTS[0], project: "", constructionSite: "", orderedBy: "", jobRef: "", shkNumber: "", unitCode: "", directoryId: "", saveToDirectory: false, packages: [] });
-    setManualLots([]);
-    setManualLotDraft({ orderNo: "", caseSpec: "", description: "ELEVATOR PARTS", kg: "", cbm: "" });
-  }
+
+
 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex gap-1 rounded-lg p-1 w-fit" style={{ background: colors.surfaceDim }}>
-        {[["packinglist", t.tabPackingList], ["pdf", t.tabPdf], ["manual", t.tabManualPackingList], ...(hideExcelMode ? [] : [["excel", t.tabExcel]])].map(([k, label]) => (
+        {[["packinglist", t.tabPackingList], ["pdf", t.tabPdf], ...(hideExcelMode ? [] : [["excel", t.tabExcel]])].map(([k, label]) => (
           <button key={k} onClick={() => setMode(k)} className="px-3 py-1.5 rounded text-sm font-semibold"
             style={{ fontFamily: FONT_DISPLAY, background: mode === k ? colors.surface : "transparent", color: colors.ink }}>
             {label}
@@ -9433,119 +9587,6 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                 </button>
               </div>
             </div>
-      )}
-
-      {mode === "manual" && (
-        <div className="flex flex-col gap-4">
-          <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
-            <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.tabManualPackingList}</h3>
-            <p className="text-sm mb-4" style={{ color: colors.inkFaint }}>{t.manualPackingListDesc}</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-              <Field label={t.packingListApplyClient} colors={colors}>
-                <select className={inputClass} style={inputStyle} value={manualForm.client} onChange={(e) => setManualForm((f) => ({ ...f, client: e.target.value }))}>
-                  {CLIENTS.map((c) => <option key={c}>{c}</option>)}
-                </select>
-              </Field>
-              <Field label={t.legacyProjectSiteEn} colors={colors}>
-                <input list="manual-site-suggestions" className={inputClass} style={inputStyle} value={manualForm.project} onChange={(e) => setManualForm((f) => ({ ...f, project: e.target.value, directoryId: "" }))} />
-                <datalist id="manual-site-suggestions">
-                  {siteSuggestions.map((s) => <option key={s} value={s} />)}
-                </datalist>
-              </Field>
-              <Field label={t.legacyProjectSiteZh} colors={colors}>
-                <input className={inputClass} style={inputStyle} value={manualForm.constructionSite} onChange={(e) => setManualForm((f) => ({ ...f, constructionSite: e.target.value }))} />
-              </Field>
-              <Field label={t.fOrderedBy} colors={colors}>
-                <input className={inputClass} style={inputStyle} value={manualForm.orderedBy} onChange={(e) => setManualForm((f) => ({ ...f, orderedBy: e.target.value }))} />
-              </Field>
-              <Field label={t.fJobRef} hint={t.fJobRefHint} colors={colors}>
-                <input className={inputClass} style={inputStyle} value={manualForm.jobRef} onChange={(e) => setManualForm((f) => ({ ...f, jobRef: e.target.value }))} />
-              </Field>
-              <Field label={t.fReference} hint={t.fReferenceHint} colors={colors}>
-                <input className={inputClass} style={inputStyle} value={manualForm.shkNumber} onChange={(e) => setManualForm((f) => ({ ...f, shkNumber: e.target.value }))} />
-              </Field>
-              <Field label={t.legacyUnitCode} colors={colors}>
-                <input className={inputClass} style={inputStyle} value={manualForm.unitCode} onChange={(e) => setManualForm((f) => ({ ...f, unitCode: e.target.value }))} />
-              </Field>
-            </div>
-            {!manualForm.directoryId && manualForm.project && (
-              <label className="flex items-center gap-2 mt-4 text-sm" style={{ color: colors.inkFaint }}>
-                <input type="checkbox" checked={manualForm.saveToDirectory} onChange={(e) => setManualForm((f) => ({ ...f, saveToDirectory: e.target.checked }))} />
-                {t.saveNewSiteToDirectory(manualForm.project)}
-              </label>
-            )}
-            <div className="rounded p-3 mt-4" style={{ border: `1px dashed ${colors.line}` }}>
-              <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
-                {t.manualLotBuilderLabel}
-              </div>
-              <div className="text-[11px] mb-2" style={{ color: colors.inkFaint }}>{t.manualLotBuilderHint}</div>
-              <div className="flex flex-wrap items-end gap-2">
-                <Field label={t.manualOrderNoLabel} colors={colors}>
-                  <input className={inputClass} style={{ ...inputStyle, width: 130 }} value={manualLotDraft.orderNo}
-                    onChange={(e) => setManualLotDraft((d) => ({ ...d, orderNo: e.target.value }))} placeholder="60737177" />
-                </Field>
-                <Field label={t.manualCaseSpecLabel} colors={colors}>
-                  <input className={inputClass} style={{ ...inputStyle, width: 150 }} value={manualLotDraft.caseSpec}
-                    onChange={(e) => setManualLotDraft((d) => ({ ...d, caseSpec: e.target.value }))} placeholder="1,2,3/3" />
-                </Field>
-                <Field label={t.fDescription} colors={colors}>
-                  <input className={inputClass} style={{ ...inputStyle, width: 180 }} value={manualLotDraft.description}
-                    onChange={(e) => setManualLotDraft((d) => ({ ...d, description: e.target.value }))} />
-                </Field>
-                <Field label={t.jsKgs} colors={colors}>
-                  <input type="number" min="0" step="0.01" className={inputClass} style={{ ...inputStyle, width: 110 }} value={manualLotDraft.kg}
-                    onChange={(e) => setManualLotDraft((d) => ({ ...d, kg: e.target.value }))} />
-                </Field>
-                <Field label={t.jsCbm} colors={colors}>
-                  <input type="number" min="0" step="0.001" className={inputClass} style={{ ...inputStyle, width: 100 }} value={manualLotDraft.cbm}
-                    onChange={(e) => setManualLotDraft((d) => ({ ...d, cbm: e.target.value }))} />
-                </Field>
-                <button className="px-3 py-2 rounded text-xs font-semibold"
-                  style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}
-                  onClick={buildLotCases}>
-                  {t.manualBuildCasesBtn}
-                </button>
-              </div>
-              {parseCaseSpec(manualLotDraft.caseSpec).codes.length > 0 && (
-                <div className="text-xs mt-2" style={{ color: colors.green }}>
-                  {t.manualCaseSpecPreview(parseCaseSpec(manualLotDraft.caseSpec).codes.length, parseCaseSpec(manualLotDraft.caseSpec).codes.join(", "))}
-                </div>
-              )}
-            </div>
-            <PackagesEditor form={manualForm} setForm={setManualForm} colors={colors} t={t} />
-            {manualLots.length > 0 && (
-              <div className="rounded p-3 mt-3" style={{ background: colors.surfaceDim }}>
-                <div className="text-xs font-semibold mb-1" style={{ color: colors.ink }}>{t.manualPendingLotsLabel(manualLots.length)}</div>
-                {manualLots.map((lot, li) => (
-                  <div key={li} className="text-xs flex items-center gap-3" style={{ color: colors.ink }}>
-                    <span style={{ fontFamily: FONT_MONO, minWidth: 150 }}>{[lot.orderNo, lot.unitCode].filter(Boolean).join(" / ") || t.manualUnnamedLot}</span>
-                    <span className="flex-1">{lot.packages.map((p) => p.code).join(", ")}</span>
-                    <button className="font-semibold" style={{ color: colors.red }}
-                      onClick={() => setManualLots((prev) => prev.filter((_, i) => i !== li))}>{t.deleteBtn}</button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-          <div className="flex gap-2">
-            <button
-              className="px-4 py-2 rounded text-sm font-semibold w-fit"
-              style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY, opacity: (!manualForm.client || !(manualForm.project || manualForm.constructionSite) || manualPendingCount === 0) ? 0.5 : 1 }}
-              disabled={!manualForm.client || !(manualForm.project || manualForm.constructionSite) || manualPendingCount === 0}
-              onClick={addManualToIncoming}
-            >
-              {t.packingListAddToIncomingBtn(manualPendingCount)}
-            </button>
-            <button
-              className="px-4 py-2 rounded text-sm font-semibold w-fit"
-              style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY, opacity: (manualForm.packages || []).length ? 1 : 0.5 }}
-              disabled={!(manualForm.packages || []).length}
-              onClick={stashManualLot}
-            >
-              {t.manualAddAnotherLotBtn}
-            </button>
-          </div>
-        </div>
       )}
 
       {mode === "excel" && (
