@@ -1267,9 +1267,9 @@ const TEXT = {
     manualCaseSpecPreview: (n, codes) => `${n} case${n === 1 ? "" : "s"}: ${codes}`,
     manualPendingLotsLabel: (n) => `${n} lot${n === 1 ? "" : "s"} ready to add`,
     manualUnnamedLot: "(unnamed lot)",
-    legacySameOrderWarn: (orders) => `Order no. ${orders} also appears on another shipment at this site \u2014 the same lot is filed twice under different names, so check which one this file's cases belong to.`,
+    legacySameOrderWarn: (orders) => `Order no. ${orders} appears on more than one shipment at this site. An order can ship in batches, and each packing list numbers its own cases, so these may be separate consignments that happen to share case numbers \u2014 or the same one recorded twice. Check the paperwork before choosing where to check these cases in.`,
     legacySameOrderSibling: (id, unit, n) => `${id} \u00b7 ${unit} \u00b7 ${n} case${n === 1 ? "" : "s"} not yet checked in`,
-    legacySameOrderOnlyThere: (codes) => `has ${codes}, which this one does not`,
+    legacySameOrderOnlyThere: (codes) => `carries ${codes}, which this one does not`,
     manualPackingListOpenBtn: "+ Add Packing List",
     manualPackingListDesc: "For older jobs with no packing list file, or one that's incomplete \u2014 type in the case list by hand. This creates one Incoming shipment the same way an uploaded file would, ready to check in via Devan/CFS.",
     legacyManualEntryNote: "Manually entered \u2014 no packing list file on file for this shipment.",
@@ -1769,7 +1769,8 @@ const TEXT = {
     legacySheetCasesNote: (mark, n) => `Sheet marks ${mark} \u2014 ${n} case${n === 1 ? "" : "s"} pre-selected`,
     legacySheetCasesMissing: (list) => `case ${list} not at the depot`,
     legacyIncomingCasesMissing: (list) => `case ${list} is not on this shipment`,
-    legacyCasesFoundIn: (codes, id, unit) => `\u2192 ${codes} is on ${id} \u00b7 ${unit} \u2014 check it in from there, or reconcile the two records first.`,
+    legacySheetCasesAmbiguous: (mark, ids) => `Sheet marks ${mark}, but ${ids} both answer to this lot \u2014 nothing pre-selected, pick the cases yourself.`,
+    legacyCasesFoundIn: (codes, id, unit) => `\u2192 ${id} \u00b7 ${unit} carries ${codes} under the same order number. Case numbers alone don't prove it's the same box \u2014 confirm against the paperwork before checking in there.`,
     legacyMisfiledCases: (codes, from) => `Case ${codes} sits under ${from}, but the lot size on the case number says it belongs here \u2014 the packing list's lift column had it wrong.`,
     legacyMisfiledFixBtn: "Move it here",
     legacySomeArrivalsUnmatched: (jobs) => `No inventory entry found for arrival job ${jobs} \u2014 that part of this sheet won't be delivered. Upload its Devan/CFS file first, or correct the number above.`,
@@ -1949,7 +1950,7 @@ const TEXT = {
     manualCaseSpecPreview: (n, codes) => `共 ${n} 件：${codes}`,
     manualPendingLotsLabel: (n) => `已備妥 ${n} 個批次`,
     manualUnnamedLot: "（未命名批次）",
-    legacySameOrderWarn: (orders) => `訂單號 ${orders} 亦見於本地盤另一批到貨記錄 \u2014 同一批貨以不同名稱重複記錄，請確認此檔案之貨箱屬於哪一項。`,
+    legacySameOrderWarn: (orders) => `訂單號 ${orders} 見於本地盤多於一批到貨記錄。同一訂單可分批付運，而每張裝箱單各自編號，故件號相同未必為同一箱 \u2014 亦可能是同一批貨重複記錄。請先核對文件再決定於哪一項辦理到倉。`,
     legacySameOrderSibling: (id, unit, n) => `${id} \u00b7 ${unit} \u00b7 尚有 ${n} 件未入倉`,
     legacySameOrderOnlyThere: (codes) => `該項有 ${codes}，此項則沒有`,
     manualPackingListOpenBtn: "+ 新增裝箱單",
@@ -2451,7 +2452,8 @@ const TEXT = {
     legacySheetCasesNote: (mark, n) => `工單註明 ${mark} \u2014 已預先選取 ${n} 件`,
     legacySheetCasesMissing: (list) => `第 ${list} 件不在倉內`,
     legacyIncomingCasesMissing: (list) => `第 ${list} 件不在此批到貨內`,
-    legacyCasesFoundIn: (codes, id, unit) => `\u2192 第 ${codes} 件見於 ${id} \u00b7 ${unit} \u2014 請於該項辦理到倉，或先整合兩項記錄。`,
+    legacySheetCasesAmbiguous: (mark, ids) => `工單註明 ${mark}，但 ${ids} 均符合此批次 \u2014 未有預先選取，請自行選擇貨箱。`,
+    legacyCasesFoundIn: (codes, id, unit) => `\u2192 ${id} \u00b7 ${unit} 以相同訂單號載有第 ${codes} 件。僅憑件號不足以確定為同一箱 \u2014 請先核對文件再於該項辦理到倉。`,
     legacyMisfiledCases: (codes, from) => `第 ${codes} 件現存於 ${from}，但件號所示之總件數顯示應屬此項 \u2014 裝箱單之梯號欄有誤。`,
     legacyMisfiledFixBtn: "移至此項",
     legacySomeArrivalsUnmatched: (jobs) => `找不到到倉工單號 ${jobs} 的存倉記錄 \u2014 此工單該部分不會記錄送貨。請先上載該拆櫃/CFS檔案，或修正上方號碼。`,
@@ -6698,11 +6700,27 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
   // shipment does not hold one of them, saying which is missing turns "8 of 11" into
   // something answerable: on the 2605076 sheet, 21, 22 and 23 of lot 60701670/L5 are not in
   // INC-0222 at all, because that order is filed twice and they sit in the other record.
-  function sheetMarkForIncoming(inc) {
+  function incomingOrders(inc) {
+    return [...new Set((inc.packages || []).map((p) => String(p.orderNo || "").trim()).filter(Boolean))];
+  }
+  function sheetMarkKeyForIncoming(inc) {
     const byLot = row.caseMarksByLot || {};
-    const orders = [...new Set((inc.packages || []).map((p) => String(p.orderNo || "").trim()).filter(Boolean))];
-    const key = Object.keys(byLot).find((k) => lotTokenMatches(inc.unitCode, k) || orders.some((o) => lotTokenMatches(o, k)));
-    return key ? byLot[key] : null;
+    const orders = incomingOrders(inc);
+    return Object.keys(byLot).find((k) => lotTokenMatches(inc.unitCode, k) || orders.some((o) => lotTokenMatches(o, k))) || null;
+  }
+  function sheetMarkForIncoming(inc) {
+    const key = sheetMarkKeyForIncoming(inc);
+    return key ? (row.caseMarksByLot || {})[key] : null;
+  }
+  // One order number can legitimately appear on several packing lists - an order ships in
+  // batches, and each list numbers its own cases, so "14/23" on one consignment is not the
+  // same box as "14/23" on another. Where more than one matched shipment answers to the
+  // same marking there is no safe way to tell which the sheet means, so nothing is ticked
+  // and the choice is left to whoever has the paperwork.
+  function shipmentsSharingMark(inc) {
+    const key = sheetMarkKeyForIncoming(inc);
+    if (!key) return [];
+    return matchedIncomings.filter((other) => sheetMarkKeyForIncoming(other) === key);
   }
   function sheetSelectionForIncoming(inc) {
     const mark = sheetMarkForIncoming(inc);
@@ -6718,8 +6736,10 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
     const codes = available.filter((p) => wanted.has(codeLeadingNumber(p.code))).map((p) => p.code);
     const present = new Set(available.map((p) => codeLeadingNumber(p.code)));
     const missing = mark.numbers.filter((n) => !present.has(n));
-    // A case the sheet asks for that this shipment doesn't hold is usually sitting in
-    // another one for the same lot, so point at it rather than leaving a bare shortfall.
+    // A case the sheet asks for that this shipment doesn't hold may be on another shipment
+    // for the same order - or may simply not have arrived. Point at the other shipment
+    // without claiming it is the same box: the case numbers matching proves nothing on
+    // their own, since each packing list numbers its own cases.
     const elsewhere = [];
     if (missing.length) {
       for (const other of matchedIncomings) {
@@ -6731,7 +6751,8 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
         if (found.length) elsewhere.push({ inc: other, codes: found });
       }
     }
-    return { codes, missing, elsewhere, text: mark.text || "" };
+    const shared = shipmentsSharingMark(inc);
+    return { codes, missing, elsewhere, text: mark.text || "", shared: shared.length > 1 ? shared : [] };
   }
   const incomingAutoApplied = row.incomingAutoApplied || {};
   const matchedIncomingKey = matchedIncomings.map((i) => i.id).join("|");
@@ -6743,6 +6764,9 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
       if ((selectedByIncoming[inc.id] || []).length) continue;
       const sel = sheetSelectionForIncoming(inc);
       if (!sel || !sel.codes.length) continue;
+      // Ambiguous: several shipments answer to this marking, so ticking either would be a
+      // guess at which consignment the sheet is about.
+      if (sel.shared.length) continue;
       pending[inc.id] = sel.codes;
     }
     const ids = Object.keys(pending);
@@ -7314,7 +7338,9 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
                   )}
                   {sheetSel && (
                     <div className="text-xs mb-2" style={{ color: colors.inkFaint }}>
-                      {t.legacySheetCasesNote(sheetSel.text, sheetSel.codes.length)}
+                      {sheetSel.shared.length > 0
+                        ? t.legacySheetCasesAmbiguous(sheetSel.text, sheetSel.shared.map((x) => x.id).join(", "))
+                        : t.legacySheetCasesNote(sheetSel.text, sheetSel.codes.length)}
                       {sheetSel.missing.length > 0 && (
                         <span style={{ color: colors.red }}> {"\u00b7"} {t.legacyIncomingCasesMissing(sheetSel.missing.join(", "))}</span>
                       )}
