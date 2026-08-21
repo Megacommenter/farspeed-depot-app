@@ -1271,7 +1271,7 @@ const TEXT = {
     legacySameOrderWarn: (orders) => `Order no. ${orders} also appears on another shipment at this site \u2014 the same lot is filed twice under different names, so check which one this file's cases belong to.`,
     legacySameOrderSibling: (id, unit, n) => `${id} \u00b7 ${unit} \u00b7 ${n} case${n === 1 ? "" : "s"} not yet checked in`,
     legacySameOrderOnlyThere: (codes) => `has ${codes}, which this one does not`,
-    manualPackingListOpenBtn: "Enter a packing list by hand",
+    manualPackingListOpenBtn: "+ Add Packing List",
     manualPackingListDesc: "For older jobs with no packing list file, or one that's incomplete \u2014 type in the case list by hand. This creates one Incoming shipment the same way an uploaded file would, ready to check in via Devan/CFS.",
     legacyManualEntryNote: "Manually entered \u2014 no packing list file on file for this shipment.",
     excelTitle: "Import from Excel",
@@ -1951,7 +1951,7 @@ const TEXT = {
     legacySameOrderWarn: (orders) => `訂單號 ${orders} 亦見於本地盤另一批到貨記錄 \u2014 同一批貨以不同名稱重複記錄，請確認此檔案之貨箱屬於哪一項。`,
     legacySameOrderSibling: (id, unit, n) => `${id} \u00b7 ${unit} \u00b7 尚有 ${n} 件未入倉`,
     legacySameOrderOnlyThere: (codes) => `該項有 ${codes}，此項則沒有`,
-    manualPackingListOpenBtn: "手動輸入裝箱單",
+    manualPackingListOpenBtn: "+ 新增裝箱單",
     manualPackingListDesc: "適用於較舊、沒有裝箱單檔案或資料不完整的工作 \u2014 直接手動輸入件號清單。此操作會建立一項待到倉貨件，效果與上載檔案相同，可於拆櫃/CFS辦理到倉。",
     legacyManualEntryNote: "手動輸入 \u2014 此貨件沒有裝箱單檔案存檔。",
     excelTitle: "從Excel匯入",
@@ -7517,8 +7517,7 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
 // the older jobs whose packing list was never filed - the Gage Street work whose account
 // officer left before the records were entered - so the Devan/CFS sheet has something to
 // check its cases into.
-function ManualPackingListEntry({ onAddIncoming, existingItems, directory, setDirectory, colors, t }) {
-  const [open, setOpen] = useState(false);
+function ManualPackingListEntry({ onClose, onAddIncoming, existingItems, directory, setDirectory, colors, t }) {
   const [manualForm, setManualForm] = useState({
     client: CLIENTS[0], project: "", constructionSite: "", orderedBy: "", jobRef: "", shkNumber: "", unitCode: "", directoryId: "", saveToDirectory: false, packages: [],
   });
@@ -7605,23 +7604,13 @@ function ManualPackingListEntry({ onAddIncoming, existingItems, directory, setDi
     setManualForm({ client: CLIENTS[0], project: "", constructionSite: "", orderedBy: "", jobRef: "", shkNumber: "", unitCode: "", directoryId: "", saveToDirectory: false, packages: [] });
     setManualLots([]);
     setManualLotDraft({ orderNo: "", caseSpec: "", description: "ELEVATOR PARTS", kg: "", cbm: "" });
-  }
-  if (!open) {
-    return (
-      <button
-        className="px-3 py-2 rounded text-sm font-semibold w-fit"
-        style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY, background: colors.surface }}
-        onClick={() => setOpen(true)}
-      >
-        {t.manualPackingListOpenBtn}
-      </button>
-    );
+    // Collapse once the shipments exist, so it is clear the entry went through.
+    if (onClose) onClose();
   }
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between">
-        <span />
-        <button className="text-xs font-semibold" style={{ color: colors.inkFaint }} onClick={() => setOpen(false)}>{t.cancelBtn}</button>
+      <div className="flex items-center justify-end">
+        <button className="text-xs font-semibold" style={{ color: colors.inkFaint }} onClick={onClose}>{t.cancelBtn}</button>
       </div>
         <div className="flex flex-col gap-4">
         <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
@@ -7744,6 +7733,7 @@ function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, 
   const [expandedId, setExpandedId] = useState(null);
   const [selectedByShipment, setSelectedByShipment] = useState({});
   const [formByShipment, setFormByShipment] = useState({});
+  const [manualOpen, setManualOpen] = useState(false);
   const inputStyle = inputStyleFor(colors);
 
   function remainingPkgs(inc) {
@@ -7801,14 +7791,30 @@ function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, 
   return (
     <div className="flex flex-col gap-4">
       <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
-        <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.incomingTitle}</h3>
-        <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.incomingDesc}</p>
-        <div className="mb-4">
-          <ManualPackingListEntry
-            onAddIncoming={onAddIncoming} existingItems={items}
-            directory={directory} setDirectory={setDirectory} colors={colors} t={t}
-          />
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.incomingTitle}</h3>
+            <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.incomingDesc}</p>
+          </div>
+          {!manualOpen && (
+            <button
+              className="px-4 py-2 rounded text-sm font-semibold whitespace-nowrap"
+              style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}
+              onClick={() => setManualOpen(true)}
+            >
+              {t.manualPackingListOpenBtn}
+            </button>
+          )}
         </div>
+        {manualOpen && (
+          <div className="mb-4">
+            <ManualPackingListEntry
+              onClose={() => setManualOpen(false)}
+              onAddIncoming={onAddIncoming} existingItems={items}
+              directory={directory} setDirectory={setDirectory} colors={colors} t={t}
+            />
+          </div>
+        )}
         <div className="flex flex-wrap gap-3 items-end">
           <Field label={t.searchLabel} colors={colors}>
             <input className={inputClass} style={{ ...inputStyle, minWidth: 220 }} value={search} onChange={(e) => setSearch(e.target.value)} />
