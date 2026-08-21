@@ -1768,6 +1768,8 @@ const TEXT = {
     legacyNoReferralHint: "No \"Ref Job no.\" line detected \u2014 enter the arrival's job number manually, or this file will only be archived.",
     legacySheetCasesNote: (mark, n) => `Sheet marks ${mark} \u2014 ${n} case${n === 1 ? "" : "s"} pre-selected`,
     legacySheetCasesMissing: (list) => `case ${list} not at the depot`,
+    legacyIncomingCasesMissing: (list) => `case ${list} is not on this shipment`,
+    legacyCasesFoundIn: (codes, id, unit) => `\u2192 ${codes} is on ${id} \u00b7 ${unit} \u2014 check it in from there, or reconcile the two records first.`,
     legacyMisfiledCases: (codes, from) => `Case ${codes} sits under ${from}, but the lot size on the case number says it belongs here \u2014 the packing list's lift column had it wrong.`,
     legacyMisfiledFixBtn: "Move it here",
     legacySomeArrivalsUnmatched: (jobs) => `No inventory entry found for arrival job ${jobs} \u2014 that part of this sheet won't be delivered. Upload its Devan/CFS file first, or correct the number above.`,
@@ -2448,6 +2450,8 @@ const TEXT = {
     legacyNoReferralHint: "未有偵測到「Ref Job no.」字句 — 請手動輸入到倉工單號，否則此檔案只會被存檔。",
     legacySheetCasesNote: (mark, n) => `工單註明 ${mark} \u2014 已預先選取 ${n} 件`,
     legacySheetCasesMissing: (list) => `第 ${list} 件不在倉內`,
+    legacyIncomingCasesMissing: (list) => `第 ${list} 件不在此批到貨內`,
+    legacyCasesFoundIn: (codes, id, unit) => `\u2192 第 ${codes} 件見於 ${id} \u00b7 ${unit} \u2014 請於該項辦理到倉，或先整合兩項記錄。`,
     legacyMisfiledCases: (codes, from) => `第 ${codes} 件現存於 ${from}，但件號所示之總件數顯示應屬此項 \u2014 裝箱單之梯號欄有誤。`,
     legacyMisfiledFixBtn: "移至此項",
     legacySomeArrivalsUnmatched: (jobs) => `找不到到倉工單號 ${jobs} 的存倉記錄 \u2014 此工單該部分不會記錄送貨。請先上載該拆櫃/CFS檔案，或修正上方號碼。`,
@@ -6689,6 +6693,67 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
   // "共:" lines and editable, because a scanned or hand-typed sheet won't always parse.
   const declaredByIncoming = row.declaredByIncoming || {};
   const incomingListedFor = (inc) => sumSelectedPackages(inc.packages, selectedByIncoming[inc.id] || []);
+  // A Devan/CFS sheet names the cases arriving just as a delivery sheet names the ones
+  // leaving - "C/S NO. 13-23/23" - so the same marking is used here to tick them. Where the
+  // shipment does not hold one of them, saying which is missing turns "8 of 11" into
+  // something answerable: on the 2605076 sheet, 21, 22 and 23 of lot 60701670/L5 are not in
+  // INC-0222 at all, because that order is filed twice and they sit in the other record.
+  function sheetMarkForIncoming(inc) {
+    const byLot = row.caseMarksByLot || {};
+    const orders = [...new Set((inc.packages || []).map((p) => String(p.orderNo || "").trim()).filter(Boolean))];
+    const key = Object.keys(byLot).find((k) => lotTokenMatches(inc.unitCode, k) || orders.some((o) => lotTokenMatches(o, k)));
+    return key ? byLot[key] : null;
+  }
+  function sheetSelectionForIncoming(inc) {
+    const mark = sheetMarkForIncoming(inc);
+    if (!mark || !(mark.numbers || []).length) return null;
+    const sameLot = (code) => {
+      if (!mark.lotCases) return true;
+      const m = String(code).match(/\/(\d+)\s*$/);
+      return !m || Number(m[1]) === mark.lotCases;
+    };
+    const done = new Set(inc.checkedInCodes || []);
+    const available = (inc.packages || []).filter((p) => !done.has(p.code) && sameLot(p.code));
+    const wanted = new Set(mark.numbers);
+    const codes = available.filter((p) => wanted.has(codeLeadingNumber(p.code))).map((p) => p.code);
+    const present = new Set(available.map((p) => codeLeadingNumber(p.code)));
+    const missing = mark.numbers.filter((n) => !present.has(n));
+    // A case the sheet asks for that this shipment doesn't hold is usually sitting in
+    // another one for the same lot, so point at it rather than leaving a bare shortfall.
+    const elsewhere = [];
+    if (missing.length) {
+      for (const other of matchedIncomings) {
+        if (other.id === inc.id) continue;
+        const otherDone = new Set(other.checkedInCodes || []);
+        const found = (other.packages || [])
+          .filter((p) => !otherDone.has(p.code) && sameLot(p.code) && missing.includes(codeLeadingNumber(p.code)))
+          .map((p) => p.code);
+        if (found.length) elsewhere.push({ inc: other, codes: found });
+      }
+    }
+    return { codes, missing, elsewhere, text: mark.text || "" };
+  }
+  const incomingAutoApplied = row.incomingAutoApplied || {};
+  const matchedIncomingKey = matchedIncomings.map((i) => i.id).join("|");
+  useEffect(() => {
+    if (!canMatchIncoming) return;
+    const pending = {};
+    for (const inc of matchedIncomings) {
+      if (incomingAutoApplied[inc.id]) continue;
+      if ((selectedByIncoming[inc.id] || []).length) continue;
+      const sel = sheetSelectionForIncoming(inc);
+      if (!sel || !sel.codes.length) continue;
+      pending[inc.id] = sel.codes;
+    }
+    const ids = Object.keys(pending);
+    if (!ids.length) return;
+    onChange({
+      ...row,
+      selectedByIncoming: { ...selectedByIncoming, ...pending },
+      incomingAutoApplied: { ...incomingAutoApplied, ...Object.fromEntries(ids.map((id) => [id, true])) },
+    });
+    // Once per shipment, so a case unticked by hand is not ticked again on the next render.
+  }, [matchedIncomingKey, canMatchIncoming]);
   // A Devan/CFS sheet names its lots and the cases in each, so where the packing list was
   // never filed - the older Gage Street jobs, whose account officer left before they were
   // entered - the sheet itself is enough to build one from. The cases come off the C/S NO.
@@ -7160,6 +7225,7 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
               const done = new Set(inc.checkedInCodes || []);
               const remainingPkgs = (inc.packages || []).filter((p) => !done.has(p.code));
               const selectedCodes = selectedByIncoming[inc.id] || [];
+              const sheetSel = sheetSelectionForIncoming(inc);
               const totals = sumSelectedPackages(inc.packages, selectedCodes);
               const oversize = getOversizeFor(inc);
               const declared = getDeclaredFor(inc);
@@ -7244,6 +7310,19 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
                         </div>
                       )}
                       <div className="text-xs" style={{ color: colors.inkFaint }}>{t.legacyDeclaredHint}</div>
+                    </div>
+                  )}
+                  {sheetSel && (
+                    <div className="text-xs mb-2" style={{ color: colors.inkFaint }}>
+                      {t.legacySheetCasesNote(sheetSel.text, sheetSel.codes.length)}
+                      {sheetSel.missing.length > 0 && (
+                        <span style={{ color: colors.red }}> {"\u00b7"} {t.legacyIncomingCasesMissing(sheetSel.missing.join(", "))}</span>
+                      )}
+                      {sheetSel.elsewhere.map((e) => (
+                        <div key={e.inc.id} style={{ color: colors.amberText }}>
+                          {t.legacyCasesFoundIn(e.codes.join(", "), e.inc.id, e.inc.unitCode || "\u2014")}
+                        </div>
+                      ))}
                     </div>
                   )}
                   {sameOrderSiblings.length > 0 && (
