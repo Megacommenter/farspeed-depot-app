@@ -1723,6 +1723,10 @@ const TEXT = {
     legacyReferJobNoLabel: "Refers to Arrival Job No.",
     legacyEnrichedNote: (name) => `Enriched from legacy file: ${name}`,
     legacyMatchedIncoming: (id) => `Matched to Incoming ${id} \u2014 select which of its cases arrived in this file`,
+    legacyNoPackingListTitle: "No packing list on file for this site",
+    legacyNoPackingListDesc: "Nothing here to check these cases into. This sheet names its own lots and cases, so a packing list can be built straight from it \u2014 the lot's stated weight and volume are spread evenly across its cases, which is all the sheet claims. Every case stays editable in Incoming afterwards.",
+    legacyCreatePackingListBtn: (n) => `Create packing list \u2014 ${n} lot${n === 1 ? "" : "s"}`,
+    legacyPackingListFromSheetNote: (src) => `Packing list entered from job sheet ${src}`,
     legacyMatchedIncomingCount: (n) => `Matched ${n} Incoming shipment${n === 1 ? "" : "s"} at this site \u2014 select which cases from each arrived in this file`,
     legacyReferJobNoHint: "Optional \u2014 narrows the match to one specific arrival job number. Leave blank to match by client + site instead (can find several).",
     legacyOversizeLabel: "Oversize",
@@ -2398,6 +2402,10 @@ const TEXT = {
     legacyReferJobNoLabel: "指向到倉工單號",
     legacyEnrichedNote: (name) => `由舊資料檔案補充資料：${name}`,
     legacyMatchedIncoming: (id) => `已配對至待到倉 ${id} \u2014 請選擇此檔案中已到達的件號`,
+    legacyNoPackingListTitle: "本地盤未有裝箱單記錄",
+    legacyNoPackingListDesc: "系統沒有可供入倉的貨件。此工單本身已列明批次及件號，可直接據此建立裝箱單 \u2014 該批次之重量及體積會平均分配至各件（工單只提供批次總數）。建立後可於待到倉逐件修改。",
+    legacyCreatePackingListBtn: (n) => `建立裝箱單 \u2014 ${n} 個批次`,
+    legacyPackingListFromSheetNote: (src) => `由工單 ${src} 手動建立之裝箱單`,
     legacyMatchedIncomingCount: (n) => `此地盤配對到 ${n} 項待到倉貨件 \u2014 請分別選擇此檔案中已到達的件號`,
     legacyReferJobNoHint: "可選填 \u2014 填寫後只會配對該工單號的到倉記錄；留空則按客戶＋地盤配對（可能配對多項）。",
     legacyOversizeLabel: "超大件",
@@ -5685,7 +5693,13 @@ function parseCaseMark(text) {
     if (/^\d+$/.test(tail)) { lotCases = Number(tail); s = s.slice(0, slash); }
   }
   s = s.replace(/#/g, "").trim();
-  if (!s || !/^[\d\s,\-]+$/.test(s)) return null;
+  if (!s || !/^[\d\s,\-]+$/.test(s)) {
+    // Some sheets repeat the lot size after every case instead of once at the end -
+    // "1/2,2/2" rather than "1,2/2" - which the reading above cannot take. parseCaseSpec
+    // handles that shape, so it is the fallback rather than giving up on the marking.
+    const spec = parseCaseSpec(original);
+    return spec.numbers.length ? { numbers: spec.numbers, lotCases: spec.lotCases, text: original } : null;
+  }
   const numbers = [...parseRangeInput(s)].sort((a, b) => a - b);
   if (!numbers.length) return null;
   return { numbers, lotCases, text: original };
@@ -5761,7 +5775,7 @@ function parseJobSheetBlocks(rows) {
     // "60759188/L32-01", with its cases written inline ("'60766021/L52#3,7/19"), and/or its
     // own weight and volume trailing on the same line - "60778397/L34-02  3018.58 KGS  6.36
     // CBM" - which is how a sheet states figures per lot without a C/S NO. row for each.
-    const lotM = line.match(/^['\u2018\u2019]?(\d{6,12})\s*\/\s*([A-Za-z][A-Za-z0-9\-\.]*)\s*(?:#\s*([\d][\d\s,\-\/]*?))?\s*(?:([\d,]+(?:\.\d+)?)\s*KGS?\b)?\s*(?:([\d,]+(?:\.\d+)?)\s*CBM\b)?\s*$/i);
+    const lotM = line.match(/^['\u2018\u2019]?([A-Za-z]{0,4}\d{6,12})(?:\s*\/\s*([A-Za-z]{0,4}\d{6,12}))?\s*\/\s*([A-Za-z][A-Za-z0-9\-\.]*)\s*(?:#\s*([\d][\d\s,\-\/]*?))?\s*(?:([\d,]+(?:\.\d+)?)\s*KGS?\b)?\s*(?:([\d,]+(?:\.\d+)?)\s*CBM\b)?\s*$/i);
     if (lotM) {
       // A CFS sheet names a lot and then closes it with its own C/S NO. figures before
       // naming the next, so a lot arriving after a block was closed that way starts a new
@@ -5770,12 +5784,17 @@ function parseJobSheetBlocks(rows) {
       // lots already open, not merely whether figures exist.
       if (closed(cur) && cur.figuresAfterLots) startBlock(cur.refJobNumber, cur.refDateRaw);
       if (!cur) startBlock("", "");
+      // A lot may be named by a container/UID reference, by an order number, or by both:
+      // "60737177/P3", "HKG0011764678/P3P4", "HKG0011764688/ 60748116/P3". Where both are
+      // present the order number is the identifying one and the UID is kept alongside it,
+      // since either may be what the packing list was filed under.
       const lot = {
-        lotRef: lotM[1], unitCode: lotM[2], caseNumbers: [], caseText: "", lotCases: null,
-        pkgs: "", kg: lotM[4] ? lotM[4].replace(/,/g, "") : "", cbm: lotM[5] ? lotM[5].replace(/,/g, "") : "",
+        lotRef: lotM[2] || lotM[1], altRef: lotM[2] ? lotM[1] : "", unitCode: lotM[3],
+        caseNumbers: [], caseText: "", lotCases: null,
+        pkgs: "", kg: lotM[5] ? lotM[5].replace(/,/g, "") : "", cbm: lotM[6] ? lotM[6].replace(/,/g, "") : "",
         shkNumber: ctx.shkNumber,
       };
-      if (lotM[3]) mergeLotMark(lot, parseCaseMark(lotM[3]));
+      if (lotM[4]) mergeLotMark(lot, parseCaseMark(lotM[4]));
       cur.lots.push(lot);
       if (lot.kg || lot.cbm) cur.figuresAfterLots = true;
       awaitingMark = false;
@@ -5804,7 +5823,9 @@ function parseJobSheetBlocks(rows) {
     // sheets the case marking too, sitting in its own column: "C/S NO. | 1-16/16 | 16 | PKGS".
     if (/^C\/S\s*NO\.?/i.test(cells.find(Boolean) || "")) {
       for (const cell of cells.slice(1)) {
-        if (!/^#?\s*\d[\d\s,\-]*\/\s*\d+\s*$/.test(cell)) continue;
+        // Must contain a "/n" lot size, or the PKGS count in the next column would be read
+        // as a case marking of its own.
+        if (!/^#?\s*\d[\d\s,\-]*\/\s*\d+[\d\s,\-\/]*$/.test(cell)) continue;
         if (cur.lots.length) mergeLotMark(cur.lots[cur.lots.length - 1], parseCaseMark(cell));
         break;
       }
@@ -6090,7 +6111,8 @@ function guessFieldsFromWorkbook(wb) {
 // be repeated after every case rather than stated once at the end. A trailing note in
 // brackets ("1/1 (17/F)") is a floor reference, not part of the numbering.
 function parseCaseSpec(spec) {
-  let s = String(spec || "").replace(/\([^)]*\)/g, " ").trim();
+  // The marking is stored with the "#" it was written with, so take that off first.
+  let s = String(spec || "").replace(/\([^)]*\)/g, " ").replace(/#/g, " ").trim();
   if (!s) return { codes: [], numbers: [], lotCases: null };
   const totals = [...s.matchAll(/\/\s*(\d+)/g)].map((m) => Number(m[1]));
   const lotCases = totals.length ? totals[totals.length - 1] : null;
@@ -6626,7 +6648,7 @@ function SharedDeclaredTotal({ group, value, onPatch, colors, t, inputClass, inp
     </div>
   );
 }
-function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnrich, onProcessAll, processing, processDisabled, colors, t, lang }) {
+function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnrich, onAddIncoming, onProcessAll, processing, processDisabled, colors, t, lang }) {
   const inputStyle = inputStyleFor(colors);
   const set = (k) => (e) => onChange({ ...row, [k]: e.target.value });
   const itemized = JOB_SHEET_ITEMIZED.includes(row.docType);
@@ -6665,6 +6687,43 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
   // "共:" lines and editable, because a scanned or hand-typed sheet won't always parse.
   const declaredByIncoming = row.declaredByIncoming || {};
   const incomingListedFor = (inc) => sumSelectedPackages(inc.packages, selectedByIncoming[inc.id] || []);
+  // A Devan/CFS sheet names its lots and the cases in each, so where the packing list was
+  // never filed - the older Gage Street jobs, whose account officer left before they were
+  // entered - the sheet itself is enough to build one from. The cases come off the C/S NO.
+  // marking and the lot's stated weight and volume are spread evenly across them, which is
+  // all the sheet claims: it gives a figure per lot, never per case.
+  const sheetLots = (row.refBlocks || []).flatMap((b) => b.lots || [])
+    .map((lot) => {
+      const { codes } = parseCaseSpec(lot.caseText || "");
+      return { lotRef: lot.lotRef || "", altRef: lot.altRef || "", unitCode: lot.unitCode || "", codes, kg: lot.kg || "", cbm: lot.cbm || "" };
+    })
+    .filter((lot) => lot.codes.length);
+  function createPackingListFromSheet() {
+    if (!onAddIncoming || !sheetLots.length) return;
+    onAddIncoming(sheetLots.map((lot) => {
+      const n = lot.codes.length;
+      const per = (total, i) => {
+        const value = Number(total) || 0;
+        if (!value) return "";
+        const each = Math.round((value / n) * 100) / 100;
+        // The last case carries the rounding so the cases still add to the stated total.
+        return String(i === n - 1 ? Math.round((value - each * (n - 1)) * 100) / 100 : each);
+      };
+      return {
+        client: row.client,
+        project: row.projectEn || row.projectZh || "",
+        constructionSite: row.projectZh || "",
+        jobRef: row.jobRef || "",
+        shkNumber: row.shkNumber || "",
+        unitCode: lot.unitCode,
+        packages: lot.codes.map((code, i) => ({
+          code, orderNo: lot.lotRef, description: "ELEVATOR PARTS",
+          weightKg: per(lot.kg, i), cbm: per(lot.cbm, i),
+        })),
+        notes: t.legacyPackingListFromSheetNote((row.file && row.file.name) || row.jobNumber || ""),
+      };
+    }));
+  }
   const declaredIncomingGroups = groupDeclaredLots(row.declaredTotalsList, matchedIncomings);
   const declaredIncomingDist = distributeDeclaredAcrossLots(
     row.declaredTotalsList, matchedIncomings, incomingListedFor, row.declaredByGroup || {}
@@ -7047,6 +7106,27 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
         >
           {processing ? t.legacyProcessingMsg : t.saveBtn}
         </button>
+      )}
+      {canMatchIncoming && matchedIncomings.length === 0 && matchedItems.length === 0 && sheetLots.length > 0 && onAddIncoming && (
+        <div className="rounded p-3" style={{ background: colors.amberSoft, border: `1px solid ${colors.amber}` }}>
+          <div className="text-sm font-semibold mb-1" style={{ color: colors.amberText }}>{t.legacyNoPackingListTitle}</div>
+          <div className="text-xs mb-2" style={{ color: colors.amberText }}>{t.legacyNoPackingListDesc}</div>
+          {sheetLots.map((lot, li) => (
+            <div key={li} className="text-xs flex flex-wrap gap-3" style={{ color: colors.ink }}>
+              <span style={{ fontFamily: FONT_MONO, minWidth: 190 }}>{lot.lotRef}{lot.unitCode ? ` / ${lot.unitCode}` : ""}</span>
+              <span style={{ minWidth: 190 }}>{lot.codes.join(", ")}</span>
+              <span style={{ fontFamily: FONT_MONO }}>{lot.kg ? `${lot.kg} kg` : "\u2014"} · {lot.cbm ? `${lot.cbm} cbm` : "\u2014"}</span>
+            </div>
+          ))}
+          <button
+            type="button"
+            className="px-3 py-1.5 rounded text-xs font-semibold mt-2"
+            style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY }}
+            onClick={createPackingListFromSheet}
+          >
+            {t.legacyCreatePackingListBtn(sheetLots.length)}
+          </button>
+        </div>
       )}
       {matchedIncomings.length > 0 && (
         <div className="rounded p-3" style={{ background: colors.greenSoft, border: `1px solid ${colors.green}` }}>
@@ -7698,7 +7778,7 @@ function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, 
   );
 }
 
-function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, onLegacyCheckIn, onLegacyCheckInBatch, directory, onLegacyImport, onLegacyDeliver, onLegacyEnrich, colors, t, lang }) {
+function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, onLegacyCheckIn, onLegacyCheckInBatch, directory, onLegacyImport, onLegacyDeliver, onLegacyEnrich, onAddIncoming, colors, t, lang }) {
   const [rows, setRows] = useState([]);
   const [processing, setProcessing] = useState(false);
   const [results, setResults] = useState(null);
@@ -8196,7 +8276,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
       {rows.length > 0 && (
         <div className="flex flex-col gap-3">
           {rows.map((row, idx) => (
-            <LegacyUploadRow key={idx} row={row} onChange={(next) => updateRow(idx, next)} onRemove={() => removeRow(idx)} incoming={incoming} items={items} onLegacyEnrich={onLegacyEnrich} onProcessAll={processAll} processing={processing} processDisabled={processing || rows.some((r) => !r.projectEn && !r.projectZh) || rows.some((r) => !r.client)} colors={colors} t={t} lang={lang} />
+            <LegacyUploadRow key={idx} row={row} onChange={(next) => updateRow(idx, next)} onRemove={() => removeRow(idx)} incoming={incoming} items={items} onLegacyEnrich={onLegacyEnrich} onAddIncoming={onAddIncoming} onProcessAll={processAll} processing={processing} processDisabled={processing || rows.some((r) => !r.projectEn && !r.projectZh) || rows.some((r) => !r.client)} colors={colors} t={t} lang={lang} />
           ))}
           {rows.some((r) => !r.client) && (
             <div className="px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>
@@ -8840,7 +8920,7 @@ function UploadPanel({ onImportRows, onAddIncoming, existingItems, directory, se
         <ImportPanel onImportRows={onImportRows} onAddIncoming={onAddIncoming} existingItems={existingItems} directory={directory} setDirectory={setDirectory} colors={colors} t={t} lang={lang} hideExcelMode />
       )}
       {mode === "legacy" && (
-        <LegacyUploadsPanel legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} incoming={incoming} onLegacyCheckIn={onLegacyCheckIn} onLegacyCheckInBatch={onLegacyCheckInBatch} directory={directory} onLegacyImport={onLegacyImport} onLegacyDeliver={onLegacyDeliver} onLegacyEnrich={onLegacyEnrich} colors={colors} t={t} lang={lang} />
+        <LegacyUploadsPanel legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} incoming={incoming} onLegacyCheckIn={onLegacyCheckIn} onLegacyCheckInBatch={onLegacyCheckInBatch} directory={directory} onLegacyImport={onLegacyImport} onLegacyDeliver={onLegacyDeliver} onLegacyEnrich={onLegacyEnrich} onAddIncoming={onAddIncoming} colors={colors} t={t} lang={lang} />
       )}
     </div>
   );
