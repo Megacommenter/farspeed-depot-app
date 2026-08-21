@@ -1260,12 +1260,11 @@ const TEXT = {
     tabPdf: "PDF Scan",
     tabManualPackingList: "Manual Entry",
     manualLotBuilderLabel: "Build a lot from the job sheet",
-    manualLotBuilderHint: "Type the C/S NO. marking exactly as it appears (1,2,3/3 \u00b7 1-12/23 \u00b7 1/2, 2/2) and the cases are made for you, with the lot's stated weight and volume split evenly across them. Adjust any case below afterwards.",
+    manualLotBuilderHint: "One CFS sheet often names several lots. Fill this row for each and press Add lot \u2014 they collect below and go in together. Type the C/S NO. marking exactly as it appears (1,2,3/3 \u00b7 1-12/23 \u00b7 1/2, 2/2); the cases are made for you and the lot's stated weight and volume split evenly across them. For a lot whose case codes aren't plain numbers, leave C/S No. empty and list them under Itemized Packages instead.",
     manualOrderNoLabel: "Order no.",
     manualCaseSpecLabel: "C/S No.",
-    manualBuildCasesBtn: "Make cases",
+    manualAddLotBtn: "Add lot",
     manualCaseSpecPreview: (n, codes) => `${n} case${n === 1 ? "" : "s"}: ${codes}`,
-    manualAddAnotherLotBtn: "Save lot, start another",
     manualPendingLotsLabel: (n) => `${n} lot${n === 1 ? "" : "s"} ready to add`,
     manualUnnamedLot: "(unnamed lot)",
     legacySameOrderWarn: (orders) => `Order no. ${orders} also appears on another shipment at this site \u2014 the same lot is filed twice under different names, so check which one this file's cases belong to.`,
@@ -1940,12 +1939,11 @@ const TEXT = {
     tabPdf: "掃描PDF",
     tabManualPackingList: "手動輸入",
     manualLotBuilderLabel: "由工單建立批次",
-    manualLotBuilderHint: "按工單原文輸入 C/S NO.（1,2,3/3 \u00b7 1-12/23 \u00b7 1/2, 2/2），系統會自動建立各件，並將該批次之重量及體積平均分配。之後可逐件修改。",
+    manualLotBuilderHint: "一張CFS工單通常包含多個批次。逐一填寫此列並按「新增批次」，各批次會列於下方並一併加入。按工單原文輸入 C/S NO.（1,2,3/3 \u00b7 1-12/23 \u00b7 1/2, 2/2），系統會自動建立各件並平均分配重量及體積。若件號並非純數字，可留空 C/S No.，改於下方逐件輸入。",
     manualOrderNoLabel: "訂單號",
     manualCaseSpecLabel: "貨箱編號",
-    manualBuildCasesBtn: "建立貨箱",
+    manualAddLotBtn: "新增批次",
     manualCaseSpecPreview: (n, codes) => `共 ${n} 件：${codes}`,
-    manualAddAnotherLotBtn: "儲存此批次，再輸入下一個",
     manualPendingLotsLabel: (n) => `已備妥 ${n} 個批次`,
     manualUnnamedLot: "（未命名批次）",
     legacySameOrderWarn: (orders) => `訂單號 ${orders} 亦見於本地盤另一批到貨記錄 \u2014 同一批貨以不同名稱重複記錄，請確認此檔案之貨箱屬於哪一項。`,
@@ -7518,6 +7516,7 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
 // officer left before the records were entered - so the Devan/CFS sheet has something to
 // check its cases into.
 function ManualPackingListEntry({ onClose, onAddIncoming, existingItems, directory, setDirectory, colors, t }) {
+  const [showOlderSites, setShowOlderSites] = useState(false);
   const [manualForm, setManualForm] = useState({
     client: CLIENTS[0], project: "", constructionSite: "", orderedBy: "", jobRef: "", shkNumber: "", unitCode: "", directoryId: "", saveToDirectory: false, packages: [],
   });
@@ -7538,7 +7537,7 @@ function ManualPackingListEntry({ onClose, onAddIncoming, existingItems, directo
   // figures stay editable afterwards for anyone who knows better.
   function buildLotCases() {
     const { codes } = parseCaseSpec(manualLotDraft.caseSpec);
-    if (!codes.length) return;
+    if (!codes.length) return [];
     const n = codes.length;
     const kg = Number(manualLotDraft.kg) || 0;
     const cbm = Number(manualLotDraft.cbm) || 0;
@@ -7548,21 +7547,24 @@ function ManualPackingListEntry({ onClose, onAddIncoming, existingItems, directo
       const each = Math.round((total / n) * 100) / 100;
       return String(i === n - 1 ? Math.round((total - each * (n - 1)) * 100) / 100 : each);
     };
-    setManualForm((f) => ({
-      ...f,
-      packages: codes.map((code, i) => ({
-        code, orderNo: manualLotDraft.orderNo || "",
-        description: manualLotDraft.description || "",
-        weightKg: per(kg, i), cbm: per(cbm, i),
-      })),
+    return codes.map((code, i) => ({
+      code, orderNo: manualLotDraft.orderNo || "",
+      description: manualLotDraft.description || "",
+      weightKg: per(kg, i), cbm: per(cbm, i),
     }));
   }
-  function stashManualLot() {
-    if (!(manualForm.packages || []).length) return;
+  // One action per lot: the cases are made from the C/S NO. marking, or taken from the
+  // itemized list below for a lot whose codes are not plain numbers, and the lot is parked
+  // in the list. A CFS sheet naming four lots is four presses and one submit, rather than
+  // four separate packing lists.
+  function addLot() {
+    const built = buildLotCases();
+    const packages = built.length ? built : (manualForm.packages || []);
+    if (!packages.length) return;
     setManualLots((prev) => [...prev, {
       unitCode: manualForm.unitCode || "",
       orderNo: manualLotDraft.orderNo || "",
-      packages: manualForm.packages,
+      packages,
     }]);
     setManualForm((f) => ({ ...f, unitCode: "", packages: [] }));
     setManualLotDraft({ orderNo: "", caseSpec: "", description: "ELEVATOR PARTS", kg: "", cbm: "" });
@@ -7616,9 +7618,44 @@ function ManualPackingListEntry({ onClose, onAddIncoming, existingItems, directo
         <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
           <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.tabManualPackingList}</h3>
           <p className="text-sm mb-4" style={{ color: colors.inkFaint }}>{t.manualPackingListDesc}</p>
+          <div className="mb-4">
+            <Field label={t.packingListFillFromDirectory} colors={colors}>
+              <select
+                className={inputClass}
+                style={{ ...inputStyle, minWidth: 320 }}
+                value={manualForm.directoryId || ""}
+                onChange={(e) => {
+                  const site = (directory || []).find((d) => d.id === e.target.value);
+                  if (!site) { setManualForm((f) => ({ ...f, directoryId: "" })); return; }
+                  setManualForm((f) => ({
+                    ...f,
+                    directoryId: site.id,
+                    client: site.client || f.client,
+                    project: site.siteEn || f.project,
+                    constructionSite: site.siteZh || site.siteEn || f.constructionSite,
+                    jobRef: site.jobRef || f.jobRef,
+                    orderedBy: site.orderedBy || f.orderedBy,
+                    saveToDirectory: false,
+                  }));
+                }}
+              >
+                <option value="">{t.selectFromDirectoryPlaceholder}</option>
+                {visibleDirectory(directory, { client: manualForm.client, showOlder: showOlderSites, items: existingItems }).map((site) => (
+                  <option key={site.id} value={site.id}>{site.siteEn} \u2014 {site.client}</option>
+                ))}
+              </select>
+            </Field>
+            <label className="flex items-center gap-1.5 text-xs mt-1.5" style={{ color: colors.inkFaint }}>
+              <input type="checkbox" checked={showOlderSites} onChange={(e) => setShowOlderSites(e.target.checked)} />
+              {t.showOlderJobs}
+              {!showOlderSites && hiddenSiteCount(directory, { client: manualForm.client, items: existingItems }) > 0 && (
+                <span>{t.showOlderJobsCount(hiddenSiteCount(directory, { client: manualForm.client, items: existingItems }))}</span>
+              )}
+            </label>
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
             <Field label={t.packingListApplyClient} colors={colors}>
-              <select className={inputClass} style={inputStyle} value={manualForm.client} onChange={(e) => setManualForm((f) => ({ ...f, client: e.target.value }))}>
+              <select className={inputClass} style={inputStyle} value={manualForm.client} onChange={(e) => setManualForm((f) => ({ ...f, client: e.target.value, directoryId: "" }))}>
                 {CLIENTS.map((c) => <option key={c}>{c}</option>)}
               </select>
             </Field>
@@ -7640,9 +7677,7 @@ function ManualPackingListEntry({ onClose, onAddIncoming, existingItems, directo
             <Field label={t.fReference} hint={t.fReferenceHint} colors={colors}>
               <input className={inputClass} style={inputStyle} value={manualForm.shkNumber} onChange={(e) => setManualForm((f) => ({ ...f, shkNumber: e.target.value }))} />
             </Field>
-            <Field label={t.legacyUnitCode} colors={colors}>
-              <input className={inputClass} style={inputStyle} value={manualForm.unitCode} onChange={(e) => setManualForm((f) => ({ ...f, unitCode: e.target.value }))} />
-            </Field>
+
           </div>
           {!manualForm.directoryId && manualForm.project && (
             <label className="flex items-center gap-2 mt-4 text-sm" style={{ color: colors.inkFaint }}>
@@ -7656,6 +7691,10 @@ function ManualPackingListEntry({ onClose, onAddIncoming, existingItems, directo
             </div>
             <div className="text-[11px] mb-2" style={{ color: colors.inkFaint }}>{t.manualLotBuilderHint}</div>
             <div className="flex flex-wrap items-end gap-2">
+              <Field label={t.legacyUnitCode} colors={colors}>
+                <input className={inputClass} style={{ ...inputStyle, width: 120 }} value={manualForm.unitCode}
+                  onChange={(e) => setManualForm((f) => ({ ...f, unitCode: e.target.value }))} placeholder="P3" />
+              </Field>
               <Field label={t.manualOrderNoLabel} colors={colors}>
                 <input className={inputClass} style={{ ...inputStyle, width: 130 }} value={manualLotDraft.orderNo}
                   onChange={(e) => setManualLotDraft((d) => ({ ...d, orderNo: e.target.value }))} placeholder="60737177" />
@@ -7678,8 +7717,8 @@ function ManualPackingListEntry({ onClose, onAddIncoming, existingItems, directo
               </Field>
               <button className="px-3 py-2 rounded text-xs font-semibold"
                 style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}
-                onClick={buildLotCases}>
-                {t.manualBuildCasesBtn}
+                onClick={addLot}>
+                {t.manualAddLotBtn}
               </button>
             </div>
             {parseCaseSpec(manualLotDraft.caseSpec).codes.length > 0 && (
@@ -7711,14 +7750,6 @@ function ManualPackingListEntry({ onClose, onAddIncoming, existingItems, directo
             onClick={addManualToIncoming}
           >
             {t.packingListAddToIncomingBtn(manualPendingCount)}
-          </button>
-          <button
-            className="px-4 py-2 rounded text-sm font-semibold w-fit"
-            style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY, opacity: (manualForm.packages || []).length ? 1 : 0.5 }}
-            disabled={!(manualForm.packages || []).length}
-            onClick={stashManualLot}
-          >
-            {t.manualAddAnotherLotBtn}
           </button>
         </div>
       </div>
