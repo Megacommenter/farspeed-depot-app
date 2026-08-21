@@ -1259,6 +1259,18 @@ const TEXT = {
     tabExcel: "Excel Upload",
     tabPdf: "PDF Scan",
     tabManualPackingList: "Manual Entry",
+    manualLotBuilderLabel: "Build a lot from the job sheet",
+    manualLotBuilderHint: "Type the C/S NO. marking exactly as it appears (1,2,3/3 \u00b7 1-12/23 \u00b7 1/2, 2/2) and the cases are made for you, with the lot's stated weight and volume split evenly across them. Adjust any case below afterwards.",
+    manualOrderNoLabel: "Order no.",
+    manualCaseSpecLabel: "C/S No.",
+    manualBuildCasesBtn: "Make cases",
+    manualCaseSpecPreview: (n, codes) => `${n} case${n === 1 ? "" : "s"}: ${codes}`,
+    manualAddAnotherLotBtn: "Save lot, start another",
+    manualPendingLotsLabel: (n) => `${n} lot${n === 1 ? "" : "s"} ready to add`,
+    manualUnnamedLot: "(unnamed lot)",
+    legacySameOrderWarn: (orders) => `Order no. ${orders} also appears on another shipment at this site \u2014 the same lot is filed twice under different names, so check which one this file's cases belong to.`,
+    legacySameOrderSibling: (id, unit, n) => `${id} \u00b7 ${unit} \u00b7 ${n} case${n === 1 ? "" : "s"} not yet checked in`,
+    legacySameOrderOnlyThere: (codes) => `has ${codes}, which this one does not`,
     manualPackingListDesc: "For older jobs with no packing list file, or one that's incomplete \u2014 type in the case list by hand. This creates one Incoming shipment the same way an uploaded file would, ready to check in via Devan/CFS.",
     legacyManualEntryNote: "Manually entered \u2014 no packing list file on file for this shipment.",
     excelTitle: "Import from Excel",
@@ -1922,6 +1934,18 @@ const TEXT = {
     tabExcel: "上載Excel",
     tabPdf: "掃描PDF",
     tabManualPackingList: "手動輸入",
+    manualLotBuilderLabel: "由工單建立批次",
+    manualLotBuilderHint: "按工單原文輸入 C/S NO.（1,2,3/3 \u00b7 1-12/23 \u00b7 1/2, 2/2），系統會自動建立各件，並將該批次之重量及體積平均分配。之後可逐件修改。",
+    manualOrderNoLabel: "訂單號",
+    manualCaseSpecLabel: "貨箱編號",
+    manualBuildCasesBtn: "建立貨箱",
+    manualCaseSpecPreview: (n, codes) => `共 ${n} 件：${codes}`,
+    manualAddAnotherLotBtn: "儲存此批次，再輸入下一個",
+    manualPendingLotsLabel: (n) => `已備妥 ${n} 個批次`,
+    manualUnnamedLot: "（未命名批次）",
+    legacySameOrderWarn: (orders) => `訂單號 ${orders} 亦見於本地盤另一批到貨記錄 \u2014 同一批貨以不同名稱重複記錄，請確認此檔案之貨箱屬於哪一項。`,
+    legacySameOrderSibling: (id, unit, n) => `${id} \u00b7 ${unit} \u00b7 尚有 ${n} 件未入倉`,
+    legacySameOrderOnlyThere: (codes) => `該項有 ${codes}，此項則沒有`,
     manualPackingListDesc: "適用於較舊、沒有裝箱單檔案或資料不完整的工作 \u2014 直接手動輸入件號清單。此操作會建立一項待到倉貨件，效果與上載檔案相同，可於拆櫃/CFS辦理到倉。",
     legacyManualEntryNote: "手動輸入 \u2014 此貨件沒有裝箱單檔案存檔。",
     excelTitle: "從Excel匯入",
@@ -6061,6 +6085,21 @@ function guessFieldsFromWorkbook(wb) {
   return out;
 }
 
+// Reads a C/S NO. marking off a job sheet into case codes. The notation varies even
+// within one sheet - "1-12/23", "1,2,3/3", "1/2, 2/2", "1,3,4,5/5" - and the lot size may
+// be repeated after every case rather than stated once at the end. A trailing note in
+// brackets ("1/1 (17/F)") is a floor reference, not part of the numbering.
+function parseCaseSpec(spec) {
+  let s = String(spec || "").replace(/\([^)]*\)/g, " ").trim();
+  if (!s) return { codes: [], numbers: [], lotCases: null };
+  const totals = [...s.matchAll(/\/\s*(\d+)/g)].map((m) => Number(m[1]));
+  const lotCases = totals.length ? totals[totals.length - 1] : null;
+  s = s.replace(/\/\s*\d+/g, " ").replace(/\s+/g, " ").trim();
+  if (!/^[\d\s,\-]+$/.test(s)) return { codes: [], numbers: [], lotCases };
+  const numbers = [...parseRangeInput(s)].sort((a, b) => a - b);
+  const codes = numbers.map((n) => (lotCases ? `${n}/${lotCases}` : String(n)));
+  return { codes, numbers, lotCases };
+}
 function siteKeyFor(en, zh) {
   return [(en || "").trim().toLowerCase(), (zh || "").trim()].filter(Boolean);
 }
@@ -7043,6 +7082,16 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
               const oversize = getOversizeFor(inc);
               const declared = getDeclaredFor(inc);
               const variance = computeDeclaredVariance(totals, declared);
+              // Two Incoming records can hold the same lot under different labels - the
+              // Gage Street site has 60701670 filed once as "L5" and again as "L5 1st
+              // batch", and the cases this file is looking for sit in only one of them.
+              // Where a sibling shares an order number, say so and say what it holds, so
+              // the right one can be picked rather than guessed at.
+              const myOrders = new Set((inc.packages || []).map((p) => String(p.orderNo || "").trim()).filter(Boolean));
+              const sameOrderSiblings = myOrders.size
+                ? matchedIncomings.filter((other) => other.id !== inc.id
+                    && (other.packages || []).some((p) => myOrders.has(String(p.orderNo || "").trim())))
+                : [];
               return (
                 <div key={inc.id} style={{ borderTop: `1px solid ${colors.green}`, paddingTop: 10 }}>
                   <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
@@ -7113,6 +7162,23 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
                         </div>
                       )}
                       <div className="text-xs" style={{ color: colors.inkFaint }}>{t.legacyDeclaredHint}</div>
+                    </div>
+                  )}
+                  {sameOrderSiblings.length > 0 && (
+                    <div className="px-2 py-1.5 rounded text-xs mb-2" style={{ background: colors.amberSoft, color: colors.amberText }}>
+                      {t.legacySameOrderWarn([...myOrders].join(", "))}
+                      {sameOrderSiblings.map((other) => {
+                        const otherDone = new Set(other.checkedInCodes || []);
+                        const otherLeft = (other.packages || []).filter((p) => !otherDone.has(p.code));
+                        const mine = new Set(remainingPkgs.map((p) => p.code));
+                        const onlyThere = otherLeft.filter((p) => !mine.has(p.code)).map((p) => p.code);
+                        return (
+                          <div key={other.id}>
+                            {t.legacySameOrderSibling(other.id, other.unitCode || "\u2014", otherLeft.length)}
+                            {onlyThere.length > 0 && ` \u00b7 ${t.legacySameOrderOnlyThere(onlyThere.join(", "))}`}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                   <div className="flex flex-col gap-3">
@@ -8794,6 +8860,11 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
   const [manualForm, setManualForm] = useState({
     client: CLIENTS[0], project: "", constructionSite: "", orderedBy: "", jobRef: "", shkNumber: "", unitCode: "", directoryId: "", saveToDirectory: false, packages: [],
   });
+  // A job sheet names several lots under one heading - the 2512079 CFS covers four - so
+  // lots finished here are parked in this list while the next is entered, and all of them
+  // go to Incoming together.
+  const [manualLots, setManualLots] = useState([]);
+  const [manualLotDraft, setManualLotDraft] = useState({ orderNo: "", caseSpec: "", description: "ELEVATOR PARTS", kg: "", cbm: "" });
   const inputStyle = inputStyleFor(colors);
   const siteSuggestions = useMemo(() => {
     const fromDirectory = (directory || []).map((s) => s.siteEn).filter(Boolean);
@@ -9025,6 +9096,42 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
     setPlCommon(null);
   }
 
+  // Builds a lot's cases from the C/S NO. marking as written on the sheet, spreading the
+  // lot's stated weight and volume evenly across them. A job sheet gives a figure per lot,
+  // not per case, and an even split is the only honest reading of that - the per-case
+  // figures stay editable afterwards for anyone who knows better.
+  function buildLotCases() {
+    const { codes } = parseCaseSpec(manualLotDraft.caseSpec);
+    if (!codes.length) return;
+    const n = codes.length;
+    const kg = Number(manualLotDraft.kg) || 0;
+    const cbm = Number(manualLotDraft.cbm) || 0;
+    const per = (total, i) => {
+      if (!total) return "";
+      // The last case carries the rounding so the cases still add up to the stated total.
+      const each = Math.round((total / n) * 100) / 100;
+      return String(i === n - 1 ? Math.round((total - each * (n - 1)) * 100) / 100 : each);
+    };
+    setManualForm((f) => ({
+      ...f,
+      packages: codes.map((code, i) => ({
+        code, orderNo: manualLotDraft.orderNo || "",
+        description: manualLotDraft.description || "",
+        weightKg: per(kg, i), cbm: per(cbm, i),
+      })),
+    }));
+  }
+  function stashManualLot() {
+    if (!(manualForm.packages || []).length) return;
+    setManualLots((prev) => [...prev, {
+      unitCode: manualForm.unitCode || "",
+      orderNo: manualLotDraft.orderNo || "",
+      packages: manualForm.packages,
+    }]);
+    setManualForm((f) => ({ ...f, unitCode: "", packages: [] }));
+    setManualLotDraft({ orderNo: "", caseSpec: "", description: "ELEVATOR PARTS", kg: "", cbm: "" });
+  }
+  const manualPendingCount = manualLots.length + ((manualForm.packages || []).length ? 1 : 0);
   function addManualToIncoming() {
     let effectiveDirectoryId = manualForm.directoryId || "";
     if (manualForm.saveToDirectory && !manualForm.directoryId && manualForm.project) {
@@ -9040,7 +9147,13 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
       setDirectory((d) => [...d, newSite]);
       effectiveDirectoryId = newSite.id;
     }
-    onAddIncoming([{
+    const lots = [
+      ...manualLots,
+      ...((manualForm.packages || []).length
+        ? [{ unitCode: manualForm.unitCode || "", orderNo: manualLotDraft.orderNo || "", packages: manualForm.packages }]
+        : []),
+    ];
+    onAddIncoming(lots.map((lot) => ({
       client: manualForm.client,
       project: manualForm.project,
       constructionSite: manualForm.constructionSite || "",
@@ -9048,11 +9161,13 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
       orderedBy: manualForm.orderedBy || "",
       shkNumber: manualForm.shkNumber || "",
       directoryId: effectiveDirectoryId,
-      unitCode: manualForm.unitCode || "",
-      packages: manualForm.packages || [],
+      unitCode: lot.unitCode,
+      packages: lot.packages,
       notes: t.legacyManualEntryNote,
-    }]);
+    })));
     setManualForm({ client: CLIENTS[0], project: "", constructionSite: "", orderedBy: "", jobRef: "", shkNumber: "", unitCode: "", directoryId: "", saveToDirectory: false, packages: [] });
+    setManualLots([]);
+    setManualLotDraft({ orderNo: "", caseSpec: "", description: "ELEVATOR PARTS", kg: "", cbm: "" });
   }
 
   return (
@@ -9279,16 +9394,75 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                 {t.saveNewSiteToDirectory(manualForm.project)}
               </label>
             )}
+            <div className="rounded p-3 mt-4" style={{ border: `1px dashed ${colors.line}` }}>
+              <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
+                {t.manualLotBuilderLabel}
+              </div>
+              <div className="text-[11px] mb-2" style={{ color: colors.inkFaint }}>{t.manualLotBuilderHint}</div>
+              <div className="flex flex-wrap items-end gap-2">
+                <Field label={t.manualOrderNoLabel} colors={colors}>
+                  <input className={inputClass} style={{ ...inputStyle, width: 130 }} value={manualLotDraft.orderNo}
+                    onChange={(e) => setManualLotDraft((d) => ({ ...d, orderNo: e.target.value }))} placeholder="60737177" />
+                </Field>
+                <Field label={t.manualCaseSpecLabel} colors={colors}>
+                  <input className={inputClass} style={{ ...inputStyle, width: 150 }} value={manualLotDraft.caseSpec}
+                    onChange={(e) => setManualLotDraft((d) => ({ ...d, caseSpec: e.target.value }))} placeholder="1,2,3/3" />
+                </Field>
+                <Field label={t.fDescription} colors={colors}>
+                  <input className={inputClass} style={{ ...inputStyle, width: 180 }} value={manualLotDraft.description}
+                    onChange={(e) => setManualLotDraft((d) => ({ ...d, description: e.target.value }))} />
+                </Field>
+                <Field label={t.jsKgs} colors={colors}>
+                  <input type="number" min="0" step="0.01" className={inputClass} style={{ ...inputStyle, width: 110 }} value={manualLotDraft.kg}
+                    onChange={(e) => setManualLotDraft((d) => ({ ...d, kg: e.target.value }))} />
+                </Field>
+                <Field label={t.jsCbm} colors={colors}>
+                  <input type="number" min="0" step="0.001" className={inputClass} style={{ ...inputStyle, width: 100 }} value={manualLotDraft.cbm}
+                    onChange={(e) => setManualLotDraft((d) => ({ ...d, cbm: e.target.value }))} />
+                </Field>
+                <button className="px-3 py-2 rounded text-xs font-semibold"
+                  style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}
+                  onClick={buildLotCases}>
+                  {t.manualBuildCasesBtn}
+                </button>
+              </div>
+              {parseCaseSpec(manualLotDraft.caseSpec).codes.length > 0 && (
+                <div className="text-xs mt-2" style={{ color: colors.green }}>
+                  {t.manualCaseSpecPreview(parseCaseSpec(manualLotDraft.caseSpec).codes.length, parseCaseSpec(manualLotDraft.caseSpec).codes.join(", "))}
+                </div>
+              )}
+            </div>
             <PackagesEditor form={manualForm} setForm={setManualForm} colors={colors} t={t} />
+            {manualLots.length > 0 && (
+              <div className="rounded p-3 mt-3" style={{ background: colors.surfaceDim }}>
+                <div className="text-xs font-semibold mb-1" style={{ color: colors.ink }}>{t.manualPendingLotsLabel(manualLots.length)}</div>
+                {manualLots.map((lot, li) => (
+                  <div key={li} className="text-xs flex items-center gap-3" style={{ color: colors.ink }}>
+                    <span style={{ fontFamily: FONT_MONO, minWidth: 150 }}>{[lot.orderNo, lot.unitCode].filter(Boolean).join(" / ") || t.manualUnnamedLot}</span>
+                    <span className="flex-1">{lot.packages.map((p) => p.code).join(", ")}</span>
+                    <button className="font-semibold" style={{ color: colors.red }}
+                      onClick={() => setManualLots((prev) => prev.filter((_, i) => i !== li))}>{t.deleteBtn}</button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <div className="flex gap-2">
             <button
               className="px-4 py-2 rounded text-sm font-semibold w-fit"
-              style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY, opacity: (!manualForm.client || !(manualForm.project || manualForm.constructionSite) || (manualForm.packages || []).length === 0) ? 0.5 : 1 }}
-              disabled={!manualForm.client || !(manualForm.project || manualForm.constructionSite) || (manualForm.packages || []).length === 0}
+              style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY, opacity: (!manualForm.client || !(manualForm.project || manualForm.constructionSite) || manualPendingCount === 0) ? 0.5 : 1 }}
+              disabled={!manualForm.client || !(manualForm.project || manualForm.constructionSite) || manualPendingCount === 0}
               onClick={addManualToIncoming}
             >
-              {t.packingListAddToIncomingBtn(1)}
+              {t.packingListAddToIncomingBtn(manualPendingCount)}
+            </button>
+            <button
+              className="px-4 py-2 rounded text-sm font-semibold w-fit"
+              style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY, opacity: (manualForm.packages || []).length ? 1 : 0.5 }}
+              disabled={!(manualForm.packages || []).length}
+              onClick={stashManualLot}
+            >
+              {t.manualAddAnotherLotBtn}
             </button>
           </div>
         </div>
