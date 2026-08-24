@@ -1558,6 +1558,10 @@ const TEXT = {
     billingEstimatedNote: "* CBM split estimated from package count share (no per-case CBM available for the delivered/remaining split).",
     billingGrandTotal: "Grand Total",
     billingFootnote: "Ongoing rows are calculated up to today and will keep growing until the goods are marked delivered. Rates are set in Directory → CBM Pricing.",
+    billingSelectAllAria: "Select all entries shown",
+    billingSelectedCount: (entries, rows, total) => `${entries} entr${entries === 1 ? "y" : "ies"} selected \u2014 ${rows} billing row${rows === 1 ? "" : "s"}, ${total}`,
+    billingDeleteSelectedBtn: (n) => `Delete ${n} entr${n === 1 ? "y" : "ies"}`,
+    billingDeleteSelectedHint: "One password for the whole batch. Deleting an entry removes every billing row behind it, and its arrival and delivery records with it.",
     billingDeleteItemBtn: "Delete this entry (admin password required)",
     adminConfirmTitle: "Confirm Admin Action",
     adminConfirmDesc: (name) => `Re-enter ${name || "your"}'s password to continue. This permanently deletes the underlying inventory entry, not just this billing row.`,
@@ -2242,6 +2246,10 @@ const TEXT = {
     billingEstimatedNote: "＊按件數比例估算已送/餘下CBM分配（此記錄沒有逐件CBM資料）。",
     billingGrandTotal: "總計",
     billingFootnote: "計算中的項目按至今日計算，直至貨物標記為已送出才會停止累加。收費可於 目錄 → CBM 收費 設定。",
+    billingSelectAllAria: "選取畫面所有記錄",
+    billingSelectedCount: (entries, rows, total) => `已選 ${entries} 項記錄 \u2014 ${rows} 行收費，共 ${total}`,
+    billingDeleteSelectedBtn: (n) => `刪除 ${n} 項記錄`,
+    billingDeleteSelectedHint: "整批只需輸入一次密碼。刪除記錄會一併移除其所有收費行、到倉及送貨記錄。",
     billingDeleteItemBtn: "刪除此記錄（需要管理密碼）",
     adminConfirmTitle: "確認管理員操作",
     adminConfirmDesc: (name) => `請重新輸入 ${name || "您"} 的密碼以繼續。此操作會永久刪除相關的存倉記錄，不只是這一行帳單。`,
@@ -5070,6 +5078,12 @@ function BillingPanel({ items, invoices, setInvoices, onDeleteItem, authUser, co
   const [summaryMonth, setSummaryMonth] = useState(now.getMonth());
   const [expandedClient, setExpandedClient] = useState(null);
   const [pendingDeleteItem, setPendingDeleteItem] = useState(null);
+  // Selection is by entry, not by row: one entry can produce several billing rows (one per
+  // arrival batch), and deleting removes the entry behind all of them. Ticking any of its
+  // rows ticks them all, so what gets deleted is never a surprise.
+  const [selectedForDelete, setSelectedForDelete] = useState([]);
+  const [pendingDeleteMany, setPendingDeleteMany] = useState(false);
+
   const [expandedHandlingClient, setExpandedHandlingClient] = useState(null);
   const [expandedHandlingMonth, setExpandedHandlingMonth] = useState(null);
 
@@ -5116,6 +5130,12 @@ function BillingPanel({ items, invoices, setInvoices, onDeleteItem, authUser, co
   }, [allRows, search, filterClient, filterProject, filterJobNo]);
 
   const grandTotal = Math.round(filtered.reduce((s, r) => s + r.total, 0) * 100) / 100;
+  // The entries currently on screen, and what ticking them would remove: an entry may
+  // account for several rows, so both counts are shown before anyone confirms.
+  const visibleDeleteIds = [...new Set(filtered.map((r) => r.item.id))];
+  const selectedRows = filtered.filter((r) => selectedForDelete.includes(r.item.id));
+  const selectedRowCount = selectedRows.length;
+  const selectedRowTotal = Math.round(selectedRows.reduce((s, r) => s + r.total, 0) * 100) / 100;
 
   const [handlingYear, setHandlingYear] = useState(now.getFullYear());
   const handlingRows = useMemo(() => {
@@ -5297,10 +5317,38 @@ function BillingPanel({ items, invoices, setInvoices, onDeleteItem, authUser, co
 
       {mode === "search" && (
       <>
+        {selectedForDelete.length > 0 && (
+          <div className="rounded-lg px-4 py-3 mb-3 flex flex-wrap items-center gap-3" style={{ background: colors.redSoft, border: `1px solid ${colors.red}` }}>
+            <span className="text-sm font-semibold" style={{ color: colors.red }}>
+              {t.billingSelectedCount(selectedForDelete.length, selectedRowCount, money(selectedRowTotal))}
+            </span>
+            <button
+              className="px-3 py-1.5 rounded text-xs font-semibold"
+              style={{ background: colors.red, color: colors.onDark, fontFamily: FONT_DISPLAY }}
+              onClick={() => setPendingDeleteMany(true)}
+            >
+              {t.billingDeleteSelectedBtn(selectedForDelete.length)}
+            </button>
+            <button className="text-xs font-semibold" style={{ color: colors.red }} onClick={() => setSelectedForDelete([])}>
+              {t.clearBtn}
+            </button>
+            <span className="text-xs" style={{ color: colors.red }}>{t.billingDeleteSelectedHint}</span>
+          </div>
+        )}
         <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}` }}>
         <table className="w-full text-sm" style={{ background: colors.surface }}>
           <thead>
             <tr style={{ background: colors.surfaceDim }}>
+              <th className="px-3 py-2 w-8">
+                <input
+                  type="checkbox"
+                  aria-label={t.billingSelectAllAria}
+                  checked={visibleDeleteIds.length > 0 && visibleDeleteIds.every((id) => selectedForDelete.includes(id))}
+                  onChange={(e) => setSelectedForDelete(e.target.checked
+                    ? [...new Set([...selectedForDelete, ...visibleDeleteIds])]
+                    : selectedForDelete.filter((id) => !visibleDeleteIds.includes(id)))}
+                />
+              </th>
               {[t.billingColClient, t.billingColProject, t.billingColJobNo, t.billingColBatchDate, t.billingColCbm, t.billingColRate, t.billingColStatus, t.billingColTotal, "", ""].map((h, idx) => (
                 <th key={idx} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
               ))}
@@ -5308,7 +5356,7 @@ function BillingPanel({ items, invoices, setInvoices, onDeleteItem, authUser, co
           </thead>
           <tbody>
             {filtered.length === 0 && (
-              <tr><td colSpan={9} className="px-3 py-6 text-center text-sm" style={{ color: colors.inkFaint }}>{t.billingNoneMsg}</td></tr>
+              <tr><td colSpan={11} className="px-3 py-6 text-center text-sm" style={{ color: colors.inkFaint }}>{t.billingNoneMsg}</td></tr>
             )}
             {filtered.map((r, idx) => {
               const key = `${r.item.id}-${idx}`;
@@ -5316,6 +5364,15 @@ function BillingPanel({ items, invoices, setInvoices, onDeleteItem, authUser, co
               return (
                 <React.Fragment key={key}>
                   <tr style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink, cursor: "pointer" }} onClick={() => setExpanded(isOpen ? null : key)}>
+                    <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={selectedForDelete.includes(r.item.id)}
+                        onChange={(e) => setSelectedForDelete((prev) => (e.target.checked
+                          ? [...new Set([...prev, r.item.id])]
+                          : prev.filter((id) => id !== r.item.id)))}
+                      />
+                    </td>
                     <td className="px-3 py-2">{r.item.client}</td>
                     <td className="px-3 py-2">{r.item.constructionSite || r.item.project}</td>
                     <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{r.item.jobNumber || "—"}</td>
@@ -5342,7 +5399,7 @@ function BillingPanel({ items, invoices, setInvoices, onDeleteItem, authUser, co
                   </tr>
                   {isOpen && (
                     <tr style={{ background: colors.surfaceDim }}>
-                      <td colSpan={10} className="px-4 py-3">
+                      <td colSpan={11} className="px-4 py-3">
                         <div className="text-xs mb-2" style={{ color: colors.inkFaint }}>
                           {t.billingFreeDaysNote(r.freeDays)}{r.codes && r.codes.length > 0 ? ` · ${t.billingCasesLabel}: ${r.codes.join(", ")}` : ""}
                         </div>
@@ -5487,6 +5544,20 @@ function BillingPanel({ items, invoices, setInvoices, onDeleteItem, authUser, co
           </div>
           <div className="text-xs mt-2" style={{ color: colors.inkFaint }}>{t.billingHandlingFootnote}</div>
         </>
+      )}
+      {pendingDeleteMany && (
+        <AdminConfirmModal
+          authUser={authUser}
+          onConfirm={() => {
+            // One password for the batch, then the entries go in one pass.
+            selectedForDelete.forEach((id) => onDeleteItem(id));
+            setSelectedForDelete([]);
+            setPendingDeleteMany(false);
+          }}
+          onClose={() => setPendingDeleteMany(false)}
+          colors={colors}
+          t={t}
+        />
       )}
       {pendingDeleteItem && (
         <AdminConfirmModal
