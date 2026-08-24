@@ -1464,7 +1464,6 @@ const TEXT = {
     siteTotalsTitle: "CBM & KG Remaining by Construction Site",
     siteTotalsColSite: "Construction Site",
     siteTotalsColClient: "Client",
-    siteTotalsColItems: "Entries",
     siteTotalsColPkgs: "Pkgs Left",
     siteTotalsColCbm: "CBM Left",
     siteTotalsColKg: "KG Left",
@@ -2153,7 +2152,6 @@ const TEXT = {
     siteTotalsTitle: "各地盤存倉之CBM及KG",
     siteTotalsColSite: "地盤",
     siteTotalsColClient: "客戶",
-    siteTotalsColItems: "記錄數",
     siteTotalsColPkgs: "餘下件數",
     siteTotalsColCbm: "剩餘CBM",
     siteTotalsColKg: "剩餘KG",
@@ -10766,16 +10764,13 @@ export default function FarspeedInventory() {
           client: it.client,
           cbm: 0,
           kg: 0,
-          count: 0,
           pkgs: 0,
         };
       }
       map[key].cbm += remainingVolumeCbm(it);
       map[key].kg += remainingWeightKg(it);
-      map[key].count += 1;
-      // The cbm and kg beside this are what is still at the depot, so the case count has
-      // to be too - the entry count on its own read "4" for a site holding sixteen cases
-      // across four entries, which is not the number anyone is looking for here.
+      // Cases still at the depot, to match the cbm and kg beside it. Counting entries here
+      // instead read "4" for a site holding sixteen cases across four entries.
       map[key].pkgs += Math.max(0, totalUnits(it) - deliveredUnits(it));
     });
     return Object.values(map)
@@ -11154,14 +11149,14 @@ export default function FarspeedInventory() {
                 <table className="w-full text-sm" style={{ background: colors.surface }}>
                   <thead>
                     <tr style={{ background: colors.surfaceDim }}>
-                      {[t.siteTotalsColSite, t.siteTotalsColClient, t.siteTotalsColItems, t.siteTotalsColPkgs, t.siteTotalsColCbm, t.siteTotalsColKg].map((h) => (
+                      {[t.siteTotalsColSite, t.siteTotalsColClient, t.siteTotalsColPkgs, t.siteTotalsColCbm, t.siteTotalsColKg].map((h) => (
                         <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {siteTotals.length === 0 && (
-                      <tr><td colSpan={6} className="px-3 py-4 text-center text-sm" style={{ color: colors.inkFaint }}>{t.siteTotalsNoneMsg}</td></tr>
+                      <tr><td colSpan={5} className="px-3 py-4 text-center text-sm" style={{ color: colors.inkFaint }}>{t.siteTotalsNoneMsg}</td></tr>
                     )}
                     {siteTotals.map((s) => (
                       <tr key={s.key} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
@@ -11170,7 +11165,6 @@ export default function FarspeedInventory() {
                           {s.labelZh && <div className="text-xs" style={{ color: colors.inkFaint }}>{s.labelZh}</div>}
                         </td>
                         <td className="px-3 py-2">{s.client}</td>
-                        <td className="px-3 py-2">{s.count}</td>
                         <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{s.pkgs}</td>
                         <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{s.cbm}</td>
                         <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{s.kg}</td>
