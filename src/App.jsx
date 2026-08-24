@@ -7946,9 +7946,13 @@ function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, 
     if (!showCompleted && isComplete(inc)) return false;
     if (!search.trim()) return true;
     const q = search.toLowerCase();
+    // Searchable by the things written on the paperwork - the SHK reference and the
+    // order/commission number on the cases - as well as by site, lift and case code.
     return inc.client?.toLowerCase().includes(q) || inc.project?.toLowerCase().includes(q) ||
       inc.constructionSite?.toLowerCase().includes(q) || inc.unitCode?.toLowerCase().includes(q) ||
-      (inc.packages || []).some((p) => (p.code || "").toLowerCase().includes(q));
+      inc.shkNumber?.toLowerCase().includes(q) || inc.jobRef?.toLowerCase().includes(q) ||
+      (inc.packages || []).some((p) => (p.code || "").toLowerCase().includes(q)
+        || String(p.orderNo || "").toLowerCase().includes(q));
   });
 
   function getSel(id) { return selectedByShipment[id] || []; }
@@ -8052,7 +8056,15 @@ function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, 
                     {inc.client} · {inc.project || inc.constructionSite}{inc.unitCode ? ` \u00b7 ${inc.unitCode}` : ""}
                   </div>
                   <div className="text-xs" style={{ color: colors.inkFaint }}>
-                    {t.incomingCaseCount((inc.packages || []).length)}{inc.linkedItemId ? ` \u00b7 ${t.incomingLinkedTo(inc.linkedItemId)}` : ""}
+                    {[
+                      inc.shkNumber,
+                      // The order/commission numbers the cases carry. A shipment is looked
+                      // up by these as often as by its lift code, and several lots can sit
+                      // under one lift name, so they belong on the card.
+                      [...new Set((inc.packages || []).map((p) => String(p.orderNo || "").trim()).filter(Boolean))].slice(0, 3).join(", "),
+                      t.incomingCaseCount((inc.packages || []).length),
+                      inc.linkedItemId ? t.incomingLinkedTo(inc.linkedItemId) : "",
+                    ].filter(Boolean).join(" \u00b7 ")}
                   </div>
                 </div>
                 {complete ? (
