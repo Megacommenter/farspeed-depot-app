@@ -354,10 +354,15 @@ function matchField(header) {
 // lift no. like "L8 Batch 1") so each lot becomes its own manifest entry.
 const PL_HEADER_ALIASES = {
   containerNo: ["container no.", "container no", "container"],
-  caseNo: ["case no.", "case no", "case\nno", "case", "cases discript", "cases     discript", "pkg#", "pkg #", "pkg no.", "pkg no", "package no."],
+  caseNo: ["case no.", "case no", "case\nno", "case", "pkg#", "pkg #", "pkg no.", "pkg no", "package no."],
+  // Schindler's own packing lists carry two case columns: a "Case No" running straight
+  // through the whole list (1..12 across five lifts) and a "Cases Discript" numbering each
+  // lift's own cases ("1/3", "2/3", "3/3"). The job sheets mark the second - "C/S NO. 1-3/3"
+  // - so that is the numbering the depot works to, and it wins wherever it carries one.
+  caseMark: ["cases discript", "cases     discript", "cases\ndiscript", "case discript", "cases description"],
   qty: ["qty", "quantity", "qyt = quantity", "qyt"],
   lot: ["project no.", "project no", "lift name", "lift no.", "lift no", "lift", "sap no.", "sap no", "sap"],
-  orderNo: ["omc sales order no.", "omc sales order no", "sales order no.", "sales order no", "order no."],
+  orderNo: ["omc sales order no.", "omc sales order no", "sales order no.", "sales order no", "order no.", "com.no.", "com no.", "com no", "commission no.", "commission no"],
   description: ["description", "material description"],
   grossWeight: ["g.weight", "gross weight", "gross", "actual   weight", "actual weight", "g.w./kg", "g.w.", "g.w"],
   // Schindler's sheets carry an "Estimated weight" beside an "Actual weight". Despite the
@@ -517,7 +522,7 @@ function parsePackingListSheet(rows, legend) {
   const headerIdx = plDetectHeaderRow(rows);
   if (headerIdx === -1) return null;
   const colMap = plMapColumns(rows[headerIdx]);
-  if (colMap.lot === undefined && colMap.caseNo === undefined) return null;
+  if (colMap.lot === undefined && colMap.caseNo === undefined && colMap.caseMark === undefined) return null;
 
   // Translates a raw lot value (which may be a manufacturer part/SAP number, or several
   // comma-separated ones for cases shared across units) into friendly unit codes via the
@@ -554,7 +559,11 @@ function parsePackingListSheet(rows, legend) {
 
     const lot = colMap.lot !== undefined ? String(row[colMap.lot] || "").trim() : "";
     const container = colMap.containerNo !== undefined ? String(row[colMap.containerNo] || "").trim() : "";
-    const caseNo = colMap.caseNo !== undefined ? String(row[colMap.caseNo] || "").trim() : "";
+    // The per-lift marking wins where the row carries one; the running case number is the
+    // fallback for lists that only have the one column.
+    const caseMark = colMap.caseMark !== undefined ? String(row[colMap.caseMark] || "").trim() : "";
+    const plainCase = colMap.caseNo !== undefined ? String(row[colMap.caseNo] || "").trim() : "";
+    const caseNo = /^\s*\d+\s*\/\s*\d+\s*$/.test(caseMark) ? caseMark.replace(/\s+/g, "") : (plainCase || caseMark);
     const orderNo = colMap.orderNo !== undefined ? String(row[colMap.orderNo] || "").trim() : "";
     const description = colMap.description !== undefined ? String(row[colMap.description] || "").trim() : "";
     const grossVal = colMap.grossWeight !== undefined && row[colMap.grossWeight] !== "" && row[colMap.grossWeight] != null ? plNum(row[colMap.grossWeight]) : null;
@@ -1769,6 +1778,7 @@ const TEXT = {
     legacySheetCasesNote: (mark, n) => `Sheet marks ${mark} \u2014 ${n} case${n === 1 ? "" : "s"} pre-selected`,
     legacySheetCasesMissing: (list) => `case ${list} not at the depot`,
     legacyIncomingCasesMissing: (list) => `case ${list} is not on this shipment`,
+    legacyCasesFoundInMore: (n) => `\u2026 and ${n} more shipment${n === 1 ? "" : "s"} on this lot.`,
     legacySheetCasesAmbiguous: (mark, ids) => `Sheet marks ${mark}, but ${ids} both answer to this lot \u2014 nothing pre-selected, pick the cases yourself.`,
     legacyCasesFoundIn: (codes, id, unit) => `\u2192 ${id} \u00b7 ${unit} carries ${codes} under the same order number. Case numbers alone don't prove it's the same box \u2014 confirm against the paperwork before checking in there.`,
     legacyMisfiledCases: (codes, from) => `Case ${codes} sits under ${from}, but the lot size on the case number says it belongs here \u2014 the packing list's lift column had it wrong.`,
@@ -2452,6 +2462,7 @@ const TEXT = {
     legacySheetCasesNote: (mark, n) => `工單註明 ${mark} \u2014 已預先選取 ${n} 件`,
     legacySheetCasesMissing: (list) => `第 ${list} 件不在倉內`,
     legacyIncomingCasesMissing: (list) => `第 ${list} 件不在此批到貨內`,
+    legacyCasesFoundInMore: (n) => `\u2026另有 ${n} 批到貨屬同一批次。`,
     legacySheetCasesAmbiguous: (mark, ids) => `工單註明 ${mark}，但 ${ids} 均符合此批次 \u2014 未有預先選取，請自行選擇貨箱。`,
     legacyCasesFoundIn: (codes, id, unit) => `\u2192 ${id} \u00b7 ${unit} 以相同訂單號載有第 ${codes} 件。僅憑件號不足以確定為同一箱 \u2014 請先核對文件再於該項辦理到倉。`,
     legacyMisfiledCases: (codes, from) => `第 ${codes} 件現存於 ${from}，但件號所示之總件數顯示應屬此項 \u2014 裝箱單之梯號欄有誤。`,
@@ -6700,6 +6711,13 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
   // shipment does not hold one of them, saying which is missing turns "8 of 11" into
   // something answerable: on the 2605076 sheet, 21, 22 and 23 of lot 60701670/L5 are not in
   // INC-0222 at all, because that order is filed twice and they sit in the other record.
+  // A shipment is easier to recognise by what the paperwork calls it than by its FS number:
+  // the SHK reference it came in under, the order/commission number on its cases, and the
+  // lift it is for. Shown in that order wherever a shipment is named.
+  function incomingLabel(inc) {
+    const orders = incomingOrders(inc);
+    return [inc.shkNumber, orders.slice(0, 2).join(", "), inc.unitCode].filter(Boolean).join(" \u00b7 ") || "\u2014";
+  }
   function incomingOrders(inc) {
     return [...new Set((inc.packages || []).map((p) => String(p.orderNo || "").trim()).filter(Boolean))];
   }
@@ -6742,13 +6760,20 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
     // their own, since each packing list numbers its own cases.
     const elsewhere = [];
     if (missing.length) {
+      const myOrders = new Set(incomingOrders(inc));
       for (const other of matchedIncomings) {
         if (other.id === inc.id) continue;
+        // Only a shipment that is plausibly the same lot is worth pointing at. Matching on
+        // the case number alone listed every shipment on the site that happened to have a
+        // case 1, 2 or 3 - which is nearly all of them, and none of them relevant.
+        const sameOrder = incomingOrders(other).some((o) => myOrders.has(o));
+        const sameLift = !!inc.unitCode && lotTokenMatches(inc.unitCode, other.unitCode);
+        if (!sameOrder && !sameLift) continue;
         const otherDone = new Set(other.checkedInCodes || []);
         const found = (other.packages || [])
           .filter((p) => !otherDone.has(p.code) && sameLot(p.code) && missing.includes(codeLeadingNumber(p.code)))
           .map((p) => p.code);
-        if (found.length) elsewhere.push({ inc: other, codes: found });
+        if (found.length) elsewhere.push({ inc: other, codes: found, sameOrder });
       }
     }
     const shared = shipmentsSharingMark(inc);
@@ -7268,7 +7293,7 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
                 <div key={inc.id} style={{ borderTop: `1px solid ${colors.green}`, paddingTop: 10 }}>
                   <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
                     <div className="text-xs font-semibold" style={{ color: colors.green, fontFamily: FONT_DISPLAY }}>
-                      {t.legacyMatchedIncoming(inc.id)}{inc.unitCode ? ` \u00b7 ${inc.unitCode}` : ""}
+                      {t.legacyMatchedIncoming(inc.id)} {"\u00b7"} {incomingLabel(inc)}
                     </div>
                     <div className="flex items-center gap-2">
                       <input
@@ -7344,11 +7369,14 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
                       {sheetSel.missing.length > 0 && (
                         <span style={{ color: colors.red }}> {"\u00b7"} {t.legacyIncomingCasesMissing(sheetSel.missing.join(", "))}</span>
                       )}
-                      {sheetSel.elsewhere.map((e) => (
+                      {sheetSel.elsewhere.slice(0, 4).map((e) => (
                         <div key={e.inc.id} style={{ color: colors.amberText }}>
-                          {t.legacyCasesFoundIn(e.codes.join(", "), e.inc.id, e.inc.unitCode || "\u2014")}
+                          {t.legacyCasesFoundIn(e.codes.join(", "), e.inc.id, incomingLabel(e.inc))}
                         </div>
                       ))}
+                      {sheetSel.elsewhere.length > 4 && (
+                        <div style={{ color: colors.amberText }}>{t.legacyCasesFoundInMore(sheetSel.elsewhere.length - 4)}</div>
+                      )}
                     </div>
                   )}
                   {sameOrderSiblings.length > 0 && (
@@ -7361,7 +7389,7 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
                         const onlyThere = otherLeft.filter((p) => !mine.has(p.code)).map((p) => p.code);
                         return (
                           <div key={other.id}>
-                            {t.legacySameOrderSibling(other.id, other.unitCode || "\u2014", otherLeft.length)}
+                            {t.legacySameOrderSibling(other.id, incomingLabel(other), otherLeft.length)}
                             {onlyThere.length > 0 && ` \u00b7 ${t.legacySameOrderOnlyThere(onlyThere.join(", "))}`}
                           </div>
                         );
