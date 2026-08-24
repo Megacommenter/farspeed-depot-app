@@ -738,6 +738,100 @@ function parsePackingListSheet(rows, legend) {
 // even when no per-case table was found. Per-case weight and volume are shared evenly,
 // which is an estimate, but keeps storage billing (which is charged on per-case CBM)
 // working instead of silently pricing the lot at zero.
+// Mitsubishi's factory packing list (装箱清单) is laid out nothing like Schindler's: no
+// column headers over a case table, but a header block stating the totals in Chinese -
+// 总净重 net weight, 总毛重 gross weight, 总体积 volume, 总箱数 case count - above a long
+// listing where each case is announced by a two-part number in the 箱号/CASE NUMBER column
+// ("A21" then "01", "C31" then "01-4-2") and everything under it is that case's contents.
+//
+// So the cases are counted from those announcements and checked against the stated 总箱数,
+// and the weight and volume come off the header rather than being summed. The gross weight
+// is the one taken: that is what the depot stores and bills on.
+function plCjkLabelledNumber(rows, needles) {
+  for (const row of rows || []) {
+    for (let i = 0; i < row.length; i++) {
+      const cell = String(row[i] == null ? "" : row[i]);
+      if (!needles.some((n) => cell.includes(n))) continue;
+      for (let j = i + 1; j < row.length; j++) {
+        const v = plNum(row[j]);
+        if (v > 0) return v;
+      }
+    }
+  }
+  return 0;
+}
+function plCjkLabelledText(rows, needles) {
+  for (const row of rows || []) {
+    for (let i = 0; i < row.length; i++) {
+      const cell = String(row[i] == null ? "" : row[i]);
+      if (!needles.some((n) => cell.includes(n))) continue;
+      for (let j = i + 1; j < row.length; j++) {
+        const v = String(row[j] == null ? "" : row[j]).trim();
+        if (v) return v;
+      }
+    }
+  }
+  return "";
+}
+function parseMitsubishiPackingList(rows) {
+  const cases = Number(plCjkLabelledNumber(rows, ["\u603b\u7bb1\u6570", "packing amount"]));
+  const gross = plCjkLabelledNumber(rows, ["\u603b\u6bdb\u91cd", "gross weight"]);
+  const net = plCjkLabelledNumber(rows, ["\u603b\u51c0\u91cd", "net weight"]);
+  const cbm = plCjkLabelledNumber(rows, ["\u603b\u4f53\u79ef", "cubicmeter", "volume,cubic"]);
+  if (!(cases > 0) || !(gross > 0 || net > 0)) return null;
+
+  // Find the 箱号/CASE NUMBER column, then read the case identifiers announced under it.
+  let headerRow = -1, caseCol = -1;
+  for (let r = 0; r < rows.length && headerRow < 0; r++) {
+    for (let c = 0; c < (rows[r] || []).length; c++) {
+      const cell = String(rows[r][c] == null ? "" : rows[r][c]);
+      if (cell.includes("\u7bb1\u53f7") || /case\s*number/i.test(cell)) { headerRow = r; caseCol = c; break; }
+    }
+  }
+  const codes = [];
+  if (caseCol >= 0) {
+    const skip = ["\u6346\u5305\u5305\u88c5", "BUNDLE", "CASE", "\uff08\u5c01\u95ed\uff09\u6728\u7bb1", "\u7bb1\u53f7"];
+    for (let r = headerRow + 1; r < rows.length; r++) {
+      const raw = String((rows[r] || [])[caseCol] == null ? "" : rows[r][caseCol]).trim();
+      if (!raw || skip.some((k) => raw.includes(k)) || /case\s*number/i.test(raw)) continue;
+      // The case number is split across two columns: a type prefix and a running number.
+      let suffix = "";
+      for (let c = caseCol + 1; c < Math.min(caseCol + 6, (rows[r] || []).length); c++) {
+        const v = String(rows[r][c] == null ? "" : rows[r][c]).trim();
+        if (v) { suffix = v; break; }
+      }
+      if (!suffix) continue;
+      const code = `${raw}-${suffix}`;
+      if (!codes.includes(code)) codes.push(code);
+    }
+  }
+  // The stated count is what the factory certifies; where the listing disagrees, take the
+  // stated one and number the remainder plainly rather than quietly shipping a short list.
+  const list = codes.length === cases ? codes : Array.from({ length: cases }, (_, i) => `${i + 1}/${cases}`);
+  const weight = gross > 0 ? gross : net;
+  const per = (total, i) => {
+    if (!total) return "";
+    const each = Math.round((total / list.length) * 1000) / 1000;
+    return String(i === list.length - 1 ? Math.round((total - each * (list.length - 1)) * 1000) / 1000 : each);
+  };
+  const description = plCjkLabelledText(rows, ["\u4ea7\u54c1\u540d\u79f0", "product name"]) || "ELEVATOR PARTS";
+  const lot = plCjkLabelledText(rows, ["\u8ba2\u5355\u53f7", "order number"])
+    || plCjkLabelledText(rows, ["\u5408\u540c\u53f7", "contract number"]) || "";
+  return {
+    groups: [{
+      lot: lot || "UNSPECIFIED",
+      containers: [],
+      totalWeight: weight,
+      totalCbm: cbm,
+      packages: list.map((code, i) => ({
+        code, orderNo: "", description,
+        weightKg: per(weight, i), cbm: per(cbm, i),
+      })),
+    }],
+    client: plCjkLabelledText(rows, ["\u987e\u5ba2\u540d\u79f0", "consignee"]),
+    project: plCjkLabelledText(rows, ["\u5927\u697c\u540d\u79f0", "building name"]),
+  };
+}
 function parsePackingListSummarySheet(rows) {
   const labelled = (labels) => {
     for (const row of rows || []) {
@@ -813,6 +907,18 @@ function parsePackingListWorkbook(workbook) {
     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: true });
     if (!client) client = plGuessClient(rows);
     if (!project) project = plGuessProject(rows);
+    // The Mitsubishi 装箱清单 is tried first: its header block states 总箱数 and 总毛重
+    // outright, which is a far stronger signal than the generic reader's column sniffing -
+    // left to itself that reader mistakes the 箱号 column for a case table and returns one
+    // "package" per announcement line, weightless, at roughly twice the true case count.
+    const mitsubishi = parseMitsubishiPackingList(rows);
+    if (mitsubishi) {
+      bestGroups = mitsubishi.groups;
+      bestHasLotColumn = true;
+      if (!client) client = mitsubishi.client;
+      if (!project) project = mitsubishi.project;
+      break;
+    }
     const { legend } = plGuessMarksBlock(rows);
     const result = parsePackingListSheet(rows, legend);
     if (!result || !result.groups || result.groups.length === 0) continue;
