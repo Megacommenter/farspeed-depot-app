@@ -5066,7 +5066,7 @@ function InvoiceEditor({ draft, onChange, onSave, onCancel, items, monthNames, y
     </div>
   );
 }
-function BillingPanel({ items, invoices, setInvoices, onDeleteItem, authUser, colors, t, lang }) {
+function BillingPanel({ items, invoices, setInvoices, onDeleteItem, onDeleteItems, authUser, colors, t, lang }) {
   const now = new Date();
   const [mode, setMode] = useState("search");
   const [search, setSearch] = useState("");
@@ -5549,8 +5549,9 @@ function BillingPanel({ items, invoices, setInvoices, onDeleteItem, authUser, co
         <AdminConfirmModal
           authUser={authUser}
           onConfirm={() => {
-            // One password for the batch, then the entries go in one pass.
-            selectedForDelete.forEach((id) => onDeleteItem(id));
+            // One password for the batch, and one write: see handleDeleteMany.
+            if (onDeleteItems) onDeleteItems(selectedForDelete);
+            else selectedForDelete.forEach((id) => onDeleteItem(id));
             setSelectedForDelete([]);
             setPendingDeleteMany(false);
           }}
@@ -10587,6 +10588,14 @@ export default function FarspeedInventory() {
   function handleDelete(id) {
     persist(items.filter((i) => i.id !== id));
   }
+  // Deleting several at once has to be one pass. Calling handleDelete in a loop computed
+  // every removal from the same snapshot of `items`, so each write undid the one before it
+  // and only the last entry actually went.
+  function handleDeleteMany(ids) {
+    const gone = new Set(ids || []);
+    if (!gone.size) return;
+    persist(items.filter((i) => !gone.has(i.id)));
+  }
 
   function handleAddDelivery(delivery, itemId) {
     const record = { ...delivery, id: `D${Date.now()}${Math.floor(Math.random() * 1000)}` };
@@ -11543,7 +11552,7 @@ export default function FarspeedInventory() {
         )}
 
         {view === "billing" && (
-          <BillingPanel items={items} invoices={invoices} setInvoices={setInvoices} onDeleteItem={handleDelete} authUser={authUser} colors={colors} t={t} lang={lang} />
+          <BillingPanel items={items} invoices={invoices} setInvoices={setInvoices} onDeleteItem={handleDelete} onDeleteItems={handleDeleteMany} authUser={authUser} colors={colors} t={t} lang={lang} />
         )}
 
         {view === "directory" && (
