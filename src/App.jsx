@@ -1626,6 +1626,13 @@ const TEXT = {
     billingYearLabel: "Year",
     billingMonthNoneMsg: "No storage charges fall in this month.",
     billingMonthFootnote: "Each client's total is what should match their MYOB invoice for this month — use this to double-check before billing. Click a client to see every line item behind their total.",
+    jobLogSearchPlaceholder: "Job no., site, job ref, lift, SHK\u2026",
+    jobLogFromLabel: "From",
+    jobLogToLabel: "To",
+    jobLogNoMatchMsg: "No job sheets match these filters.",
+    jobLogCount: (shown, total, jobs) => shown === total
+      ? `${total} sheet${total === 1 ? "" : "s"} \u00b7 ${jobs} job number${jobs === 1 ? "" : "s"}`
+      : `${shown} of ${total} sheets \u00b7 ${jobs} job number${jobs === 1 ? "" : "s"}`,
     jobLogTitle: "All Job Numbers Used",
     jobLogDesc: "Every Devan, CFS, and Delivery job number ever created, most recent first. Click any row to view and reprint that job sheet.",
     jobLogColJobNo: "Job No.",
@@ -2314,6 +2321,13 @@ const TEXT = {
     billingYearLabel: "年份",
     billingMonthNoneMsg: "此月份沒有存倉收費。",
     billingMonthFootnote: "各客戶總額應與其MYOB該月發票金額相符，可用作出單前核對。點擊客戶可查看組成總額的每一項明細。",
+    jobLogSearchPlaceholder: "工單號、地盤、地盤代號、梯號、SHK⋯",
+    jobLogFromLabel: "由",
+    jobLogToLabel: "至",
+    jobLogNoMatchMsg: "沒有符合篩選條件的工單。",
+    jobLogCount: (shown, total, jobs) => shown === total
+      ? `共 ${total} 張工單 \u00b7 ${jobs} 個單號`
+      : `${total} 張工單中的 ${shown} 張 \u00b7 ${jobs} 個單號`,
     jobLogTitle: "所有已使用的工作單號",
     jobLogDesc: "所有曾建立的Devan、CFS及送貨單號，最新在前。點擊任何一行可查看及重印該工單。",
     jobLogColJobNo: "單號",
@@ -10805,8 +10819,48 @@ export default function FarspeedInventory() {
         }
       });
     });
-    return rows.sort((a, b) => b.jobNumber.localeCompare(a.jobNumber));
+    // Job numbers are issued in sequence, so sorting them numerically keeps 2608099 before
+    // 2608100 rather than after it, the way a plain string sort would have it.
+    return rows.sort((a, b) => b.jobNumber.localeCompare(a.jobNumber, undefined, { numeric: true })
+      || String(b.date || "").localeCompare(String(a.date || "")));
   }, [items]);
+
+  // Job Log filters. Options come from the log itself, so a filter can never come back
+  // empty, and job numbers sort in sequence - the order they were issued in, which is how
+  // a gap or a reuse shows itself.
+  const [jobLogSearch, setJobLogSearch] = useState("");
+  const [jobLogType, setJobLogType] = useState("All");
+  const [jobLogClient, setJobLogClient] = useState("All");
+  const [jobLogSite, setJobLogSite] = useState("All");
+  const [jobLogRecordedBy, setJobLogRecordedBy] = useState("All");
+  const [jobLogFrom, setJobLogFrom] = useState("");
+  const [jobLogTo, setJobLogTo] = useState("");
+  const jobLogOptions = useMemo(() => {
+    const grab = (key) => [...new Set(jobLog.map((r) => String(r[key] || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    return { clients: grab("client"), sites: grab("site"), recordedBy: grab("recordedBy") };
+  }, [jobLog]);
+  const jobLogFiltered = useMemo(() => jobLog.filter((r) => {
+    if (jobLogType !== "All" && r.type !== jobLogType) return false;
+    if (jobLogClient !== "All" && String(r.client || "").trim() !== jobLogClient) return false;
+    if (jobLogSite !== "All" && String(r.site || "").trim() !== jobLogSite) return false;
+    if (jobLogRecordedBy !== "All" && String(r.recordedBy || "").trim() !== jobLogRecordedBy) return false;
+    if (jobLogFrom && (!r.date || r.date < jobLogFrom)) return false;
+    if (jobLogTo && (!r.date || r.date > jobLogTo)) return false;
+    if (!jobLogSearch.trim()) return true;
+    const q = jobLogSearch.toLowerCase();
+    return [r.jobNumber, r.type, r.client, r.site, r.recordedBy,
+      r.sheet && r.sheet.item ? r.sheet.item.jobRef : "",
+      r.sheet && r.sheet.item ? r.sheet.item.unitCode : "",
+      r.sheet && r.sheet.item ? r.sheet.item.shkNumber : "",
+      r.sheet && r.sheet.item ? r.sheet.item.constructionSite : "",
+    ].some((v) => String(v || "").toLowerCase().includes(q));
+  }), [jobLog, jobLogSearch, jobLogType, jobLogClient, jobLogSite, jobLogRecordedBy, jobLogFrom, jobLogTo]);
+  const jobLogFiltersOn = [jobLogType, jobLogClient, jobLogSite, jobLogRecordedBy].some((v) => v !== "All")
+    || !!jobLogSearch.trim() || !!jobLogFrom || !!jobLogTo;
+  function clearJobLogFilters() {
+    setJobLogSearch(""); setJobLogType("All"); setJobLogClient("All");
+    setJobLogSite("All"); setJobLogRecordedBy("All"); setJobLogFrom(""); setJobLogTo("");
+  }
 
   const cancelledJobs = useMemo(() => {
     const rows = [];
@@ -11565,7 +11619,54 @@ export default function FarspeedInventory() {
           <div className="flex flex-col gap-4">
             <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
               <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.jobLogTitle}</h3>
-              <p className="text-sm" style={{ color: colors.inkFaint }}>{t.jobLogDesc}</p>
+              <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.jobLogDesc}</p>
+              <div className="flex flex-wrap gap-3 items-end">
+                <Field label={t.searchLabel} colors={colors}>
+                  <input className={inputClass} style={{ ...inputStyleFor(colors), minWidth: 220 }}
+                    placeholder={t.jobLogSearchPlaceholder}
+                    value={jobLogSearch} onChange={(e) => setJobLogSearch(e.target.value)} />
+                </Field>
+                <Field label={t.jobLogColType} colors={colors}>
+                  <select className={inputClass} style={inputStyleFor(colors)} value={jobLogType} onChange={(e) => setJobLogType(e.target.value)}>
+                    <option value="All">{t.statusAll}</option>
+                    <option value="Devan">{t.jsDevanType}</option>
+                    <option value="CFS">{t.jsCfsType}</option>
+                    <option value="Delivery">{t.jsDeliveryType}</option>
+                  </select>
+                </Field>
+                <Field label={t.jobLogColClient} colors={colors}>
+                  <select className={inputClass} style={inputStyleFor(colors)} value={jobLogClient} onChange={(e) => setJobLogClient(e.target.value)}>
+                    <option value="All">{t.statusAll}</option>
+                    {jobLogOptions.clients.map((c) => <option key={c}>{c}</option>)}
+                  </select>
+                </Field>
+                <Field label={t.jobLogColSite} colors={colors}>
+                  <select className={inputClass} style={{ ...inputStyleFor(colors), maxWidth: 240 }} value={jobLogSite} onChange={(e) => setJobLogSite(e.target.value)}>
+                    <option value="All">{t.statusAll}</option>
+                    {jobLogOptions.sites.map((v) => <option key={v}>{v}</option>)}
+                  </select>
+                </Field>
+                <Field label={t.jobLogColRecordedBy} colors={colors}>
+                  <select className={inputClass} style={inputStyleFor(colors)} value={jobLogRecordedBy} onChange={(e) => setJobLogRecordedBy(e.target.value)}>
+                    <option value="All">{t.statusAll}</option>
+                    {jobLogOptions.recordedBy.map((v) => <option key={v}>{v}</option>)}
+                  </select>
+                </Field>
+                <Field label={t.jobLogFromLabel} colors={colors}>
+                  <input type="date" className={inputClass} style={inputStyleFor(colors)} value={jobLogFrom} onChange={(e) => setJobLogFrom(e.target.value)} />
+                </Field>
+                <Field label={t.jobLogToLabel} colors={colors}>
+                  <input type="date" className={inputClass} style={inputStyleFor(colors)} value={jobLogTo} onChange={(e) => setJobLogTo(e.target.value)} />
+                </Field>
+                {jobLogFiltersOn && (
+                  <button className="text-xs font-semibold pb-2" style={{ color: colors.amberText }} onClick={clearJobLogFilters}>
+                    {t.clearBtn}
+                  </button>
+                )}
+              </div>
+              <div className="text-xs mt-2" style={{ color: colors.inkFaint }}>
+                {t.jobLogCount(jobLogFiltered.length, jobLog.length, new Set(jobLogFiltered.map((r) => r.jobNumber)).size)}
+              </div>
             </div>
             <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}` }}>
               <table className="w-full text-sm" style={{ background: colors.surface }}>
@@ -11577,10 +11678,10 @@ export default function FarspeedInventory() {
                   </tr>
                 </thead>
                 <tbody>
-                  {jobLog.length === 0 && (
-                    <tr><td colSpan={7} className="px-3 py-6 text-center text-sm" style={{ color: colors.inkFaint }}>{t.jobLogNoneMsg}</td></tr>
+                  {jobLogFiltered.length === 0 && (
+                    <tr><td colSpan={7} className="px-3 py-6 text-center text-sm" style={{ color: colors.inkFaint }}>{jobLogFiltersOn ? t.jobLogNoMatchMsg : t.jobLogNoneMsg}</td></tr>
                   )}
-                  {jobLog.map((row, idx) => (
+                  {jobLogFiltered.map((row, idx) => (
                     <tr key={idx} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
                       <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{row.jobNumber}</td>
                       <td className="px-3 py-2">
