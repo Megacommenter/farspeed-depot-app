@@ -815,8 +815,13 @@ function parseMitsubishiPackingList(rows) {
     return String(i === list.length - 1 ? Math.round((total - each * (list.length - 1)) * 1000) / 1000 : each);
   };
   const description = plCjkLabelledText(rows, ["\u4ea7\u54c1\u540d\u79f0", "product name"]) || "ELEVATOR PARTS";
-  const lot = plCjkLabelledText(rows, ["\u8ba2\u5355\u53f7", "order number"])
-    || plCjkLabelledText(rows, ["\u5408\u540c\u53f7", "contract number"]) || "";
+  // The shipping mark - the leading number of 合同号, "1325003000 ZS1680-260350-OV0" - is
+  // the one identifier this factory list shares with the Delivery Memo that follows it, so
+  // it is the lot. The DM's own number is what these lots are ultimately filed under, but
+  // it does not exist yet when the factory list is written.
+  const contract = plCjkLabelledText(rows, ["\u5408\u540c\u53f7", "contract number"]);
+  const mark = (String(contract).trim().split(/\s+/)[0] || "").trim();
+  const lot = mark || plCjkLabelledText(rows, ["\u8ba2\u5355\u53f7", "order number"]) || "";
   return {
     groups: [{
       lot: lot || "UNSPECIFIED",
@@ -1895,6 +1900,7 @@ const TEXT = {
     legacyNoReferralHint: "No \"Ref Job no.\" line detected \u2014 enter the arrival's job number manually, or this file will only be archived.",
     legacySheetCasesNote: (mark, n) => `Sheet marks ${mark} \u2014 ${n} case${n === 1 ? "" : "s"} pre-selected`,
     legacySheetCasesMissing: (list) => `case ${list} not at the depot`,
+    legacyCaseCountMismatch: (lot, stated, listed) => `${lot}: the sheet says ${stated} PKGS but lists ${listed} case number${listed === 1 ? "" : "s"} \u2014 check the C/S No. list before processing.`,
     legacyIncomingCasesMissing: (list) => `case ${list} is not on this shipment`,
     legacyCasesFoundInMore: (n) => `\u2026 and ${n} more shipment${n === 1 ? "" : "s"} on this lot.`,
     legacySheetCasesAmbiguous: (mark, ids) => `Sheet marks ${mark}, but ${ids} both answer to this lot \u2014 nothing pre-selected, pick the cases yourself.`,
@@ -2591,6 +2597,7 @@ const TEXT = {
     legacyNoReferralHint: "未有偵測到「Ref Job no.」字句 — 請手動輸入到倉工單號，否則此檔案只會被存檔。",
     legacySheetCasesNote: (mark, n) => `工單註明 ${mark} \u2014 已預先選取 ${n} 件`,
     legacySheetCasesMissing: (list) => `第 ${list} 件不在倉內`,
+    legacyCaseCountMismatch: (lot, stated, listed) => `${lot}：工單註明 ${stated} 件，但只列出 ${listed} 個件號 \u2014 處理前請核對 C/S No. 清單。`,
     legacyIncomingCasesMissing: (list) => `第 ${list} 件不在此批到貨內`,
     legacyCasesFoundInMore: (n) => `\u2026另有 ${n} 批到貨屬同一批次。`,
     legacySheetCasesAmbiguous: (mark, ids) => `工單註明 ${mark}，但 ${ids} 均符合此批次 \u2014 未有預先選取，請自行選擇貨箱。`,
@@ -5966,7 +5973,13 @@ function parseJobSheetBlocks(rows) {
   for (const raw of rows || []) {
     const cells = (raw || []).map((c) => String(c == null ? "" : c).trim());
     const line = cells.filter(Boolean).join(" ").trim();
-    if (!line) continue;
+    if (!line) {
+      // A blank row ends a case list that has already started. The list itself may run over
+      // several rows with no gap between them, but once it stops, it stops.
+      const openLot = cur && cur.lots[cur.lots.length - 1];
+      if (openLot && (openLot.caseCodes || []).length) awaitingMark = false;
+      continue;
+    }
 
     const refM = line.match(/ref(?:er)?\.?\s*(?:to\s+)?job\s*no\.?\s*([A-Za-z0-9\-]+)\s*(?:on\s*([\d\/\.\- ]+\d))?/i);
     if (refM) { ctx = { shkNumber: "", liftNo: "" }; startBlock(refM[1].trim(), (refM[2] || "").trim()); continue; }
@@ -5976,7 +5989,7 @@ function parseJobSheetBlocks(rows) {
     if (/(?:共|total)\s*[:\uff1a]/i.test(line)) { cur = null; ctx = { shkNumber: "", liftNo: "" }; continue; }
 
     const shkM = line.match(/\bSHK\s*[-#]?\s*(\d{3,6})\s*\/\s*(\d{2})\b/i);
-    const liftM = line.match(/lift\s*no\.?\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-\.\/]*)/i);
+    const liftM = line.match(/lift\s*no\.?\s*[:\-]?\s*#?\s*([A-Za-z0-9][A-Za-z0-9\-\.\/]*)/i);
     if (shkM || liftM) {
       // A heading arriving after the open block has already stated its figures belongs to
       // what comes next, not to what just finished.
@@ -5985,6 +5998,31 @@ function parseJobSheetBlocks(rows) {
       if (liftM) { ctx.liftNo = liftM[1].trim(); if (cur) cur.liftNo = ctx.liftNo; }
     }
 
+    // Mitsubishi names a lot by its Delivery Memo number rather than an order/lift pair:
+    // "DM No. | 13-DM-26-0500 | S/M: | 1325003000" on one row, with the lift given above as
+    // "LIFT NO. #01-02". That DM number is what Irene files the cases under, so it becomes
+    // the lot reference and the shipping mark is kept alongside it.
+    if (/^DM\s*No\.?/i.test(cells.find(Boolean) || "")) {
+      const rest = cells.filter(Boolean).slice(1);
+      const dmNo = (rest.find((c) => /\d{1,3}\s*-\s*DM\s*-\s*\d{2}\s*-\s*\d{3,4}/i.test(c)) || "").trim();
+      const smIdx = rest.findIndex((c) => /^S\/M/i.test(c));
+      const shippingMark = smIdx >= 0 ? (rest[smIdx + 1] || "").trim() : "";
+      // A DM row is sometimes written before its number is issued - "DM No. 13-DM-26-" with
+      // the tail blank. The shipping mark beside it still identifies the lot, so the row is
+      // not thrown away for want of the number.
+      if (dmNo || shippingMark) {
+        if (closed(cur) && cur.figuresAfterLots) startBlock(cur.refJobNumber, cur.refDateRaw);
+        if (!cur) startBlock("", "");
+        cur.lots.push({
+          lotRef: (dmNo || shippingMark).replace(/\s+/g, ""),
+          altRef: dmNo ? shippingMark : "", unitCode: ctx.liftNo || "",
+          caseNumbers: [], caseCodes: [], caseText: "", lotCases: null,
+          pkgs: "", kg: "", cbm: "", shkNumber: ctx.shkNumber,
+        });
+        awaitingMark = false;
+        continue;
+      }
+    }
     // "60759188/L32-01", with its cases written inline ("'60766021/L52#3,7/19"), and/or its
     // own weight and volume trailing on the same line - "60778397/L34-02  3018.58 KGS  6.36
     // CBM" - which is how a sheet states figures per lot without a C/S NO. row for each.
@@ -6030,6 +6068,25 @@ function parseJobSheetBlocks(rows) {
       awaitingMark = false;
       continue;
     }
+    // Mitsubishi writes its cases as full markings rather than numbers - "01A2101,
+    // 02A2102, 01C3101-4-1" - wrapped across as many lines as it takes, each continuing
+    // line following on from the trailing comma of the one above. They are codes, not
+    // numbers, so they are kept as written and matched whole.
+    if (awaitingMark && /^[0-9A-Za-z][0-9A-Za-z\-]*(\s*,\s*[0-9A-Za-z][0-9A-Za-z\-]*)*\s*,?$/.test(line)
+        && /[A-Za-z]/.test(line)) {
+      const codes = line.split(",").map((c) => c.trim()).filter(Boolean);
+      const lot = cur.lots[cur.lots.length - 1];
+      if (lot) {
+        lot.caseCodes = [...(lot.caseCodes || []), ...codes];
+        lot.caseText = lot.caseCodes.join(", ");
+      }
+      // Stay open for the row below. The list runs on for as many rows as it takes and the
+      // trailing comma is not reliable - the 2606062 Devan breaks its twenty cases into two
+      // rows of ten with no comma at the end of the first, so keying on that read only the
+      // first lift's ten. A blank row or any other kind of line ends it instead.
+      awaitingMark = true;
+      continue;
+    }
     awaitingMark = false;
 
     // The C/S NO. row states the block's own package/weight/volume figures, and on some
@@ -6065,7 +6122,7 @@ function parseJobSheetBlocks(rows) {
       const hadFigures = closed(cur);
       if (!hadFigures && closed(cur) && cur.lots.length > 0) cur.figuresAfterLots = true;
       const lastLot = cur.lots[cur.lots.length - 1];
-      awaitingMark = !!lastLot && !(lastLot.caseNumbers || []).length;
+      awaitingMark = !!lastLot && !(lastLot.caseNumbers || []).length && !(lastLot.caseCodes || []).length;
       continue;
     }
   }
@@ -6134,8 +6191,29 @@ function guessFieldsFromWorkbook(wb) {
   // the two the delivery sheet managed to name.
   out.caseMarksByLot = {};
   out.caseMarksByRef = {};
+  // Cases written as full markings rather than numbers, keyed by the DM number, the
+  // shipping mark and the lift - whichever of the three the packing list was filed under.
+  out.caseCodesByLot = {};
+  // Where a lot states a package count and also lists its cases, the two should agree. A
+  // disagreement means the list was mis-read or the sheet is short, and either way it is
+  // worth saying so rather than quietly working from the shorter number.
+  out.caseCountMismatches = [];
   for (const b of out.refBlocks) {
     for (const lot of b.lots) {
+      if ((lot.caseCodes || []).length) {
+        const stated = Number(lot.pkgs);
+        if (stated > 0 && stated !== lot.caseCodes.length) {
+          out.caseCountMismatches.push({ lot: lot.lotRef || lot.unitCode || "", stated, listed: lot.caseCodes.length });
+        }
+        for (const key of [lot.lotRef, lot.altRef, lot.unitCode]) {
+          if (!key) continue;
+          const k = String(key).toUpperCase();
+          out.caseCodesByLot[k] = {
+            codes: [...new Set([...((out.caseCodesByLot[k] || {}).codes || []), ...lot.caseCodes])],
+            text: lot.caseText || "",
+          };
+        }
+      }
       if (!(lot.caseNumbers || []).length) continue;
       for (const key of [lot.unitCode, lot.lotRef, `${lot.lotRef}/${lot.unitCode}`]) {
         if (!key) continue;
@@ -6935,6 +7013,22 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
     return matchedIncomings.filter((other) => sheetMarkKeyForIncoming(other) === key);
   }
   function sheetSelectionForIncoming(inc) {
+    const byCode = row.caseCodesByLot || {};
+    const codeKeys = Object.keys(byCode);
+    const codeKey = codeKeys.find((k) => lotTokenMatches(inc.unitCode, k))
+      || codeKeys.find((k) => incomingOrders(inc).some((o) => lotTokenMatches(o, k)));
+    if (codeKey && (byCode[codeKey].codes || []).length) {
+      const done = new Set(inc.checkedInCodes || []);
+      const available = (inc.packages || []).filter((p) => !done.has(p.code));
+      const norm = (c) => String(c || "").toUpperCase().replace(/\s+/g, "");
+      const have = new Map(available.map((p) => [norm(p.code), p.code]));
+      const wanted = byCode[codeKey].codes;
+      return {
+        codes: wanted.map((c) => have.get(norm(c))).filter(Boolean),
+        missing: wanted.filter((c) => !have.has(norm(c))),
+        elsewhere: [], text: byCode[codeKey].text || "", shared: [],
+      };
+    }
     const mark = sheetMarkForIncoming(inc);
     if (!mark || !(mark.numbers || []).length) return null;
     const sameLot = (code) => {
@@ -7096,6 +7190,16 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
   // depot does not hold is reported rather than quietly dropped: this file reads "#3-7/34"
   // for L32-01 while case 3 has already gone, so four are ticked and case 3 is flagged -
   // which is exactly the "4 PKGS" the sheet declares for that block.
+  // Mitsubishi cases are markings, not numbers - "01C3101-4-1" - so they are matched whole
+  // against the codes the entry holds rather than by a leading number.
+  function sheetCodesFor(it) {
+    const byLot = row.caseCodesByLot || {};
+    const keys = Object.keys(byLot);
+    const hit = keys.find((k) => lotTokenMatches(it.unitCode, k))
+      || keys.find((k) => jobNosMatch(it.jobNumber, k))
+      || keys.find((k) => (it.packages || []).some((p) => lotTokenMatches(p.orderNo, k)));
+    return hit ? byLot[hit] : null;
+  }
   function sheetCasesFor(it) {
     const byLot = row.caseMarksByLot || {};
     const lotKey = Object.keys(byLot).find((k) => lotTokenMatches(it.unitCode, k));
@@ -7105,6 +7209,16 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
     return refKey ? byRef[refKey] : null;
   }
   function sheetSelectionFor(it) {
+    const coded = sheetCodesFor(it);
+    if (coded && (coded.codes || []).length) {
+      const deliverable = deliverablePackages(it);
+      // fall through to the shared shape below
+      const norm = (c) => String(c || "").toUpperCase().replace(/\s+/g, "");
+      const have = new Map(deliverable.map((p) => [norm(p.code), p.code]));
+      const codes = coded.codes.map((c) => have.get(norm(c))).filter(Boolean);
+      const missing = coded.codes.filter((c) => !have.has(norm(c)));
+      return { codes, missing, text: coded.text || "" };
+    }
     const mark = sheetCasesFor(it);
     if (!mark || !(mark.numbers || []).length) return null;
     // A case number only means something together with its lot size: "#4,6/20" is case 4
@@ -7825,6 +7939,13 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
       {(row.docType === "Devan" || row.docType === "CFS") && (
         <div className="text-xs" style={{ color: colors.inkFaint }}>{t.legacyArrivalStaysOpenHint}</div>
       )}
+      {(row.caseCountMismatches || []).length > 0 && (
+        <div className="px-2 py-1.5 rounded text-xs" style={{ background: colors.redSoft, color: colors.red }}>
+          {(row.caseCountMismatches || []).map((m, i) => (
+            <div key={i}>{t.legacyCaseCountMismatch(m.lot, m.stated, m.listed)}</div>
+          ))}
+        </div>
+      )}
       {row.docType === "Delivery" && matchedItems.length === 0 && (
         <div className="px-2 py-1.5 rounded text-xs" style={{ background: colors.redSoft, color: colors.red }}>
           {row.referJobNumber ? t.legacyNoArrivalFoundHint(row.referJobNumber) : t.legacyNoReferralHint}
@@ -8528,6 +8649,8 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
         declaredTotalsList: [],
         refBlocks: [],
         caseMarksByLot: {},
+        caseCodesByLot: {},
+        caseCountMismatches: [],
         caseMarksByRef: {},
         caseAutoApplied: {},
         autoDetected: false,
@@ -8558,6 +8681,8 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
             declaredTotalsList: guessed.declaredTotalsList || base.declaredTotalsList,
             refBlocks: guessed.refBlocks || base.refBlocks,
             caseMarksByLot: guessed.caseMarksByLot || base.caseMarksByLot,
+            caseCodesByLot: guessed.caseCodesByLot || base.caseCodesByLot,
+            caseCountMismatches: guessed.caseCountMismatches || [],
             caseMarksByRef: guessed.caseMarksByRef || base.caseMarksByRef,
             autoDetected: true,
           });
@@ -9629,8 +9754,8 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
 Follow these extraction rules exactly - they keep the output compact even for long, dense documents:
 
 1. Each row/block of the table is ONE case/package. For each case extract exactly these 5 things:
-   - "code": the case/box number as printed (e.g. "C01", "C21", "17A10A01").
-   - "lot": the lift/unit number. This is very often printed right next to the case number in parentheses, like "(#.01)" or "(#.23)" - extract just the number (e.g. "01", "23"). Different cases sharing the same case-number prefix (e.g. multiple "C21" cases) but different lift numbers are DIFFERENT packages in DIFFERENT lots. If there's no such lift marker anywhere, use the shop order number or another batch identifier as the lot instead.
+   - "code": the case/box number exactly as printed, letters and dashes included - "01A2101", "02C3102-3-1", "16D5416C", "C01". Never renumber or simplify them.
+   - "lot": for a Mitsubishi document, the Delivery Memo number - "13-DM-26-0500", printed as "DM No." - which is what these lots are filed under; fall back to the shipping mark (S/M) if the DM number is blank. Otherwise the lift/unit number. This is very often printed right next to the case number in parentheses, like "(#.01)" or "(#.23)" - extract just the number (e.g. "01", "23"). Different cases sharing the same case-number prefix (e.g. multiple "C21" cases) but different lift numbers are DIFFERENT packages in DIFFERENT lots. If there's no such lift marker anywhere, use the shop order number or another batch identifier as the lot instead.
    - "description": ONLY the general category/heading text for that case (e.g. "Guide Rail", "Rail Bracket", "Traction Machine", "Installation Material"). Do NOT list the individual part numbers or sub-components underneath it even if the document itemizes many - this is the single most important rule for keeping output size manageable on long documents.
    - "weightKg": use the GROSS weight (毛重 / GROSS column), not net weight - gross is what matters here.
    - "cbm": ONLY if a CBM/volume/m3 figure is printed directly for that case. If the document does not give one, use '' - do NOT try to work it out yourself.
