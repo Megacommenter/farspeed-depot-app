@@ -1373,6 +1373,7 @@ const TEXT = {
 
     tabExcel: "Excel Upload",
     tabPdf: "PDF Scan",
+    pdfTerminalDatesFound: (eta, lastFree) => `This document also gives terminal dates \u2014 arrival ${eta}, last free day ${lastFree}. Enter them on the entry when you check these cases in; they are not part of the packing list.`,
     tabManualPackingList: "Manual Entry",
     manualLotBuilderLabel: "Build a lot from the job sheet",
     manualLotBuilderHint: "One CFS sheet often names several lots. Fill this row for each and press Add lot \u2014 they collect below and go in together. Type the C/S NO. marking exactly as it appears (1,2,3/3 \u00b7 1-12/23 \u00b7 1/2, 2/2); the cases are made for you and the lot's stated weight and volume split evenly across them. For a lot whose case codes aren't plain numbers, leave C/S No. empty and list them under Itemized Packages instead.",
@@ -2068,6 +2069,7 @@ const TEXT = {
 
     tabExcel: "上載Excel",
     tabPdf: "掃描PDF",
+    pdfTerminalDatesFound: (eta, lastFree) => `此文件另有碼頭日期 \u2014 到港 ${eta}，免費倉期至 ${lastFree}。辦理到倉時請於記錄輸入；此並非裝箱單資料。`,
     tabManualPackingList: "手動輸入",
     manualLotBuilderLabel: "由工單建立批次",
     manualLotBuilderHint: "一張CFS工單通常包含多個批次。逐一填寫此列並按「新增批次」，各批次會列於下方並一併加入。按工單原文輸入 C/S NO.（1,2,3/3 \u00b7 1-12/23 \u00b7 1/2, 2/2），系統會自動建立各件並平均分配重量及體積。若件號並非純數字，可留空 C/S No.，改於下方逐件輸入。",
@@ -9576,6 +9578,9 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
   const [plCommon, setPlCommon] = useState(null);
   const [pdfStatus, setPdfStatus] = useState("idle"); // idle | scanning
   const [pdfError, setPdfError] = useState("");
+  // Terminal dates a release notice carries. They belong to the check-in rather than the
+  // packing list, so they are shown for copying across rather than silently dropped.
+  const [pdfTerminalDates, setPdfTerminalDates] = useState(null);
   const inputStyle = inputStyleFor(colors);
   const siteSuggestions = useMemo(() => {
     const fromDirectory = (directory || []).map((s) => s.siteEn).filter(Boolean);
@@ -9632,11 +9637,16 @@ Follow these extraction rules exactly - they keep the output compact even for lo
    - "length", "width", "height": that case's dimensions exactly as printed, as plain numbers. These are very often three separate columns headed "Length cm", "Width cm", "Height cm" (or L/W/H, 長/闊/高), but may instead be one combined cell like "500*20*20" or "500x20x20" - read either form. Use '' for any you cannot find. Do not convert or round them.
    - "dimUnit": the unit those dimensions are printed in - "cm" or "mm". Take it from the column heading or a nearby note. If nothing says, use "" rather than guessing.
 2. Group all cases by their lot/lift number into the "groups" array - one entry per distinct lot.
-2b. Also look for shipping/bill-of-lading details anywhere on the document: vessel/ship name (often after "ex ss." or 船名), voyage number, and container numbers. Combine them into one line for "ssDoNo" in roughly this style: ex ss."SHIP NAME" V.VOYAGE; CONTAINERS NO. XXXX/40GP. If none present, use ''.
+2b. Also look for shipping/bill-of-lading details anywhere on the document: vessel/ship name (often after "ex ss." or 船名), voyage number (航次), container numbers (貨櫃號), and bill-of-lading number (提單編號 / BL NO.). Combine them into one line for "ssDoNo" in roughly this style: ex ss."SHIP NAME" V.VOYAGE; CONTAINERS NO. XXXX/40GP. If none present, use ''. Also return them separately in "shipping".
+2c. IMPORTANT - many documents are NOT per-case tables at all. A Delivery Memo (DM), an arrival/release notice (到貨通知提貨單), or a shipping order states only the OVERALL totals - "29 Package(s)", "14.088 CBM", "12,909 Kgs", "29 件" - and then lists the case markings separately under a heading like "C/S NO." or "SHIPPING MARK", one marking per line, sometimes several comma-separated per line (e.g. "01C01,01C02,01C03"). For a document like that:
+   - put the stated totals in "statedPackages", "statedWeightKg" and "statedCbm" on the group;
+   - put every case marking, expanded from any comma-separated lines into individual entries, into "caseNumbers" on the group, exactly as printed;
+   - leave "packages" as an empty array. Do NOT invent per-case weights or volumes for these - the totals are all the document states.
+2d. Look for terminal/storage dates: the arrival/ETA date (到港日期 / ETA) as "terminalArrivalDate" and the last free storage day (免費倉期 ... 至) as "lastFreeDay", both as YYYY-MM-DD. Use '' if absent.
 3. Keep everything as compact as possible: short descriptions, no commentary, no repeated sub-item lists.
 
 Respond with ONLY a raw JSON object in EXACTLY this shape and nothing else (no markdown fences, no commentary, no explanation before or after):
-{"client": "best-guess client name or ''", "project": "site/building/project name found in the document, or ''", "ssDoNo": "vessel + voyage + container line or ''", "groups": [{"lot": "lift/lot/shop-order number identifying this batch", "containers": ["container numbers if any, else empty array"], "packages": [{"code": "case/package number", "description": "short category name, a few words only", "weightKg": number_or_empty_string, "cbm": number_or_empty_string, "length": number_or_empty_string, "width": number_or_empty_string, "height": number_or_empty_string, "dimUnit": "cm_or_mm_or_empty"}]}]}
+{"client": "best-guess client name or ''", "project": "site/building/project name found in the document, or ''", "ssDoNo": "vessel + voyage + container line or ''", "shipping": {"vessel": "", "voyage": "", "blNo": "", "containerNo": ""}, "terminalArrivalDate": "YYYY-MM-DD or ''", "lastFreeDay": "YYYY-MM-DD or ''", "groups": [{"lot": "lift/lot/shop-order number identifying this batch", "containers": ["container numbers if any, else empty array"], "statedPackages": number_or_empty_string, "statedWeightKg": number_or_empty_string, "statedCbm": number_or_empty_string, "caseNumbers": ["case markings, one per entry, only for totals-only documents"], "packages": [{"code": "case/package number", "description": "short category name, a few words only", "weightKg": number_or_empty_string, "cbm": number_or_empty_string, "length": number_or_empty_string, "width": number_or_empty_string, "height": number_or_empty_string, "dimUnit": "cm_or_mm_or_empty"}]}]}
 If the document only has one overall lot/shipment with no explicit lift/case breakdown, put everything under a single group with a sensible lot name.`;
       const response = await fetch("/api/scan-pdf", {
         method: "POST",
@@ -9677,7 +9687,46 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
         const divisor = unit === "cm" ? 1e6 : unit === "mm" ? 1e9 : (Math.max(l, w, h) < 400 ? 1e6 : 1e9);
         return Math.round((l * w * h / divisor) * 10000) / 10000;
       };
+      // A Delivery Memo or release notice states its totals once and lists the case
+      // markings separately - "29 Package(s) / 14.088 CBM / 12,909 Kgs" over a C/S NO.
+      // block. Those become one case per marking here, with the stated totals spread
+      // evenly across them, because the document says nothing per case. The last case
+      // carries the rounding so the cases still add up to what was stated.
+      const expandStatedGroup = (g) => {
+        const marks = (g.caseNumbers || [])
+          .flatMap((m) => String(m || "").split(","))
+          .map((m) => m.trim())
+          .filter(Boolean);
+        const stated = Number(g.statedPackages) || 0;
+        const codes = marks.length ? marks
+          : (stated > 0 ? Array.from({ length: stated }, (_, i) => `${i + 1}/${stated}`) : []);
+        if (!codes.length) return [];
+        const kg = Number(g.statedWeightKg) || 0;
+        const cbm = Number(g.statedCbm) || 0;
+        const per = (total, i, dp) => {
+          if (!total) return "";
+          const f = Math.pow(10, dp);
+          const each = Math.round((total / codes.length) * f) / f;
+          return String(i === codes.length - 1 ? Math.round((total - each * (codes.length - 1)) * f) / f : each);
+        };
+        return codes.map((code, i) => ({
+          code, description: g.description || "ELEVATOR PARTS",
+          weightKg: per(kg, i, 2), cbm: per(cbm, i, 3),
+        }));
+      };
       const normalizedGroups = (parsed.groups || []).map((g) => {
+        if (!(g.packages || []).length) {
+          const built = expandStatedGroup(g);
+          if (built.length) {
+            return {
+              lot: g.lot || "UNSPECIFIED",
+              containers: g.containers || [],
+              totalWeight: built.reduce((s2, p) => s2 + (Number(p.weightKg) || 0), 0),
+              totalCbm: built.reduce((s2, p) => s2 + (Number(p.cbm) || 0), 0),
+              packages: built,
+            };
+          }
+        }
         const packages = (g.packages || []).map((p) => {
           const stated = p.cbm !== "" && p.cbm != null ? Number(p.cbm) : null;
           const cbm = stated != null && stated > 0 ? stated : cbmFromDims(p);
@@ -9696,7 +9745,20 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
           packages,
         };
       });
-      const ok = applyParsedResult({ groups: normalizedGroups, client: parsed.client, project: parsed.project, ssDoNo: parsed.ssDoNo || "" });
+      // Compose the SS/D.O. line from the parts if the scan didn't put one together - a
+      // release notice gives vessel, voyage, container and B/L in four separate fields.
+      const sh = parsed.shipping || {};
+      const ssDoNo = parsed.ssDoNo || [
+        sh.vessel ? `ex ss."${sh.vessel}"` : "",
+        sh.voyage ? `V.${sh.voyage}` : "",
+        sh.containerNo ? `CONTAINERS NO. ${sh.containerNo}` : "",
+        sh.blNo ? `B/L ${sh.blNo}` : "",
+      ].filter(Boolean).join("; ");
+      setPdfTerminalDates({
+        terminalArrivalDate: parsed.terminalArrivalDate || "",
+        lastFreeDay: parsed.lastFreeDay || "",
+      });
+      const ok = applyParsedResult({ groups: normalizedGroups, client: parsed.client, project: parsed.project, ssDoNo });
       if (!ok) setPdfError(t.packingListNoStructure);
       setPdfStatus("idle");
     } catch (err) {
@@ -9849,6 +9911,11 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
             </label>
             {pdfStatus === "scanning" && <div className="text-sm" style={{ color: colors.inkFaint }}>{t.scanningMsg}</div>}
             {pdfError && <div className="px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>{pdfError}</div>}
+            {pdfTerminalDates && (pdfTerminalDates.terminalArrivalDate || pdfTerminalDates.lastFreeDay) && (
+              <div className="px-3 py-2 rounded text-sm" style={{ background: colors.amberSoft, color: colors.amberText }}>
+                {t.pdfTerminalDatesFound(pdfTerminalDates.terminalArrivalDate || "\u2014", pdfTerminalDates.lastFreeDay || "\u2014")}
+              </div>
+            )}
           </div>
         </div>
       )}
