@@ -1378,6 +1378,8 @@ const TEXT = {
 
     tabExcel: "Excel Upload",
     tabPdf: "PDF Scan",
+    pdfDuplicateCases: (lot, codes) => `${lot}: case ${codes} appears more than once, which will double-count its weight. Check it against the paper before importing.`,
+    pdfCaseCountMismatch: (lot, stated, read) => `${lot}: the document states ${stated} package${stated === 1 ? "" : "s"} but ${read} case number${read === 1 ? "" : "s"} were read \u2014 check the C/S NO. list.`,
     pdfTerminalDatesFound: (eta, lastFree) => `This document also gives terminal dates \u2014 arrival ${eta}, last free day ${lastFree}. Enter them on the entry when you check these cases in; they are not part of the packing list.`,
     tabManualPackingList: "Manual Entry",
     manualLotBuilderLabel: "Build a lot from the job sheet",
@@ -1900,6 +1902,9 @@ const TEXT = {
     legacyNoReferralHint: "No \"Ref Job no.\" line detected \u2014 enter the arrival's job number manually, or this file will only be archived.",
     legacySheetCasesNote: (mark, n) => `Sheet marks ${mark} \u2014 ${n} case${n === 1 ? "" : "s"} pre-selected`,
     legacySheetCasesMissing: (list) => `case ${list} not at the depot`,
+    legacyReplaceCasesHint: (n) => `Same number of cases, but ${n} numbered differently here than on this sheet. Either source can be wrong \u2014 a scan can drop a digit, a typed sheet can carry a typo \u2014 so check the paper before changing anything:`,
+    legacyReplaceCasesBtn: "Renumber this shipment to match the sheet",
+    legacyEntryDuplicateCases: (codes) => `This entry holds case ${codes} more than once, which also double-counts its weight. Correct the case list before delivering against it.`,
     legacyCaseCountMismatch: (lot, stated, listed) => `${lot}: the sheet says ${stated} PKGS but lists ${listed} case number${listed === 1 ? "" : "s"} \u2014 check the C/S No. list before processing.`,
     legacyIncomingCasesMissing: (list) => `case ${list} is not on this shipment`,
     legacyCasesFoundInMore: (n) => `\u2026 and ${n} more shipment${n === 1 ? "" : "s"} on this lot.`,
@@ -2075,6 +2080,8 @@ const TEXT = {
 
     tabExcel: "上載Excel",
     tabPdf: "掃描PDF",
+    pdfDuplicateCases: (lot, codes) => `${lot}：第 ${codes} 件重複出現，重量亦會重複計算。匯入前請與紙本核對。`,
+    pdfCaseCountMismatch: (lot, stated, read) => `${lot}：文件註明 ${stated} 件，但讀取到 ${read} 個件號 \u2014 請核對 C/S NO. 清單。`,
     pdfTerminalDatesFound: (eta, lastFree) => `此文件另有碼頭日期 \u2014 到港 ${eta}，免費倉期至 ${lastFree}。辦理到倉時請於記錄輸入；此並非裝箱單資料。`,
     tabManualPackingList: "手動輸入",
     manualLotBuilderLabel: "由工單建立批次",
@@ -2597,6 +2604,9 @@ const TEXT = {
     legacyNoReferralHint: "未有偵測到「Ref Job no.」字句 — 請手動輸入到倉工單號，否則此檔案只會被存檔。",
     legacySheetCasesNote: (mark, n) => `工單註明 ${mark} \u2014 已預先選取 ${n} 件`,
     legacySheetCasesMissing: (list) => `第 ${list} 件不在倉內`,
+    legacyReplaceCasesHint: (n) => `件數相同，但其中 ${n} 個件號與本工單不符。兩者皆可能有誤 \u2014 掃描可能漏字，工單亦可能手誤 \u2014 請先核對紙本再作更改：`,
+    legacyReplaceCasesBtn: "將此批到貨件號改為工單所示",
+    legacyEntryDuplicateCases: (codes) => `此記錄之第 ${codes} 件重複出現，重量亦會重複計算。請先修正件號清單再辦理送貨。`,
     legacyCaseCountMismatch: (lot, stated, listed) => `${lot}：工單註明 ${stated} 件，但只列出 ${listed} 個件號 \u2014 處理前請核對 C/S No. 清單。`,
     legacyIncomingCasesMissing: (list) => `第 ${list} 件不在此批到貨內`,
     legacyCasesFoundInMore: (n) => `\u2026另有 ${n} 批到貨屬同一批次。`,
@@ -6939,7 +6949,7 @@ function SharedDeclaredTotal({ group, value, onPatch, colors, t, inputClass, inp
     </div>
   );
 }
-function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnrich, onAddIncoming, onProcessAll, processing, processDisabled, colors, t, lang }) {
+function LegacyUploadRow({ onReplaceIncomingCases, row, onChange, onRemove, incoming, items, onLegacyEnrich, onAddIncoming, onProcessAll, processing, processDisabled, colors, t, lang }) {
   const inputStyle = inputStyleFor(colors);
   const set = (k) => (e) => onChange({ ...row, [k]: e.target.value });
   const itemized = JOB_SHEET_ITEMIZED.includes(row.docType);
@@ -7023,9 +7033,28 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
       const norm = (c) => String(c || "").toUpperCase().replace(/\s+/g, "");
       const have = new Map(available.map((p) => [norm(p.code), p.code]));
       const wanted = byCode[codeKey].codes;
+      const counts = new Map();
+      for (const p of inc.packages || []) {
+        const k = norm(p.code);
+        counts.set(k, (counts.get(k) || 0) + 1);
+      }
+      const repeated = [...counts.entries()].filter(([, n]) => n > 1).map(([c]) => c);
+      const missing = wanted.filter((c) => !have.has(norm(c)));
+      // Same number of cases, different numbering. Which list is right is not something
+      // this app can know: a scanned memo can drop a digit, and a typed job sheet can carry
+      // a typo - on the 13-DM-26-0500 job both happened, and it was the typed sheet that
+      // was wrong. So the differing pairs are shown and the choice is left to whoever has
+      // the paper, rather than one source being assumed reliable.
+      const sameCount = wanted.length === (inc.packages || []).length;
+      const differences = sameCount
+        ? (inc.packages || [])
+            .map((p, i) => ({ from: p.code, to: wanted[i] }))
+            .filter((d) => norm(d.from) !== norm(d.to))
+        : [];
+      const replaceable = missing.length > 0 && sameCount && differences.length > 0;
       return {
         codes: wanted.map((c) => have.get(norm(c))).filter(Boolean),
-        missing: wanted.filter((c) => !have.has(norm(c))),
+        missing, repeated, replaceable, wanted, differences,
         elsewhere: [], text: byCode[codeKey].text || "", shared: [],
       };
     }
@@ -7217,7 +7246,16 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
       const have = new Map(deliverable.map((p) => [norm(p.code), p.code]));
       const codes = coded.codes.map((c) => have.get(norm(c))).filter(Boolean);
       const missing = coded.codes.filter((c) => !have.has(norm(c)));
-      return { codes, missing, text: coded.text || "" };
+      // A case number repeated inside one entry is always wrong, and it is the usual
+      // reason a code the sheet asks for cannot be found: a scanned memo that rendered
+      // "01C2101" as "01C01" leaves the entry holding 01C01 twice and 01C2101 not at all.
+      const counts = new Map();
+      for (const p of it.packages || []) {
+        const k = norm(p.code);
+        counts.set(k, (counts.get(k) || 0) + 1);
+      }
+      const repeated = [...counts.entries()].filter(([, n]) => n > 1).map(([c]) => c);
+      return { codes, missing, repeated, text: coded.text || "" };
     }
     const mark = sheetCasesFor(it);
     if (!mark || !(mark.numbers || []).length) return null;
@@ -7677,6 +7715,24 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
                       {sheetSel.missing.length > 0 && (
                         <span style={{ color: colors.red }}> {"\u00b7"} {t.legacyIncomingCasesMissing(sheetSel.missing.join(", "))}</span>
                       )}
+                      {(sheetSel.repeated || []).length > 0 && (
+                        <div style={{ color: colors.red }}>{t.legacyEntryDuplicateCases(sheetSel.repeated.join(", "))}</div>
+                      )}
+                      {sheetSel.replaceable && onReplaceIncomingCases && (
+                        <div style={{ color: colors.amberText }}>
+                          <div>{t.legacyReplaceCasesHint(sheetSel.differences.length)}</div>
+                          <div style={{ fontFamily: FONT_MONO }}>
+                            {sheetSel.differences.map((d) => `${d.from} \u2192 ${d.to}`).join("  \u00b7  ")}
+                          </div>
+                          <button
+                            type="button"
+                            className="font-semibold underline"
+                            onClick={() => onReplaceIncomingCases(inc.id, sheetSel.wanted)}
+                          >
+                            {t.legacyReplaceCasesBtn}
+                          </button>
+                        </div>
+                      )}
                       {sheetSel.elsewhere.slice(0, 4).map((e) => (
                         <div key={e.inc.id} style={{ color: colors.amberText }}>
                           {t.legacyCasesFoundIn(e.codes.join(", "), e.inc.id, incomingLabel(e.inc))}
@@ -7803,6 +7859,9 @@ function LegacyUploadRow({ row, onChange, onRemove, incoming, items, onLegacyEnr
                       {t.legacySheetCasesNote(sheetSel.text, sheetSel.codes.length)}
                       {sheetSel.missing.length > 0 && (
                         <span style={{ color: colors.red }}> {"\u00b7"} {t.legacySheetCasesMissing(sheetSel.missing.join(", "))}</span>
+                      )}
+                      {(sheetSel.repeated || []).length > 0 && (
+                        <div style={{ color: colors.red }}>{t.legacyEntryDuplicateCases(sheetSel.repeated.join(", "))}</div>
                       )}
                     </div>
                   )}
@@ -8540,7 +8599,7 @@ function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, 
   );
 }
 
-function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, onLegacyCheckIn, onLegacyCheckInBatch, directory, onLegacyImport, onLegacyDeliver, onLegacyEnrich, onAddIncoming, colors, t, lang }) {
+function LegacyUploadsPanel({ onReplaceIncomingCases, legacyArchive, setLegacyArchive, items, incoming, onLegacyCheckIn, onLegacyCheckInBatch, directory, onLegacyImport, onLegacyDeliver, onLegacyEnrich, onAddIncoming, colors, t, lang }) {
   const [rows, setRows] = useState([]);
   const [processing, setProcessing] = useState(false);
   const [results, setResults] = useState(null);
@@ -9042,7 +9101,7 @@ function LegacyUploadsPanel({ legacyArchive, setLegacyArchive, items, incoming, 
       {rows.length > 0 && (
         <div className="flex flex-col gap-3">
           {rows.map((row, idx) => (
-            <LegacyUploadRow key={idx} row={row} onChange={(next) => updateRow(idx, next)} onRemove={() => removeRow(idx)} incoming={incoming} items={items} onLegacyEnrich={onLegacyEnrich} onAddIncoming={onAddIncoming} onProcessAll={processAll} processing={processing} processDisabled={processing || rows.some((r) => !r.projectEn && !r.projectZh) || rows.some((r) => !r.client)} colors={colors} t={t} lang={lang} />
+            <LegacyUploadRow key={idx} onReplaceIncomingCases={onReplaceIncomingCases} row={row} onChange={(next) => updateRow(idx, next)} onRemove={() => removeRow(idx)} incoming={incoming} items={items} onLegacyEnrich={onLegacyEnrich} onAddIncoming={onAddIncoming} onProcessAll={processAll} processing={processing} processDisabled={processing || rows.some((r) => !r.projectEn && !r.projectZh) || rows.some((r) => !r.client)} colors={colors} t={t} lang={lang} />
           ))}
           {rows.some((r) => !r.client) && (
             <div className="px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>
@@ -9670,7 +9729,7 @@ function exportToExcel(items) {
   XLSX.writeFile(wb, `farspeed-depot-export-${todayStr()}.xlsx`);
 }
 
-function UploadPanel({ onImportRows, onAddIncoming, existingItems, directory, setDirectory, legacyArchive, setLegacyArchive, items, incoming, onLegacyImport, onLegacyCheckIn, onLegacyCheckInBatch, onLegacyDeliver, onLegacyEnrich, colors, t, lang }) {
+function UploadPanel({ onReplaceIncomingCases, onImportRows, onAddIncoming, existingItems, directory, setDirectory, legacyArchive, setLegacyArchive, items, incoming, onLegacyImport, onLegacyCheckIn, onLegacyCheckInBatch, onLegacyDeliver, onLegacyEnrich, colors, t, lang }) {
   const [mode, setMode] = useState("packinglist");
   return (
     <div className="flex flex-col gap-4">
@@ -9686,7 +9745,7 @@ function UploadPanel({ onImportRows, onAddIncoming, existingItems, directory, se
         <ImportPanel onImportRows={onImportRows} onAddIncoming={onAddIncoming} existingItems={existingItems} directory={directory} setDirectory={setDirectory} colors={colors} t={t} lang={lang} hideExcelMode />
       )}
       {mode === "legacy" && (
-        <LegacyUploadsPanel legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} incoming={incoming} onLegacyCheckIn={onLegacyCheckIn} onLegacyCheckInBatch={onLegacyCheckInBatch} directory={directory} onLegacyImport={onLegacyImport} onLegacyDeliver={onLegacyDeliver} onLegacyEnrich={onLegacyEnrich} onAddIncoming={onAddIncoming} colors={colors} t={t} lang={lang} />
+        <LegacyUploadsPanel onReplaceIncomingCases={onReplaceIncomingCases} legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} incoming={incoming} onLegacyCheckIn={onLegacyCheckIn} onLegacyCheckInBatch={onLegacyCheckInBatch} directory={directory} onLegacyImport={onLegacyImport} onLegacyDeliver={onLegacyDeliver} onLegacyEnrich={onLegacyEnrich} onAddIncoming={onAddIncoming} colors={colors} t={t} lang={lang} />
       )}
     </div>
   );
@@ -9706,6 +9765,7 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
   // Terminal dates a release notice carries. They belong to the check-in rather than the
   // packing list, so they are shown for copying across rather than silently dropped.
   const [pdfTerminalDates, setPdfTerminalDates] = useState(null);
+  const [pdfWarnings, setPdfWarnings] = useState([]);
   const inputStyle = inputStyleFor(colors);
   const siteSuggestions = useMemo(() => {
     const fromDirectory = (directory || []).map((s) => s.siteEn).filter(Boolean);
@@ -9740,6 +9800,8 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
     const file = e.target.files?.[0];
     if (!file) return;
     setPdfError("");
+    setPdfWarnings([]);
+    setPdfTerminalDates(null);
     setPlPreview(null);
     setPdfStatus("scanning");
     try {
@@ -9883,6 +9945,26 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
         terminalArrivalDate: parsed.terminalArrivalDate || "",
         lastFreeDay: parsed.lastFreeDay || "",
       });
+      // A scanned document is read off a text layer that is not always faithful: the
+      // 13-DM-26-0500 memo rendered "01C2101" as "01C01" and "02C2102" as "02C02", which
+      // left the entry holding 01C01 twice and missing two cases the job sheets ask for.
+      // A repeated case number is always wrong, and a list that disagrees with the stated
+      // package count is worth a second look before any of it reaches the depot record.
+      const scanWarnings = [];
+      for (const g of normalizedGroups) {
+        const seen = new Map();
+        for (const p of g.packages) {
+          const k = String(p.code || "").toUpperCase().replace(/\s+/g, "");
+          seen.set(k, (seen.get(k) || 0) + 1);
+        }
+        const repeated = [...seen.entries()].filter(([, n]) => n > 1).map(([c]) => c);
+        if (repeated.length) scanWarnings.push(t.pdfDuplicateCases(g.lot, repeated.join(", ")));
+        const stated = Number((parsed.groups || []).find((x) => (x.lot || "UNSPECIFIED") === g.lot)?.statedPackages) || 0;
+        if (stated > 0 && stated !== g.packages.length) {
+          scanWarnings.push(t.pdfCaseCountMismatch(g.lot, stated, g.packages.length));
+        }
+      }
+      setPdfWarnings(scanWarnings);
       const ok = applyParsedResult({ groups: normalizedGroups, client: parsed.client, project: parsed.project, ssDoNo });
       if (!ok) setPdfError(t.packingListNoStructure);
       setPdfStatus("idle");
@@ -10036,6 +10118,11 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
             </label>
             {pdfStatus === "scanning" && <div className="text-sm" style={{ color: colors.inkFaint }}>{t.scanningMsg}</div>}
             {pdfError && <div className="px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>{pdfError}</div>}
+            {pdfWarnings.length > 0 && (
+              <div className="px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>
+                {pdfWarnings.map((w, i) => <div key={i}>{w}</div>)}
+              </div>
+            )}
             {pdfTerminalDates && (pdfTerminalDates.terminalArrivalDate || pdfTerminalDates.lastFreeDay) && (
               <div className="px-3 py-2 rounded text-sm" style={{ background: colors.amberSoft, color: colors.amberText }}>
                 {t.pdfTerminalDatesFound(pdfTerminalDates.terminalArrivalDate || "\u2014", pdfTerminalDates.lastFreeDay || "\u2014")}
@@ -10651,6 +10738,32 @@ export default function FarspeedInventory() {
       return next;
     });
   }
+  // Replaces a shipment's case numbers with the ones a job sheet states. The job sheets
+  // are typed; a scanned Delivery Memo is read off a text layer that drops digits - the
+  // 13-DM-26-0500 scan turned "01C2101" into "01C01" and "02C2102" into "02C02", leaving
+  // the shipment holding 01C01 twice. Only the codes change: descriptions, weights and
+  // volumes stay on their cases, matched by position.
+  function handleReplaceIncomingCases(incomingId, codes) {
+    const list = (codes || []).map((c) => String(c || "").trim()).filter(Boolean);
+    if (!list.length) return;
+    setIncoming((prev) => prev.map((inc) => {
+      if (inc.id !== incomingId) return inc;
+      const old = inc.packages || [];
+      if (list.length !== old.length) return inc;
+      // First occurrence wins: the very duplicate being corrected would otherwise map the
+      // old code to whatever the *last* of its copies became, so a case already checked in
+      // as 01C01 would be renamed to 01C2101 rather than left alone.
+      const renamed = new Map();
+      old.forEach((p, i) => { if (!renamed.has(p.code)) renamed.set(p.code, list[i]); });
+      return {
+        ...inc,
+        packages: old.map((p, i) => ({ ...p, code: list[i] })),
+        // Anything already checked in was checked in under the old numbering.
+        checkedInCodes: (inc.checkedInCodes || []).map((c) => renamed.get(c) || c),
+      };
+    }));
+  }
+
   function setIncoming(updater) {
     const next = typeof updater === "function" ? updater(incoming) : updater;
     persistGuarded("incoming", next, setIncomingState, (v) => JSON.parse(v));
