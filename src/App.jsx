@@ -5813,7 +5813,19 @@ function findLabelValue(rows, aliases) {
     for (let c = 0; c < rows[r].length; c++) {
       const cellNorm = normCell(rows[r][c]);
       if (!cellNorm) continue;
-      if (!aliases.some((a) => cellNorm.includes(normCell(a)))) continue;
+      // A Chinese label has to be the whole cell, not merely appear inside it. "客戶" means
+      // client, and it also sits inside 柴灣水務署客戶諮詢中心 - Chai Wan Water Supplies
+      // Department CUSTOMER Enquiry Centre - so a loose match read the site name as the
+      // client label and returned the line underneath it. English labels keep the loose
+      // match: they are written with spaces and punctuation that vary between sheets.
+      if (!aliases.some((a) => {
+        const alias = normCell(a);
+        if (!alias) return false;
+        if (/[a-z]/i.test(alias)) return cellNorm.includes(alias);
+        return cellNorm === alias
+          || cellNorm.replace(/[\s:\uff1a.,]+$/g, "") === alias
+          || cellNorm.startsWith(`${alias} `);
+      })) continue;
       for (let cc = c + 1; cc < Math.min(c + 6, rows[r].length); cc++) {
         const v = rows[r][cc];
         if (v != null && String(v).trim() !== "" && !isKnownLabel(v)) return String(v).trim();
@@ -5990,6 +6002,11 @@ function parseJobSheetBlocks(rows) {
   // lot had already stated one. A sheet whose C/S rows are per-case rather than per-lot
   // produces these in quantity, and that is the signal not to trust per-lot figures.
   let orphanFigureRows = 0;
+  // Set by a LIFT NO. line: the row under it may name the lot those lifts belong to.
+  let awaitingLotName = false;
+  // Set by a C/S NO. row: the rows under it may continue the same group's figures without
+  // repeating the label.
+  let awaitingFigures = false;
   // A block counts as closed once figures have been stated for it - either over the block
   // as a whole, or on the last lot it named. Lot-level figures have to count, or a heading
   // restated further down the page would be read as belonging to the lots above it.
@@ -6027,15 +6044,42 @@ function parseJobSheetBlocks(rows) {
     if (/(?:共|total)\s*[:\uff1a]/i.test(line)) { cur = null; ctx = { shkNumber: "", liftNo: "" }; continue; }
 
     const shkM = line.match(/\bSHK\s*[-#]?\s*(\d{3,6})\s*\/\s*(\d{2})\b/i);
-    const liftM = line.match(/lift\s*no\.?\s*[:\-]?\s*#?\s*([A-Za-z0-9][A-Za-z0-9\-\.\/]*)/i);
+    // "LIFT NO. L-W07, L-W08" names two lifts and "#01 & #02" two more; taking only the
+    // first lost the rest, so the whole tail of the line is kept.
+    const liftM = line.match(/lift\s*no\.?\s*[:\-]?\s*(.+)$/i);
     if (shkM || liftM) {
       // A heading arriving after the open block has already stated its figures belongs to
       // what comes next, not to what just finished.
       if (closed(cur)) cur = null;
       if (shkM) { ctx.shkNumber = `SHK${shkM[1]}/${shkM[2]}`; if (cur) cur.shkNumber = ctx.shkNumber; }
-      if (liftM) { ctx.liftNo = liftM[1].trim(); if (cur) cur.liftNo = ctx.liftNo; }
+      if (liftM) {
+        ctx.liftNo = liftM[1].replace(/#/g, "").replace(/\s+/g, " ").trim();
+        awaitingLotName = true;
+        if (cur) cur.liftNo = ctx.liftNo;
+      }
+      // A heading line is nothing else, and falling through would clear the flag it just
+      // set before the row below could be read as the lot name.
+      continue;
     }
 
+    // Chevalier heads each group with its order code on a line of its own, directly under
+    // the lifts it covers: "LIFT NO. L-W07, L-W08" then "CED1832B". It is a bare token with
+    // both letters and digits, and it is only read as a lot in that position, so a stray
+    // reference elsewhere on the page is never mistaken for one.
+    if (awaitingLotName && /^[A-Za-z0-9][A-Za-z0-9\-\.]{1,23}$/.test(line)
+        && /[A-Za-z]/.test(line) && /\d/.test(line) && !/^C\/S/i.test(line)) {
+      if (closed(cur) && cur.figuresAfterLots) startBlock(cur.refJobNumber, cur.refDateRaw);
+      if (!cur) startBlock("", "");
+      cur.lots.push({
+        lotRef: line, altRef: "", unitCode: ctx.liftNo || "",
+        caseNumbers: [], caseCodes: [], caseText: "", lotCases: null,
+        pkgs: "", kg: "", cbm: "", shkNumber: ctx.shkNumber,
+      });
+      awaitingLotName = false;
+      awaitingMark = false;
+      continue;
+    }
+    awaitingLotName = false;
     // Mitsubishi names a lot by its Delivery Memo number rather than an order/lift pair:
     // "DM No. | 13-DM-26-0500 | S/M: | 1325003000" on one row, with the lift given above as
     // "LIFT NO. #01-02". That DM number is what Irene files the cases under, so it becomes
@@ -6129,7 +6173,15 @@ function parseJobSheetBlocks(rows) {
 
     // The C/S NO. row states the block's own package/weight/volume figures, and on some
     // sheets the case marking too, sitting in its own column: "C/S NO. | 1-16/16 | 16 | PKGS".
-    if (/^C\/S\s*NO\.?/i.test(cells.find(Boolean) || "")) {
+    // A group's figures often run over several rows - Chevalier writes one line per rail
+    // type and a third for the fastening hardware - with only the first carrying the
+    // "C/S NO." label. Rows under it that state PKGS and a weight continue the same group,
+    // and the figures are summed rather than the first winning: CED1832B's 6 + 6 + 1
+    // packages and 2,058 + 4,554 + 87 kg are the lot, not its first line.
+    const isCsRow = /^C\/S\s*NO\.?/i.test(cells.find(Boolean) || "");
+    const isFigureRow = /\d+\s*PKGS?/i.test(line) && /(KGS?|CBM)\b/i.test(line);
+    if (!isCsRow && !isFigureRow) awaitingFigures = false;
+    if (isCsRow || (awaitingFigures && isFigureRow)) {
       for (const cell of cells.slice(1)) {
         // Must contain a "/n" lot size, or the PKGS count in the next column would be read
         // as a case marking of its own.
@@ -6146,17 +6198,22 @@ function parseJobSheetBlocks(rows) {
       // A C/S NO. row under a lot states that lot's own figures. Where the row instead
       // comes before any lot is named - a delivery sheet gives the figures first and then
       // lists the lots they cover - it belongs to the block as a whole.
+      const add = (was, more, dp) => {
+        if (!more) return was;
+        const sum = (Number(was) || 0) + Number(more);
+        return String(Math.round(sum * Math.pow(10, dp)) / Math.pow(10, dp));
+      };
       if (lot) {
-        if (pk && !lot.pkgs) lot.pkgs = pk[1];
-        if (kgVal && !lot.kg) lot.kg = kgVal;
-        else if (kgVal) orphanFigureRows += 1;
-        if (cbVal && !lot.cbm) lot.cbm = cbVal;
+        lot.pkgs = add(lot.pkgs, pk ? pk[1] : "", 0);
+        lot.kg = add(lot.kg, kgVal, 2);
+        lot.cbm = add(lot.cbm, cbVal, 3);
         if (lot.kg || lot.cbm) cur.figuresAfterLots = true;
       } else if (kgVal || cbVal) {
-        if (pk && !cur.pkgs) cur.pkgs = pk[1];
-        if (kgVal && !cur.kg) cur.kg = kgVal;
-        if (cbVal && !cur.cbm) cur.cbm = cbVal;
-      } else if (pk && !cur.pkgs) cur.pkgs = pk[1];
+        cur.pkgs = add(cur.pkgs, pk ? pk[1] : "", 0);
+        cur.kg = add(cur.kg, kgVal, 2);
+        cur.cbm = add(cur.cbm, cbVal, 3);
+      } else if (pk) cur.pkgs = add(cur.pkgs, pk[1], 0);
+      awaitingFigures = true;
       const hadFigures = closed(cur);
       if (!hadFigures && closed(cur) && cur.lots.length > 0) cur.figuresAfterLots = true;
       const lastLot = cur.lots[cur.lots.length - 1];
@@ -6202,7 +6259,12 @@ function guessFieldsFromWorkbook(wb) {
     // ("6/5/26"), so Date() reads it correctly. A hand-typed one is text, written day-first
     // and punctuated however it was typed - "29-/5/2026" on the 2605199 CFS sheet - which
     // Date() rejects outright, leaving the row with no date at all.
-    const d = new Date(rawDate);
+    // A date typed by hand rather than held as a real date shows it: "11- /1/2025",
+    // "29-/5/2026" - a separator struck twice where the writer corrected themselves. Those
+    // are written day-first, and Date() reads "11- /1/2025" as the 1st of November without
+    // complaining, so they must not reach it.
+    const handTyped = /[\-\/.]\s*[\-\/.]/.test(String(rawDate));
+    const d = handTyped ? NaN : new Date(rawDate);
     out.date = !isNaN(d) ? dateToLocalISO(d) : parseSheetDayFirstDate(rawDate);
   }
 
