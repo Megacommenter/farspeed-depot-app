@@ -373,7 +373,11 @@ const PL_HEADER_ALIASES = {
   // the sheet's declared 33,736.4. Kept as its own field so it can outrank both.
   estimatedWeight: ["estimated   weight", "estimated  weight", "estimated weight"],
   netWeight: ["n.weight", "net weight", "net", "estimated net weight", "n.w./kg", "n.w.", "n.w"],
-  cbm: ["cbm", "volume(m3)", "volume (m3)", "volume"],
+  // "M3" is how a Chinese factory list heads its volume column - GK230208's WoodenBoxWeight
+  // sheet uses it, and without it 305.096 cbm across 125 cases was read as nothing at all.
+  // Matching is by whole cell for the short ones: "m3" as a substring would also fire on a
+  // dimension column headed "Dimension (M3)" and on stray text elsewhere in a header.
+  cbm: ["cbm", "volume(m3)", "volume (m3)", "volume", "m3", "m³", "cbm(m3)", "cbm (m3)", "\u4f53\u79ef", "\u9ad4\u7a4d", "meas.", "measurement"],
   dimension: ["dimension", "dimension (mm)", "dimensions", "size"],
   dimensionCm: ["dim(cm)", "dim (cm)", "dimension(cm)", "dimension (cm)", "dimensions(cm)", "dimensions (cm)"],
 };
@@ -426,7 +430,10 @@ function plMapColumns(headerRow) {
     if (!n) return;
     for (const [field, aliases] of Object.entries(PL_HEADER_ALIASES)) {
       if (colMap[field] !== undefined) continue;
-      if (aliases.some((a) => n === a || n.includes(a))) { colMap[field] = idx; break; }
+      // A short alias has to match the whole cell. "m3" or "net" appearing inside a longer
+      // heading is far more often part of another column's name than that column itself.
+      const hit = aliases.some((a) => (a.length <= 3 ? n === a : n === a || n.includes(a)));
+      if (hit) { colMap[field] = idx; break; }
     }
   });
   return colMap;
@@ -619,7 +626,16 @@ function parsePackingListSheet(rows, legend) {
     // column exists it wins, but rows without a lift still belong to their own order -
     // lumping them together under UNSPECIFIED merged unrelated spare-parts consignments
     // into one entry.
-    const key = translateLot(lastLot) || lastOrderNo || "UNSPECIFIED";
+    // Where a list names no lift and no order, the case number often carries the lift
+    // itself - GK230208 numbers its cases "L_P01/G1", "L_W05/G23", ten lifts across 125
+    // cases - and without reading that the whole file lands as one entry called
+    // UNSPECIFIED. The prefix must contain a letter to be taken as a lift: splitting on
+    // the part before the slash in "1/24" or "3/19" would shred an ordinary case list
+    // into a lot per case.
+    const casePrefix = /[A-Za-z]/.test(String(lastCase || "").split("/")[0] || "")
+      ? String(lastCase).split("/")[0].trim()
+      : "";
+    const key = translateLot(lastLot) || lastOrderNo || casePrefix || "UNSPECIFIED";
     if (!groups[key]) { groups[key] = { lot: key, packages: [], containers: new Set(), totalWeight: 0, totalCbm: 0 }; order.push(key); }
     groups[key].packages.push({
       code: lastCase || String(groups[key].packages.length + 1), orderNo: lastOrderNo, description,
