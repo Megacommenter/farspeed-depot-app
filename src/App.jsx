@@ -1396,6 +1396,7 @@ const TEXT = {
     tabPdf: "PDF Scan",
     pdfCaseCountMismatch: (lot, stated, read) => `${lot}: the document states ${stated} package${stated === 1 ? "" : "s"} but ${read} case number${read === 1 ? "" : "s"} were read \u2014 check the C/S NO. list.`,
     pdfWholeDocument: "This document",
+    pdfRepeatedLots: (lots) => `More than one group came back named ${lots}. If the document splits an order into groups going to different lifts, give each its own name before importing, or they will be checked in as one lot.`,
     pdfDocumentTotals: (cbm, kg) => `The document gives one total for the whole shipment \u2014 ${cbm} CBM, ${kg} kg \u2014 without splitting it between the orders, so it has not been divided up. Enter the volume per lot from the paperwork if you have it.`,
     pdfTerminalDatesFound: (eta, lastFree) => `This document also gives terminal dates \u2014 arrival ${eta}, last free day ${lastFree}. Enter them on the entry when you check these cases in; they are not part of the packing list.`,
     tabManualPackingList: "Manual Entry",
@@ -1666,6 +1667,14 @@ const TEXT = {
     packingListShipmentCbmLabel: "Whole-shipment CBM",
     packingListDistributeCbmBtn: "Split by weight",
     packingListDistributeCbmHint: "Shares one document-wide volume across the lots in proportion to their weight. An estimate \u2014 type real per-lot figures in instead where you have them.",
+    dirInlineEditBtn: "Edit this site",
+    dirInlineEditTitle: "Directory entry",
+    dirInlineEditHint: "Saved to the Directory straight away, so every future import of this site picks it up.",
+    dirInlineSavedMsg: "Site updated.",
+    packingListColProject: "Project / Site",
+    packingListProjectFromCommon: "\u2014 use the fields above \u2014",
+    packingListProjectUnknown: (code) => `${code} is not in the Directory \u2014 pick a site or add it first.`,
+    packingListMultiProjectHint: (n) => `This file covers ${n} projects. Each lot goes to its own site, so check the column before importing \u2014 the fields above apply only to lots left unset.`,
     packingListCasesHint: "Case numbers for this lot, comma-separated. Renaming keeps each case's weight and volume; adding or removing one changes what the lot holds, and the totals above follow.",
     packingListRemoveGroupBtn: "Remove this group",
     incomingDeleteBtn: "Delete this Incoming shipment",
@@ -2104,6 +2113,7 @@ const TEXT = {
     tabPdf: "掃描PDF",
     pdfCaseCountMismatch: (lot, stated, read) => `${lot}：文件註明 ${stated} 件，但讀取到 ${read} 個件號 \u2014 請核對 C/S NO. 清單。`,
     pdfWholeDocument: "此文件",
+    pdfRepeatedLots: (lots) => `有多於一組名為 ${lots}。如文件將同一訂單分為不同批次送往不同電梯，請於匯入前分別命名，否則會合併為同一批次。`,
     pdfDocumentTotals: (cbm, kg) => `文件只提供整批總數 \u2014 ${cbm} CBM、${kg} 公斤 \u2014 並未按訂單分列，故系統不作分攤。如有資料請自行輸入各批次體積。`,
     pdfTerminalDatesFound: (eta, lastFree) => `此文件另有碼頭日期 \u2014 到港 ${eta}，免費倉期至 ${lastFree}。辦理到倉時請於記錄輸入；此並非裝箱單資料。`,
     tabManualPackingList: "手動輸入",
@@ -2374,6 +2384,14 @@ const TEXT = {
     packingListShipmentCbmLabel: "整批CBM",
     packingListDistributeCbmBtn: "按重量分攤",
     packingListDistributeCbmHint: "將整份文件之總體積按各批次重量比例分攤。此為估算 \u2014 如有各批次實際數據請直接輸入。",
+    dirInlineEditBtn: "編輯此地盤",
+    dirInlineEditTitle: "目錄資料",
+    dirInlineEditHint: "即時儲存至目錄，日後匯入此地盤將自動採用。",
+    dirInlineSavedMsg: "已更新地盤資料。",
+    packingListColProject: "項目／地盤",
+    packingListProjectFromCommon: "\u2014 使用上方欄位 \u2014",
+    packingListProjectUnknown: (code) => `目錄中沒有 ${code} \u2014 請選擇地盤或先行新增。`,
+    packingListMultiProjectHint: (n) => `此檔案涵蓋 ${n} 個項目，各批次會分別歸入其地盤。匯入前請檢查此欄；上方欄位只適用於未指定之批次。`,
     packingListCasesHint: "此批次之件號，以逗號分隔。更改名稱不影響各件重量及體積；增減件數則會改變批次內容，上方總數亦隨之更新。",
     packingListRemoveGroupBtn: "移除此組",
     incomingDeleteBtn: "刪除此待到倉貨件",
@@ -7096,7 +7114,7 @@ function SharedDeclaredTotal({ group, value, onPatch, colors, t, inputClass, inp
     </div>
   );
 }
-function LegacyUploadRow({ onReplaceIncomingCases, row, onChange, onRemove, incoming, items, onLegacyEnrich, onAddIncoming, onProcessAll, processing, processDisabled, colors, t, lang }) {
+function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, employees, row, onChange, onRemove, incoming, items, onLegacyEnrich, onAddIncoming, onProcessAll, processing, processDisabled, colors, t, lang }) {
   const inputStyle = inputStyleFor(colors);
   const set = (k) => (e) => onChange({ ...row, [k]: e.target.value });
   const itemized = JOB_SHEET_ITEMIZED.includes(row.docType);
@@ -7639,6 +7657,14 @@ function LegacyUploadRow({ onReplaceIncomingCases, row, onChange, onRemove, inco
         <Field label={t.legacyProjectSiteZh} colors={colors}>
           <input className={inputClass} style={{ ...inputStyle, borderColor: !row.projectEn && !row.projectZh ? colors.red : inputStyle.borderColor }} value={row.projectZh} onChange={set("projectZh")} />
         </Field>
+        <div className="col-span-1 sm:col-span-2 md:col-span-4">
+          {/* The Directory entry behind this sheet's site, found by matching the name the
+              sheet uses. Editing it here saves the walk to the Directory tab mid-upload. */}
+          <InlineSiteEditor
+            site={(directory || []).find((d) => sitesLooselyMatch(row.projectEn, row.projectZh, d.siteEn, d.siteZh))}
+            setDirectory={setDirectory} employees={employees} colors={colors} t={t}
+          />
+        </div>
         <Field label={t.fJobNumber} colors={colors}>
           <input className={inputClass} style={inputStyle} value={row.jobNumber} onChange={set("jobNumber")} />
         </Field>
@@ -8169,7 +8195,7 @@ function LegacyUploadRow({ onReplaceIncomingCases, row, onChange, onRemove, inco
 // the older jobs whose packing list was never filed - the Gage Street work whose account
 // officer left before the records were entered - so the Devan/CFS sheet has something to
 // check its cases into.
-function ManualPackingListEntry({ onClose, onAddIncoming, existingItems, directory, setDirectory, colors, t }) {
+function ManualPackingListEntry({ onClose, onAddIncoming, existingItems, directory, setDirectory, employees, colors, t }) {
   const [showOlderSites, setShowOlderSites] = useState(false);
   const [manualForm, setManualForm] = useState({
     client: CLIENTS[0], project: "", constructionSite: "", orderedBy: "", jobRef: "", shkNumber: "", unitCode: "", directoryId: "", saveToDirectory: false, packages: [],
@@ -8334,6 +8360,10 @@ function ManualPackingListEntry({ onClose, onAddIncoming, existingItems, directo
                 <span>{t.showOlderJobsCount(hiddenSiteCount(directory, { client: manualForm.client, items: existingItems }))}</span>
               )}
             </label>
+            <InlineSiteEditor
+              site={(directory || []).find((d) => d.id === manualForm.directoryId)}
+              setDirectory={setDirectory} employees={employees} colors={colors} t={t}
+            />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
             <Field label={t.packingListApplyClient} colors={colors}>
@@ -8441,7 +8471,7 @@ function ManualPackingListEntry({ onClose, onAddIncoming, existingItems, directo
     </div>
   );
 }
-function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, onCheckIn, onAddIncoming, colors, t, lang }) {
+function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, employees, onCheckIn, onAddIncoming, colors, t, lang }) {
   const [search, setSearch] = useState("");
   const [filterClient, setFilterClient] = useState("All");
   const [showCompleted, setShowCompleted] = useState(false);
@@ -8529,8 +8559,8 @@ function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, 
           <div className="mb-4">
             <ManualPackingListEntry
               onClose={() => setManualOpen(false)}
-              onAddIncoming={onAddIncoming} existingItems={items}
-              directory={directory} setDirectory={setDirectory} colors={colors} t={t}
+              onAddIncoming={onAddIncoming} existingItems={items} employees={employees}
+              directory={directory} setDirectory={setDirectory} employees={employees} colors={colors} t={t}
             />
           </div>
         )}
@@ -8850,7 +8880,7 @@ function legacyFieldsFromScan(parsed) {
   }
   return out;
 }
-function LegacyUploadsPanel({ onReplaceIncomingCases, legacyArchive, setLegacyArchive, items, incoming, onLegacyCheckIn, onLegacyCheckInBatch, directory, onLegacyImport, onLegacyDeliver, onLegacyEnrich, onAddIncoming, colors, t, lang }) {
+function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, legacyArchive, setLegacyArchive, items, incoming, onLegacyCheckIn, onLegacyCheckInBatch, directory, onLegacyImport, onLegacyDeliver, onLegacyEnrich, onAddIncoming, colors, t, lang }) {
   const [rows, setRows] = useState([]);
   const [processing, setProcessing] = useState(false);
   const [results, setResults] = useState(null);
@@ -9385,7 +9415,7 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, legacyArchive, setLegacyAr
       {rows.length > 0 && (
         <div className="flex flex-col gap-3">
           {rows.map((row, idx) => (
-            <LegacyUploadRow key={idx} onReplaceIncomingCases={onReplaceIncomingCases} row={row} onChange={(next) => updateRow(idx, next)} onRemove={() => removeRow(idx)} incoming={incoming} items={items} onLegacyEnrich={onLegacyEnrich} onAddIncoming={onAddIncoming} onProcessAll={processAll} processing={processing} processDisabled={processing || rows.some((r) => !r.projectEn && !r.projectZh) || rows.some((r) => !r.client)} colors={colors} t={t} lang={lang} />
+            <LegacyUploadRow key={idx} onReplaceIncomingCases={onReplaceIncomingCases} directory={directory} setDirectory={setDirectory} employees={employees} row={row} onChange={(next) => updateRow(idx, next)} onRemove={() => removeRow(idx)} incoming={incoming} items={items} onLegacyEnrich={onLegacyEnrich} onAddIncoming={onAddIncoming} onProcessAll={processAll} processing={processing} processDisabled={processing || rows.some((r) => !r.projectEn && !r.projectZh) || rows.some((r) => !r.client)} colors={colors} t={t} lang={lang} />
           ))}
           {rows.some((r) => !r.client) && (
             <div className="px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>
@@ -10013,7 +10043,7 @@ function exportToExcel(items) {
   XLSX.writeFile(wb, `farspeed-depot-export-${todayStr()}.xlsx`);
 }
 
-function UploadPanel({ onReplaceIncomingCases, onImportRows, onAddIncoming, existingItems, directory, setDirectory, legacyArchive, setLegacyArchive, items, incoming, onLegacyImport, onLegacyCheckIn, onLegacyCheckInBatch, onLegacyDeliver, onLegacyEnrich, colors, t, lang }) {
+function UploadPanel({ onReplaceIncomingCases, onImportRows, onAddIncoming, existingItems, directory, setDirectory, employees, legacyArchive, setLegacyArchive, items, incoming, onLegacyImport, onLegacyCheckIn, onLegacyCheckInBatch, onLegacyDeliver, onLegacyEnrich, colors, t, lang }) {
   const [mode, setMode] = useState("packinglist");
   return (
     <div className="flex flex-col gap-4">
@@ -10026,10 +10056,10 @@ function UploadPanel({ onReplaceIncomingCases, onImportRows, onAddIncoming, exis
         ))}
       </div>
       {mode === "packinglist" && (
-        <ImportPanel onImportRows={onImportRows} onAddIncoming={onAddIncoming} existingItems={existingItems} directory={directory} setDirectory={setDirectory} colors={colors} t={t} lang={lang} hideExcelMode />
+        <ImportPanel onImportRows={onImportRows} onAddIncoming={onAddIncoming} existingItems={existingItems} directory={directory} setDirectory={setDirectory} employees={employees} colors={colors} t={t} lang={lang} hideExcelMode />
       )}
       {mode === "legacy" && (
-        <LegacyUploadsPanel onReplaceIncomingCases={onReplaceIncomingCases} legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} incoming={incoming} onLegacyCheckIn={onLegacyCheckIn} onLegacyCheckInBatch={onLegacyCheckInBatch} directory={directory} onLegacyImport={onLegacyImport} onLegacyDeliver={onLegacyDeliver} onLegacyEnrich={onLegacyEnrich} onAddIncoming={onAddIncoming} colors={colors} t={t} lang={lang} />
+        <LegacyUploadsPanel onReplaceIncomingCases={onReplaceIncomingCases} employees={employees} setDirectory={setDirectory} legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} incoming={incoming} onLegacyCheckIn={onLegacyCheckIn} onLegacyCheckInBatch={onLegacyCheckInBatch} directory={directory} onLegacyImport={onLegacyImport} onLegacyDeliver={onLegacyDeliver} onLegacyEnrich={onLegacyEnrich} onAddIncoming={onAddIncoming} colors={colors} t={t} lang={lang} />
       )}
     </div>
   );
@@ -10086,6 +10116,26 @@ function renumberGroupCases(group, text) {
     totalCbm: next.reduce((s, p) => s + (Number(p.cbm) || 0), 0),
   };
 }
+// A Chevalier project is named by a code at the front of its site name - EL-1876, REL-2205,
+// FEEL-1330. Guide rails for several projects ship on one packing list, so the site cannot
+// be a property of the file: the A4523 list carries EL-1924 and EL-1876, and the A4366 list
+// carries EL-1926, EL-1909 and EL-1876. Each lot has to find its own site, or four lots for
+// two different buildings land under one heading and every delivery afterwards has to be
+// picked out of the wrong pile.
+function extractProjectCode(text) {
+  const m = String(text || "").match(/\b((?:FEEL|REL|EL)\s*-?\s*\d{3,5})\b/i);
+  if (!m) return "";
+  // "EL 1876", "el-1876" and "EL1876" are the same project; normalise to "EL-1876".
+  return m[1].toUpperCase().replace(/^([A-Z]+)\s*-?\s*(\d+)$/, "$1-$2");
+}
+function findDirectorySiteByCode(directory, code, client) {
+  if (!code) return null;
+  const wanted = code.replace(/[^A-Z0-9]/gi, "").toUpperCase();
+  const same = (site) => [site.siteEn, site.siteZh, site.jobRef]
+    .some((v) => extractProjectCode(v).replace(/[^A-Z0-9]/gi, "").toUpperCase() === wanted);
+  return (directory || []).find((d) => d.client === client && same(d))
+    || (directory || []).find(same) || null;
+}
 function spreadGroupTotal(group, field, raw) {
   const total = Number(raw);
   const pkgs = group.packages || [];
@@ -10107,7 +10157,73 @@ function spreadGroupTotal(group, field, raw) {
   });
   return { ...group, packages: next, [totalField]: total };
 }
-function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, setDirectory, colors, t, lang, hideExcelMode }) {
+// Edits a Directory site without leaving the screen you noticed the problem on. The site
+// details - who orders for it, its job ref, its Chinese name - are usually wrong or missing
+// at exactly the moment a packing list or job sheet is being imported against it, and
+// walking over to the Directory tab to fix a name means losing the upload in progress.
+function InlineSiteEditor({ site, setDirectory, employees, colors, t }) {
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState(null);
+  const [saved, setSaved] = useState(false);
+  const inputStyle = inputStyleFor(colors);
+  if (!site) return null;
+  const start = () => { setForm({ ...site }); setSaved(false); setOpen(true); };
+  const save = () => {
+    setDirectory((d) => (d || []).map((x) => (x.id === form.id ? { ...x, ...form } : x)));
+    setOpen(false);
+    setSaved(true);
+  };
+  if (!open) {
+    return (
+      <div className="flex items-center gap-2 mt-1">
+        <button type="button" className="text-xs font-semibold underline" style={{ color: colors.amberText }} onClick={start}>
+          {t.dirInlineEditBtn}
+        </button>
+        {saved && <span className="text-xs" style={{ color: colors.green }}>{t.dirInlineSavedMsg}</span>}
+      </div>
+    );
+  }
+  return (
+    <div className="rounded p-3 mt-2" style={{ border: `1px dashed ${colors.line}`, background: colors.surfaceDim }}>
+      <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
+        {t.dirInlineEditTitle}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+        <Field label={t.fSiteEn} colors={colors}>
+          <input className={inputClass} style={inputStyle} value={form.siteEn || ""} onChange={(e) => setForm((f) => ({ ...f, siteEn: e.target.value }))} />
+        </Field>
+        <Field label={t.fSiteZh} colors={colors}>
+          <input className={inputClass} style={inputStyle} value={form.siteZh || ""} onChange={(e) => setForm((f) => ({ ...f, siteZh: e.target.value }))} />
+        </Field>
+        <Field label={t.fDirClient} colors={colors}>
+          <select className={inputClass} style={inputStyle} value={form.client || CLIENTS[0]} onChange={(e) => setForm((f) => ({ ...f, client: e.target.value }))}>
+            {CLIENTS.map((c) => <option key={c}>{c}</option>)}
+          </select>
+        </Field>
+        <Field label={t.fDirJobRef} hint={t.fJobRefHint} colors={colors}>
+          <input className={inputClass} style={inputStyle} value={form.jobRef || ""} onChange={(e) => setForm((f) => ({ ...f, jobRef: e.target.value }))} />
+        </Field>
+        <Field label={t.fDirOrderedBy} colors={colors}>
+          <input className={inputClass} style={inputStyle} value={form.orderedBy || ""} onChange={(e) => setForm((f) => ({ ...f, orderedBy: e.target.value }))} />
+        </Field>
+        <Field label={t.fDirOfficer} colors={colors}>
+          <select className={inputClass} style={inputStyle} value={form.accountOfficer || ""} onChange={(e) => setForm((f) => ({ ...f, accountOfficer: e.target.value }))}>
+            <option value=""></option>
+            {(employees || []).map((e) => <option key={e.id} value={e.name}>{e.name}</option>)}
+          </select>
+        </Field>
+      </div>
+      <div className="flex gap-2 mt-3">
+        <button type="button" className="px-3 py-1.5 rounded text-xs font-semibold"
+          style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY }} onClick={save}>{t.saveBtn}</button>
+        <button type="button" className="px-3 py-1.5 rounded text-xs font-semibold"
+          style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY }} onClick={() => setOpen(false)}>{t.cancelBtn}</button>
+      </div>
+      <div className="text-[11px] mt-2" style={{ color: colors.inkFaint }}>{t.dirInlineEditHint}</div>
+    </div>
+  );
+}
+function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, setDirectory, employees, colors, t, lang, hideExcelMode }) {
   const [showOlderSites, setShowOlderSites] = useState(false);
   const [mode, setMode] = useState("packinglist");
   const [excelPreview, setExcelPreview] = useState(null);
@@ -10134,14 +10250,21 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
 
   function applyParsedResult({ groups, client, project }) {
     if (!groups || groups.length === 0) { return false; }
-    setPlPreview(groups);
+    const resolvedClientEarly = resolveClientGuess(client);
+    // Each lot looks for its own site by the project code in its name, before anything is
+    // applied to all of them.
+    setPlPreview(groups.map((g) => {
+      const code = extractProjectCode(g.lot);
+      const site = findDirectorySiteByCode(directory, code, resolvedClientEarly);
+      return { ...g, projectCode: code, directoryId: site ? site.id : "" };
+    }));
     const guess = String(project || "").toLowerCase();
     const matchedSite = guess ? (directory || []).find((s) =>
       (s.siteEn && guess.includes(s.siteEn.toLowerCase())) ||
       (s.siteZh && guess.includes(s.siteZh.toLowerCase())) ||
       (s.siteEn && s.siteEn.toLowerCase().includes(guess))
     ) : null;
-    const resolvedClient = resolveClientGuess(client);
+    const resolvedClient = resolvedClientEarly;
     setPlCommon({
       client: matchedSite ? matchedSite.client : (resolvedClient || CLIENTS[CLIENTS.length - 1]),
       project: matchedSite ? matchedSite.siteEn : (project || ""),
@@ -10193,6 +10316,8 @@ Follow these extraction rules exactly - they keep the output compact even for lo
    - "netWeightKg" and "grossWeightKg": both if both columns exist, else whichever is given. Do NOT pick between them; the app takes the heavier.
    - "cbm": only if that line states one.
    Group the lines by the order the document groups them under - "Order No.CED-1831" and the reference beside it - and put that whole heading in "lot", e.g. "CED-1831 (EL-1926)".
+2b-iii. IMPORTANT - a single order is often subdivided further by a "Group" column carrying A, B, C, D against runs of lines, with a handwritten or printed annotation in the left margin beside each group naming what it is for: an INS reference like "0/24/576", a project number like "EL-1924" or "EL-1876", and the lifts like "#L2-L4", "#L-C01, L-C02, #L-C03, L-C04, #L-C05" or "#L-C06". Those groups go to different lifts and must NOT be merged.
+   Return ONE entry in "groups" per group letter, each holding only that group's lines, and build its "lot" from the order, the group letter and the annotation, e.g. "CED-1833/B (EL-1876 #L-C01 to L-C05)". Put the group letter in "group" and the INS reference in "insRef". Read the margin annotations even when handwritten; where a group has none, use just the order and letter.
 2c. IMPORTANT - many documents are NOT per-case tables at all. A Delivery Memo (DM), an arrival/release notice (到貨通知提貨單), or a shipping order states only the OVERALL totals - "29 Package(s)", "14.088 CBM", "12,909 Kgs", "29 件" - and then lists the case markings separately under a heading like "C/S NO." or "SHIPPING MARK", one marking per line, sometimes several comma-separated per line (e.g. "01C01,01C02,01C03"). For a document like that:
    - put the stated totals in "statedPackages", "statedWeightKg" and "statedCbm" on the group;
    - put every case marking, expanded from any comma-separated lines into individual entries, into "caseNumbers" on the group, exactly as printed;
@@ -10202,7 +10327,7 @@ Follow these extraction rules exactly - they keep the output compact even for lo
 3. Keep everything as compact as possible: short descriptions, no commentary, no repeated sub-item lists.
 
 Respond with ONLY a raw JSON object in EXACTLY this shape and nothing else (no markdown fences, no commentary, no explanation before or after):
-{"client": "best-guess client name or ''", "project": "site/building/project name found in the document, or ''", "ssDoNo": "vessel + voyage + container line or ''", "shipping": {"vessel": "", "voyage": "", "blNo": "", "containerNo": ""}, "terminalArrivalDate": "YYYY-MM-DD or ''", "lastFreeDay": "YYYY-MM-DD or ''", "documentTotals": {"packages": number_or_empty_string, "weightKg": number_or_empty_string, "cbm": number_or_empty_string}, "groups": [{"lot": "lift/lot/shop-order number identifying this batch", "containers": ["container numbers if any, else empty array"], "statedPackages": number_or_empty_string, "statedWeightKg": number_or_empty_string, "statedCbm": number_or_empty_string, "caseNumbers": ["case markings, one per entry, only for totals-only documents"], "lines": [{"packages": number, "description": "", "netWeightKg": number_or_empty_string, "grossWeightKg": number_or_empty_string, "cbm": number_or_empty_string}], "packages": [{"code": "case/package number", "description": "short category name, a few words only", "weightKg": number_or_empty_string, "cbm": number_or_empty_string, "length": number_or_empty_string, "width": number_or_empty_string, "height": number_or_empty_string, "dimUnit": "cm_or_mm_or_empty"}]}]}
+{"client": "best-guess client name or ''", "project": "site/building/project name found in the document, or ''", "ssDoNo": "vessel + voyage + container line or ''", "shipping": {"vessel": "", "voyage": "", "blNo": "", "containerNo": ""}, "terminalArrivalDate": "YYYY-MM-DD or ''", "lastFreeDay": "YYYY-MM-DD or ''", "documentTotals": {"packages": number_or_empty_string, "weightKg": number_or_empty_string, "cbm": number_or_empty_string}, "groups": [{"lot": "lift/lot/shop-order number identifying this batch", "containers": ["container numbers if any, else empty array"], "statedPackages": number_or_empty_string, "statedWeightKg": number_or_empty_string, "statedCbm": number_or_empty_string, "caseNumbers": ["case markings, one per entry, only for totals-only documents"], "group": "group letter if the document has one, else ''", "insRef": "INS/works reference beside the group, e.g. 0/24/576, else ''", "lines": [{"packages": number, "description": "", "netWeightKg": number_or_empty_string, "grossWeightKg": number_or_empty_string, "cbm": number_or_empty_string}], "packages": [{"code": "case/package number", "description": "short category name, a few words only", "weightKg": number_or_empty_string, "cbm": number_or_empty_string, "length": number_or_empty_string, "width": number_or_empty_string, "height": number_or_empty_string, "dimUnit": "cm_or_mm_or_empty"}]}]}
 If the document only has one overall lot/shipment with no explicit lift/case breakdown, put everything under a single group with a sensible lot name.`;
       const response = await fetch("/api/scan-pdf", {
         method: "POST",
@@ -10323,7 +10448,10 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
           const built = (g.lines || []).length ? expandLineGroup(g) : expandStatedGroup(g);
           if (built.length) {
             return {
-              lot: g.lot || "UNSPECIFIED",
+              // The group letter and INS reference belong in the lot name when the scan
+              // found them: a packing list split A/B/C/D sends each group to different
+              // lifts, and "CED-1833" alone would not say which.
+              lot: g.lot || [g.group, g.insRef].filter(Boolean).join(" ") || "UNSPECIFIED",
               containers: g.containers || [],
               totalWeight: built.reduce((s2, p) => s2 + (Number(p.weightKg) || 0), 0),
               totalCbm: built.reduce((s2, p) => s2 + (Number(p.cbm) || 0), 0),
@@ -10379,6 +10507,11 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
       // where it belongs, instead of being split across orders on a guess.
       const dt = parsed.documentTotals || {};
       const readPkgs = normalizedGroups.reduce((n, g) => n + g.packages.length, 0);
+      // Two groups that came back with the same name would be merged by whoever reads the
+      // preview, so say so rather than letting them look like one lot.
+      const lotNames = normalizedGroups.map((g) => g.lot);
+      const repeatedLots = [...new Set(lotNames.filter((l, i) => lotNames.indexOf(l) !== i))];
+      if (repeatedLots.length) scanWarnings.push(t.pdfRepeatedLots(repeatedLots.join(", ")));
       if (Number(dt.packages) > 0 && Number(dt.packages) !== readPkgs) {
         scanWarnings.push(t.pdfCaseCountMismatch(t.pdfWholeDocument, Number(dt.packages), readPkgs));
       }
@@ -10481,18 +10614,23 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
       effectiveDirectoryId = newSite.id;
     }
 
-    const newIncoming = plPreview.map((g) => ({
-      client: plCommon.client,
-      project: plCommon.project,
-      constructionSite: plCommon.constructionSite || "",
-      jobRef: plCommon.jobRef || "",
-      orderedBy: plCommon.orderedBy || "",
-      shkNumber: plCommon.shkNumber || "",
-      directoryId: effectiveDirectoryId,
-      unitCode: g.lot,
-      packages: g.packages,
-      notes: g.containers.length ? `Container(s): ${g.containers.join(", ")}` : "",
-    }));
+    // A lot that resolved to its own site keeps it; the rest fall back to the common
+    // fields above, which is the whole file when it only covers one project.
+    const newIncoming = plPreview.map((g) => {
+      const site = g.directoryId ? (directory || []).find((d) => d.id === g.directoryId) : null;
+      return {
+        client: plCommon.client,
+        project: site ? site.siteEn : plCommon.project,
+        constructionSite: site ? (site.siteZh || site.siteEn) : (plCommon.constructionSite || ""),
+        jobRef: site ? (site.jobRef || "") : (plCommon.jobRef || ""),
+        orderedBy: site ? (site.orderedBy || plCommon.orderedBy || "") : (plCommon.orderedBy || ""),
+        shkNumber: plCommon.shkNumber || "",
+        directoryId: site ? site.id : effectiveDirectoryId,
+        unitCode: g.lot,
+        packages: g.packages,
+        notes: g.containers.length ? `Container(s): ${g.containers.join(", ")}` : "",
+      };
+    });
     onAddIncoming(newIncoming);
     setPlPreview(null);
     setPlCommon(null);
@@ -10600,6 +10738,10 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                         <span>{t.showOlderJobsCount(hiddenSiteCount(directory, { client: plCommon.client, items: existingItems }))}</span>
                       )}
                     </label>
+                    <InlineSiteEditor
+                      site={(directory || []).find((d) => d.id === plCommon.directoryId)}
+                      setDirectory={setDirectory} employees={employees} colors={colors} t={t}
+                    />
                   </div>
                 )}
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
@@ -10643,6 +10785,17 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                 <div className="px-4 py-2 text-sm font-semibold" style={{ background: colors.amberSoft, color: colors.amberText, fontFamily: FONT_DISPLAY }}>
                   {t.packingListDetectedTitle(plPreview.length)}
                 </div>
+                {(() => {
+                  // Guide rails for several projects ship together, so a file covering more
+                  // than one is normal rather than an error - but it has to be noticed.
+                  const codes = [...new Set(plPreview.map((g) => g.projectCode).filter(Boolean))];
+                  if (codes.length < 2) return null;
+                  return (
+                    <div className="px-4 py-2 text-xs" style={{ background: colors.redSoft, color: colors.red }}>
+                      {t.packingListMultiProjectHint(codes.length)} {codes.join(" \u00b7 ")}
+                    </div>
+                  );
+                })()}
                 {plPreview.length > 1 && (
                   <div className="px-4 py-2 flex flex-wrap items-end gap-2" style={{ borderBottom: `1px solid ${colors.surfaceDim}` }}>
                     <Field label={t.packingListShipmentCbmLabel} colors={colors}>
@@ -10674,7 +10827,7 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                 <table className="w-full text-sm" style={{ background: colors.surface }}>
                   <thead>
                     <tr style={{ background: colors.surfaceDim }}>
-                      {[t.colLot, t.colPackages, t.colContainers, t.colWeight, t.colCbm, ""].map((h) => (
+                      {[t.colLot, t.packingListColProject, t.colPackages, t.colContainers, t.colWeight, t.colCbm, ""].map((h) => (
                         <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
                       ))}
                     </tr>
@@ -10690,6 +10843,22 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                             value={g.lot}
                             onChange={(e) => setPlPreview((prev) => prev.map((grp, i) => (i === idx ? { ...grp, lot: e.target.value } : grp)))}
                           />
+                        </td>
+                        <td className="px-3 py-2">
+                          <select
+                            className={inputClass}
+                            style={{ ...inputStyleFor(colors), maxWidth: 210, fontSize: 12 }}
+                            value={g.directoryId || ""}
+                            onChange={(e) => setPlPreview((prev) => prev.map((grp, i) => (i === idx ? { ...grp, directoryId: e.target.value } : grp)))}
+                          >
+                            <option value="">{t.packingListProjectFromCommon}</option>
+                            {visibleDirectory(directory, { client: plCommon ? plCommon.client : "", showOlder: showOlderSites, items: existingItems }).map((site) => (
+                              <option key={site.id} value={site.id}>{site.siteEn}</option>
+                            ))}
+                          </select>
+                          {!g.directoryId && g.projectCode && (
+                            <div className="text-[11px] mt-0.5" style={{ color: colors.red }}>{t.packingListProjectUnknown(g.projectCode)}</div>
+                          )}
                         </td>
                         <td className="px-3 py-2">
                           <button
@@ -10736,7 +10905,7 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                       </tr>
                       {plExpanded === idx && (
                         <tr style={{ background: colors.surfaceDim }}>
-                          <td colSpan={6} className="px-3 py-2">
+                          <td colSpan={7} className="px-3 py-2">
                             <div className="text-xs mb-1" style={{ color: colors.inkFaint }}>{t.packingListCasesHint}</div>
                             <textarea
                               className={inputClass}
@@ -12511,7 +12680,7 @@ export default function FarspeedInventory() {
         )}
 
         {view === "incoming" && (
-          <IncomingPanel incoming={incoming} setIncoming={setIncoming} items={items} directory={directory} setDirectory={setDirectory} onCheckIn={handleCheckIn} onAddIncoming={handleAddIncoming} colors={colors} t={t} lang={lang} />
+          <IncomingPanel incoming={incoming} setIncoming={setIncoming} items={items} directory={directory} setDirectory={setDirectory} employees={employees} onCheckIn={handleCheckIn} onAddIncoming={handleAddIncoming} colors={colors} t={t} lang={lang} />
         )}
 
         {view === "billing" && (
