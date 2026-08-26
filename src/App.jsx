@@ -1647,6 +1647,7 @@ const TEXT = {
     incomingCheckInBtn: (n) => n > 0 ? `Check In (${n})` : "Check In",
     incomingCheckedInNote: (incId) => `Checked in from Incoming ${incId}`,
     packingListAddToIncomingBtn: (n) => `Add ${n} Group${n === 1 ? "" : "s"} to Incoming`,
+    packingListCasesHint: "Case numbers for this lot, comma-separated. Renaming keeps each case's weight and volume; adding or removing one changes what the lot holds, and the totals above follow.",
     packingListRemoveGroupBtn: "Remove this group",
     incomingDeleteBtn: "Delete this Incoming shipment",
     incomingDeleteConfirm: "Delete this Incoming shipment? This only removes it from Incoming \u2014 any inventory entry already checked in from it is not affected.",
@@ -2351,6 +2352,7 @@ const TEXT = {
     incomingCheckInBtn: (n) => n > 0 ? `辦理到倉 (${n})` : "辦理到倉",
     incomingCheckedInNote: (incId) => `由待到倉記錄 ${incId} 辦理到倉`,
     packingListAddToIncomingBtn: (n) => `新增 ${n} 組至待到倉`,
+    packingListCasesHint: "此批次之件號，以逗號分隔。更改名稱不影響各件重量及體積；增減件數則會改變批次內容，上方總數亦隨之更新。",
     packingListRemoveGroupBtn: "移除此組",
     incomingDeleteBtn: "刪除此待到倉貨件",
     incomingDeleteConfirm: "確定刪除此待到倉貨件？此操作只會移除待到倉記錄 \u2014 已辦理到倉的存倉記錄不受影響。",
@@ -9927,6 +9929,53 @@ function UploadPanel({ onReplaceIncomingCases, onImportRows, onAddIncoming, exis
   );
 }
 
+// Editing a lot's weight or volume here has to reach the cases, not just the row: the
+// depot stores and bills per case, and the group total is only their sum. A figure typed
+// in is spread across the lot's cases in the proportion they already hold - so correcting
+// a total that was read wrongly keeps the heavier cases heavier - and evenly where the
+// cases carry nothing yet, as when a document gives no volume at all. The last case takes
+// the rounding so the cases still add up to what was typed.
+// Renumbering a lot's cases from the preview. Case numbers are the depot's handle on a
+// box, and a scan or an Excel column does not always give them in the form Farspeed files
+// them under - so they are editable before anything reaches Incoming.
+//
+// Weights and descriptions stay with their case by position, so renaming is free. Adding
+// or removing a case is a real change to what the lot holds, so the lot's totals are
+// recomputed from the cases that remain rather than being quietly kept.
+function renumberGroupCases(group, text) {
+  const codes = String(text || "").split(/[,\n]/).map((c) => c.trim()).filter(Boolean);
+  const old = group.packages || [];
+  const next = codes.map((code, i) => (old[i]
+    ? { ...old[i], code }
+    : { code, description: (old[0] && old[0].description) || "", weightKg: "", cbm: "" }));
+  return {
+    ...group,
+    packages: next,
+    totalWeight: next.reduce((s, p) => s + (Number(p.weightKg) || 0), 0),
+    totalCbm: next.reduce((s, p) => s + (Number(p.cbm) || 0), 0),
+  };
+}
+function spreadGroupTotal(group, field, raw) {
+  const total = Number(raw);
+  const pkgs = group.packages || [];
+  const totalField = field === "cbm" ? "totalCbm" : "totalWeight";
+  if (!pkgs.length || !isFinite(total) || total < 0) {
+    return { ...group, [totalField]: Number(raw) || 0 };
+  }
+  const dp = field === "cbm" ? 3 : 2;
+  const f = Math.pow(10, dp);
+  const current = pkgs.map((p) => Number(p[field]) || 0);
+  const sum = current.reduce((a, b) => a + b, 0);
+  let run = 0;
+  const next = pkgs.map((p, i) => {
+    const share = sum > 0 ? current[i] / sum : 1 / pkgs.length;
+    const last = i === pkgs.length - 1;
+    const v = last ? Math.round((total - run) * f) / f : Math.round(total * share * f) / f;
+    run += v;
+    return { ...p, [field]: v ? String(v) : "" };
+  });
+  return { ...group, packages: next, [totalField]: total };
+}
 function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, setDirectory, colors, t, lang, hideExcelMode }) {
   const [showOlderSites, setShowOlderSites] = useState(false);
   const [mode, setMode] = useState("packinglist");
@@ -9936,6 +9985,7 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
   const [plPreview, setPlPreview] = useState(null);
   const [plError, setPlError] = useState("");
   const [plCommon, setPlCommon] = useState(null);
+  const [plExpanded, setPlExpanded] = useState(null);
   const [pdfStatus, setPdfStatus] = useState("idle"); // idle | scanning
   const [pdfError, setPdfError] = useState("");
   // Terminal dates a release notice carries. They belong to the check-in rather than the
@@ -10467,7 +10517,8 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                   </thead>
                   <tbody>
                     {plPreview.map((g, idx) => (
-                      <tr key={idx} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
+                      <React.Fragment key={idx}>
+                      <tr style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
                         <td className="px-3 py-2">
                           <input
                             className={inputClass}
@@ -10476,10 +10527,36 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                             onChange={(e) => setPlPreview((prev) => prev.map((grp, i) => (i === idx ? { ...grp, lot: e.target.value } : grp)))}
                           />
                         </td>
-                        <td className="px-3 py-2">{g.packages.length}</td>
+                        <td className="px-3 py-2">
+                          <button
+                            type="button"
+                            className="font-semibold underline"
+                            style={{ color: colors.amberText }}
+                            onClick={() => setPlExpanded(plExpanded === idx ? null : idx)}
+                          >
+                            {g.packages.length}
+                          </button>
+                        </td>
                         <td className="px-3 py-2 text-xs" style={{ color: colors.inkFaint }}>{g.containers.join(", ") || "—"}</td>
-                        <td className="px-3 py-2">{Math.round(g.totalWeight * 10) / 10}</td>
-                        <td className="px-3 py-2">{g.totalCbm ? Math.round(g.totalCbm * 1000) / 1000 : "—"}</td>
+                        <td className="px-3 py-2">
+                          <input
+                            type="number" min="0" step="0.1"
+                            className={inputClass}
+                            style={{ ...inputStyleFor(colors), width: 110 }}
+                            value={Math.round(g.totalWeight * 100) / 100 || ""}
+                            onChange={(e) => setPlPreview((prev) => prev.map((grp, i) => (i === idx ? spreadGroupTotal(grp, "weightKg", e.target.value) : grp)))}
+                          />
+                        </td>
+                        <td className="px-3 py-2">
+                          <input
+                            type="number" min="0" step="0.001"
+                            className={inputClass}
+                            style={{ ...inputStyleFor(colors), width: 100 }}
+                            value={g.totalCbm ? Math.round(g.totalCbm * 1000) / 1000 : ""}
+                            placeholder="—"
+                            onChange={(e) => setPlPreview((prev) => prev.map((grp, i) => (i === idx ? spreadGroupTotal(grp, "cbm", e.target.value) : grp)))}
+                          />
+                        </td>
                         <td className="px-3 py-2 text-right">
                           <button
                             type="button"
@@ -10493,6 +10570,20 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                           </button>
                         </td>
                       </tr>
+                      {plExpanded === idx && (
+                        <tr style={{ background: colors.surfaceDim }}>
+                          <td colSpan={6} className="px-3 py-2">
+                            <div className="text-xs mb-1" style={{ color: colors.inkFaint }}>{t.packingListCasesHint}</div>
+                            <textarea
+                              className={inputClass}
+                              style={{ ...inputStyleFor(colors), width: "100%", minHeight: 70, fontFamily: FONT_MONO, fontSize: 12 }}
+                              value={g.packages.map((p) => p.code).join(", ")}
+                              onChange={(e) => setPlPreview((prev) => prev.map((grp, i) => (i === idx ? renumberGroupCases(grp, e.target.value) : grp)))}
+                            />
+                          </td>
+                        </tr>
+                      )}
+                      </React.Fragment>
                     ))}
                   </tbody>
                 </table>
