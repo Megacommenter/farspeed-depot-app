@@ -1672,6 +1672,8 @@ const TEXT = {
     dirInlineEditHint: "Saved to the Directory straight away, so every future import of this site picks it up.",
     dirInlineSavedMsg: "Site updated.",
     packingListColProject: "Project / Site",
+    packingListAddSiteBtn: (code) => `Add ${code} to the Directory`,
+    packingListSitesLabel: (n) => `Project site${n === 1 ? "" : "s"} on this import (${n})`,
     packingListProjectFromCommon: "\u2014 use the fields above \u2014",
     packingListProjectUnknown: (code) => `${code} is not in the Directory \u2014 pick a site or add it first.`,
     packingListMultiProjectHint: (n) => `This file covers ${n} projects. Each lot goes to its own site, so check the column before importing \u2014 the fields above apply only to lots left unset.`,
@@ -2389,6 +2391,8 @@ const TEXT = {
     dirInlineEditHint: "即時儲存至目錄，日後匯入此地盤將自動採用。",
     dirInlineSavedMsg: "已更新地盤資料。",
     packingListColProject: "項目／地盤",
+    packingListAddSiteBtn: (code) => `將 ${code} 加入目錄`,
+    packingListSitesLabel: (n) => `本次匯入涉及之地盤（${n}）`,
     packingListProjectFromCommon: "\u2014 使用上方欄位 \u2014",
     packingListProjectUnknown: (code) => `目錄中沒有 ${code} \u2014 請選擇地盤或先行新增。`,
     packingListMultiProjectHint: (n) => `此檔案涵蓋 ${n} 個項目，各批次會分別歸入其地盤。匯入前請檢查此欄；上方欄位只適用於未指定之批次。`,
@@ -10161,13 +10165,14 @@ function spreadGroupTotal(group, field, raw) {
 // details - who orders for it, its job ref, its Chinese name - are usually wrong or missing
 // at exactly the moment a packing list or job sheet is being imported against it, and
 // walking over to the Directory tab to fix a name means losing the upload in progress.
-function InlineSiteEditor({ site, setDirectory, employees, colors, t }) {
-  const [open, setOpen] = useState(false);
+function InlineSiteEditor({ site, setDirectory, employees, colors, t, defaultOpen, label }) {
+  const [open, setOpen] = useState(!!defaultOpen);
   const [form, setForm] = useState(null);
   const [saved, setSaved] = useState(false);
   const inputStyle = inputStyleFor(colors);
   if (!site) return null;
   const start = () => { setForm({ ...site }); setSaved(false); setOpen(true); };
+  if (open && !form) setForm({ ...site });
   const save = () => {
     setDirectory((d) => (d || []).map((x) => (x.id === form.id ? { ...x, ...form } : x)));
     setOpen(false);
@@ -10177,7 +10182,7 @@ function InlineSiteEditor({ site, setDirectory, employees, colors, t }) {
     return (
       <div className="flex items-center gap-2 mt-1">
         <button type="button" className="text-xs font-semibold underline" style={{ color: colors.amberText }} onClick={start}>
-          {t.dirInlineEditBtn}
+          {label || t.dirInlineEditBtn}
         </button>
         {saved && <span className="text-xs" style={{ color: colors.green }}>{t.dirInlineSavedMsg}</span>}
       </div>
@@ -10234,6 +10239,7 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
   const [plCommon, setPlCommon] = useState(null);
   const [plExpanded, setPlExpanded] = useState(null);
   const [plShipmentCbm, setPlShipmentCbm] = useState("");
+  const [newSiteIds, setNewSiteIds] = useState([]);
   const [pdfStatus, setPdfStatus] = useState("idle"); // idle | scanning
   const [pdfError, setPdfError] = useState("");
   // Terminal dates a release notice carries. They belong to the check-in rather than the
@@ -10285,6 +10291,7 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
     setPdfWarnings([]);
     setPdfDocumentTotals(null);
     setPlShipmentCbm("");
+    setNewSiteIds([]);
     setPdfTerminalDates(null);
     setPlPreview(null);
     setPdfStatus("scanning");
@@ -10509,6 +10516,19 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
       const readPkgs = normalizedGroups.reduce((n, g) => n + g.packages.length, 0);
       // Two groups that came back with the same name would be merged by whoever reads the
       // preview, so say so rather than letting them look like one lot.
+      // Two groups of one order can carry the same annotation - CED-1831's A and B are both
+      // EL-1926 - and would then merge into one lot on import. The group letter the document
+      // itself uses is what tells them apart, so it is appended rather than left to chance.
+      const nameCounts = new Map();
+      for (const g of normalizedGroups) nameCounts.set(g.lot, (nameCounts.get(g.lot) || 0) + 1);
+      const usedSuffix = new Map();
+      for (const g of normalizedGroups) {
+        if ((nameCounts.get(g.lot) || 0) < 2) continue;
+        const n = (usedSuffix.get(g.lot) || 0) + 1;
+        usedSuffix.set(g.lot, n);
+        const letter = g.group || String.fromCharCode(64 + n);
+        g.lot = `${g.lot} \u00b7 ${letter}`;
+      }
       const lotNames = normalizedGroups.map((g) => g.lot);
       const repeatedLots = [...new Set(lotNames.filter((l, i) => lotNames.indexOf(l) !== i))];
       if (repeatedLots.length) scanWarnings.push(t.pdfRepeatedLots(repeatedLots.join(", ")));
@@ -10597,6 +10617,30 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
     e.target.value = "";
   }
 
+  // Creates the Directory entry a lot is asking for, straight from this screen. The code is
+  // all the packing list gives - "EL-1909" - so the site is created under that name and the
+  // editor opens beneath the table to put the real building name and orderer against it. A
+  // guide-rail list can bring in three projects at once, none of them on file yet.
+  function addSiteForLot(idx) {
+    const g = plPreview[idx];
+    if (!g || !g.projectCode) return;
+    const existing = findDirectorySiteByCode(directory, g.projectCode, plCommon ? plCommon.client : "");
+    const site = existing || {
+      id: `SITE${Date.now()}${idx}`,
+      siteEn: g.projectCode,
+      siteZh: "",
+      client: plCommon ? plCommon.client : CLIENTS[0],
+      jobRef: "",
+      orderedBy: (plCommon && plCommon.orderedBy) || "",
+      accountOfficer: "",
+    };
+    if (!existing) setDirectory((d) => [...(d || []), site]);
+    // Every lot on this file with the same code gets it, not just the row that was pressed.
+    setPlPreview((prev) => prev.map((row) => (
+      row.projectCode === g.projectCode && !row.directoryId ? { ...row, directoryId: site.id } : row)));
+    setNewSiteIds((prev) => (prev.includes(site.id) ? prev : [...prev, site.id]));
+  }
+
   function addToIncoming() {
     let effectiveDirectoryId = plCommon.directoryId || "";
 
@@ -10634,6 +10678,7 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
     onAddIncoming(newIncoming);
     setPlPreview(null);
     setPlCommon(null);
+    setNewSiteIds([]);
   }
 
 
@@ -10857,7 +10902,17 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                             ))}
                           </select>
                           {!g.directoryId && g.projectCode && (
-                            <div className="text-[11px] mt-0.5" style={{ color: colors.red }}>{t.packingListProjectUnknown(g.projectCode)}</div>
+                            <div className="text-[11px] mt-0.5" style={{ color: colors.red }}>
+                              {t.packingListProjectUnknown(g.projectCode)}{" "}
+                              <button
+                                type="button"
+                                className="font-semibold underline"
+                                style={{ color: colors.amberText }}
+                                onClick={() => addSiteForLot(idx)}
+                              >
+                                {t.packingListAddSiteBtn(g.projectCode)}
+                              </button>
+                            </div>
                           )}
                         </td>
                         <td className="px-3 py-2">
@@ -10920,6 +10975,36 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                     ))}
                   </tbody>
                 </table>
+                {(() => {
+                  // Every Directory site this import touches, editable here. A newly created
+                  // one opens straight away, since it is holding nothing but a code.
+                  const ids = [...new Set(plPreview.map((g) => g.directoryId).filter(Boolean))];
+                  if (!ids.length) return null;
+                  return (
+                    <div className="px-4 py-3" style={{ borderTop: `1px solid ${colors.surfaceDim}` }}>
+                      <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>
+                        {t.packingListSitesLabel(ids.length)}
+                      </div>
+                      {ids.map((id) => {
+                        const site = (directory || []).find((d) => d.id === id);
+                        if (!site) return null;
+                        return (
+                          <div key={id} className="mb-1">
+                            <span className="text-xs" style={{ color: colors.ink }}>{site.siteEn || site.siteZh}</span>
+                            <InlineSiteEditor
+                              site={site}
+                              defaultOpen={newSiteIds.includes(id)}
+                              setDirectory={setDirectory}
+                              employees={employees}
+                              colors={colors}
+                              t={t}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </div>
 
               <div className="flex gap-2">
