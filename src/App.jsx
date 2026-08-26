@@ -1378,8 +1378,9 @@ const TEXT = {
 
     tabExcel: "Excel Upload",
     tabPdf: "PDF Scan",
-    pdfDuplicateCases: (lot, codes) => `${lot}: case ${codes} appears more than once, which will double-count its weight. Check it against the paper before importing.`,
     pdfCaseCountMismatch: (lot, stated, read) => `${lot}: the document states ${stated} package${stated === 1 ? "" : "s"} but ${read} case number${read === 1 ? "" : "s"} were read \u2014 check the C/S NO. list.`,
+    pdfWholeDocument: "This document",
+    pdfDocumentTotals: (cbm, kg) => `The document gives one total for the whole shipment \u2014 ${cbm} CBM, ${kg} kg \u2014 without splitting it between the orders, so it has not been divided up. Enter the volume per lot from the paperwork if you have it.`,
     pdfTerminalDatesFound: (eta, lastFree) => `This document also gives terminal dates \u2014 arrival ${eta}, last free day ${lastFree}. Enter them on the entry when you check these cases in; they are not part of the packing list.`,
     tabManualPackingList: "Manual Entry",
     manualLotBuilderLabel: "Build a lot from the job sheet",
@@ -1852,7 +1853,7 @@ const TEXT = {
     legacySiteRequiredMsg: "Enter at least one of English or Chinese site name.",
     legacySiteRequiredSummaryMsg: "One or more files are missing a site name in both languages \u2014 fill in at least one (English or Chinese) for each file before processing.",
     legacyScanningMsg: "Reading files\u2026",
-    legacyAutoDetectHint: "Excel files (.xlsx/.xls/.csv) are scanned automatically for client, site, job number, date, SS/D.O. info, and package totals \u2014 review and correct the pre-filled fields below before processing. PDFs and images still need manual entry.",
+    legacyAutoDetectHint: "Excel files (.xlsx/.xls/.csv) are read directly, and scanned PDFs are read by scanning the page \u2014 client, site, job number, date, SS/D.O. info, referral blocks, case numbers and totals all come through. Review the pre-filled fields below before processing; a scan is not as certain as a spreadsheet. Images still need manual entry.",
     legacyAutoDetectedTag: "Auto-detected from file \u2014 please check",
     legacyReferLine: (job, date) => `refers to job no. ${job} on ${date}`,
     legacyReferJobNoLabel: "Refers to Arrival Job No.",
@@ -1904,7 +1905,8 @@ const TEXT = {
     legacySheetCasesMissing: (list) => `case ${list} not at the depot`,
     legacyReplaceCasesHint: (n) => `Same number of cases, but ${n} numbered differently here than on this sheet. Either source can be wrong \u2014 a scan can drop a digit, a typed sheet can carry a typo \u2014 so check the paper before changing anything:`,
     legacyReplaceCasesBtn: "Renumber this shipment to match the sheet",
-    legacyEntryDuplicateCases: (codes) => `This entry holds case ${codes} more than once, which also double-counts its weight. Correct the case list before delivering against it.`,
+    legacyScannedFromPdf: "Read by scanning the page \u2014 check the fields and case numbers against the paper before processing.",
+    legacyScanFailed: (why) => `Could not read this PDF (${why}). Fill the fields in by hand, or upload the Excel original if there is one.`,
     legacyCaseCountMismatch: (lot, stated, listed) => `${lot}: the sheet says ${stated} PKGS but lists ${listed} case number${listed === 1 ? "" : "s"} \u2014 check the C/S No. list before processing.`,
     legacyIncomingCasesMissing: (list) => `case ${list} is not on this shipment`,
     legacyCasesFoundInMore: (n) => `\u2026 and ${n} more shipment${n === 1 ? "" : "s"} on this lot.`,
@@ -2080,8 +2082,9 @@ const TEXT = {
 
     tabExcel: "上載Excel",
     tabPdf: "掃描PDF",
-    pdfDuplicateCases: (lot, codes) => `${lot}：第 ${codes} 件重複出現，重量亦會重複計算。匯入前請與紙本核對。`,
     pdfCaseCountMismatch: (lot, stated, read) => `${lot}：文件註明 ${stated} 件，但讀取到 ${read} 個件號 \u2014 請核對 C/S NO. 清單。`,
+    pdfWholeDocument: "此文件",
+    pdfDocumentTotals: (cbm, kg) => `文件只提供整批總數 \u2014 ${cbm} CBM、${kg} 公斤 \u2014 並未按訂單分列，故系統不作分攤。如有資料請自行輸入各批次體積。`,
     pdfTerminalDatesFound: (eta, lastFree) => `此文件另有碼頭日期 \u2014 到港 ${eta}，免費倉期至 ${lastFree}。辦理到倉時請於記錄輸入；此並非裝箱單資料。`,
     tabManualPackingList: "手動輸入",
     manualLotBuilderLabel: "由工單建立批次",
@@ -2554,7 +2557,7 @@ const TEXT = {
     legacySiteRequiredMsg: "請至少填寫英文或中文地盤名稱其中一項。",
     legacySiteRequiredSummaryMsg: "部分檔案的地盤名稱（中英文）均未填寫 — 處理前請至少填寫其中一種語言。",
     legacyScanningMsg: "讀取檔案中…",
-    legacyAutoDetectHint: "Excel檔案 (.xlsx/.xls/.csv) 會自動掃描客戶、地盤、工單號、日期、提單資料及件數/重量/CBM等資料 — 請於處理前檢查並修正下方已預填的欄位。PDF及圖片檔仍需手動輸入。",
+    legacyAutoDetectHint: "Excel檔案 (.xlsx/.xls/.csv) 直接讀取，PDF則以掃描方式讀取 — 客戶、地盤、工單號、日期、提單資料、參照工單、件號及總數均會自動填入。請於處理前檢查下方欄位；掃描結果不及試算表準確。圖片檔仍需手動輸入。",
     legacyAutoDetectedTag: "已從檔案自動偵測 — 請核對",
     legacyReferLine: (job, date) => `指向工單號 ${job}，日期 ${date}`,
     legacyReferJobNoLabel: "指向到倉工單號",
@@ -2606,7 +2609,8 @@ const TEXT = {
     legacySheetCasesMissing: (list) => `第 ${list} 件不在倉內`,
     legacyReplaceCasesHint: (n) => `件數相同，但其中 ${n} 個件號與本工單不符。兩者皆可能有誤 \u2014 掃描可能漏字，工單亦可能手誤 \u2014 請先核對紙本再作更改：`,
     legacyReplaceCasesBtn: "將此批到貨件號改為工單所示",
-    legacyEntryDuplicateCases: (codes) => `此記錄之第 ${codes} 件重複出現，重量亦會重複計算。請先修正件號清單再辦理送貨。`,
+    legacyScannedFromPdf: "此為掃描讀取結果 \u2014 處理前請與紙本核對各欄位及件號。",
+    legacyScanFailed: (why) => `無法讀取此PDF（${why}）。請手動輸入，或改為上載Excel原檔。`,
     legacyCaseCountMismatch: (lot, stated, listed) => `${lot}：工單註明 ${stated} 件，但只列出 ${listed} 個件號 \u2014 處理前請核對 C/S No. 清單。`,
     legacyIncomingCasesMissing: (list) => `第 ${list} 件不在此批到貨內`,
     legacyCasesFoundInMore: (n) => `\u2026另有 ${n} 批到貨屬同一批次。`,
@@ -6485,9 +6489,44 @@ function codeLeadingNumber(code) {
   const m = String(code).match(/^\d+/);
   return m ? Number(m[0]) : null;
 }
+// A case marking is not always unique within a shipment - Mitsubishi's 13-DM-26-0500 has
+// two lines marked 01C01, and both are genuine. So the selection is a multiset: a marking
+// chosen once accounts for one case, not for every case bearing that marking. Counting by
+// set membership made 26 selected cases weigh in as 27 packages.
+// Which occurrence of a repeated marking a chip stands for. With two cases both marked
+// 01C01, "is this one selected?" cannot be answered by the code alone: the nth case
+// bearing a marking is selected when the marking was chosen at least n times.
+function nthOccurrence(packages, index) {
+  const code = (packages[index] || {}).code;
+  let n = 0;
+  for (let i = 0; i < index; i++) if (packages[i].code === code) n += 1;
+  return n;
+}
+function occurrenceSelected(packages, index, codes) {
+  const code = (packages[index] || {}).code;
+  const chosen = (codes || []).filter((c) => c === code).length;
+  return nthOccurrence(packages, index) < chosen;
+}
+function toggleOccurrence(packages, index, codes) {
+  const code = (packages[index] || {}).code;
+  const cur = codes || [];
+  if (occurrenceSelected(packages, index, cur)) {
+    const out = [...cur];
+    out.splice(out.indexOf(code), 1);
+    return out;
+  }
+  return [...cur, code];
+}
 function sumSelectedPackages(packages, codes) {
-  const set = new Set(codes);
-  const matched = (packages || []).filter((p) => set.has(p.code));
+  const wanted = new Map();
+  for (const c of codes || []) wanted.set(c, (wanted.get(c) || 0) + 1);
+  const matched = [];
+  for (const p of packages || []) {
+    const left = wanted.get(p.code) || 0;
+    if (left <= 0) continue;
+    wanted.set(p.code, left - 1);
+    matched.push(p);
+  }
   return {
     count: matched.length,
     weight: matched.reduce((s, p) => s + (Number(p.weightKg) || 0), 0),
@@ -6964,6 +7003,9 @@ function LegacyUploadRow({ onReplaceIncomingCases, row, onChange, onRemove, inco
       })
     : [];
   const selectedByIncoming = row.selectedByIncoming || {};
+  function setSelectedForIncoming(incId, next) {
+    onChange({ ...row, selectedByIncoming: { ...selectedByIncoming, [incId]: next } });
+  }
   function toggleIncomingCode(incId, code) {
     const cur = selectedByIncoming[incId] || [];
     const next = cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code];
@@ -7033,12 +7075,6 @@ function LegacyUploadRow({ onReplaceIncomingCases, row, onChange, onRemove, inco
       const norm = (c) => String(c || "").toUpperCase().replace(/\s+/g, "");
       const have = new Map(available.map((p) => [norm(p.code), p.code]));
       const wanted = byCode[codeKey].codes;
-      const counts = new Map();
-      for (const p of inc.packages || []) {
-        const k = norm(p.code);
-        counts.set(k, (counts.get(k) || 0) + 1);
-      }
-      const repeated = [...counts.entries()].filter(([, n]) => n > 1).map(([c]) => c);
       const missing = wanted.filter((c) => !have.has(norm(c)));
       // Same number of cases, different numbering. Which list is right is not something
       // this app can know: a scanned memo can drop a digit, and a typed job sheet can carry
@@ -7054,7 +7090,7 @@ function LegacyUploadRow({ onReplaceIncomingCases, row, onChange, onRemove, inco
       const replaceable = missing.length > 0 && sameCount && differences.length > 0;
       return {
         codes: wanted.map((c) => have.get(norm(c))).filter(Boolean),
-        missing, repeated, replaceable, wanted, differences,
+        missing, replaceable, wanted, differences,
         elsewhere: [], text: byCode[codeKey].text || "", shared: [],
       };
     }
@@ -7246,16 +7282,7 @@ function LegacyUploadRow({ onReplaceIncomingCases, row, onChange, onRemove, inco
       const have = new Map(deliverable.map((p) => [norm(p.code), p.code]));
       const codes = coded.codes.map((c) => have.get(norm(c))).filter(Boolean);
       const missing = coded.codes.filter((c) => !have.has(norm(c)));
-      // A case number repeated inside one entry is always wrong, and it is the usual
-      // reason a code the sheet asks for cannot be found: a scanned memo that rendered
-      // "01C2101" as "01C01" leaves the entry holding 01C01 twice and 01C2101 not at all.
-      const counts = new Map();
-      for (const p of it.packages || []) {
-        const k = norm(p.code);
-        counts.set(k, (counts.get(k) || 0) + 1);
-      }
-      const repeated = [...counts.entries()].filter(([, n]) => n > 1).map(([c]) => c);
-      return { codes, missing, repeated, text: coded.text || "" };
+      return { codes, missing, text: coded.text || "" };
     }
     const mark = sheetCasesFor(it);
     if (!mark || !(mark.numbers || []).length) return null;
@@ -7440,7 +7467,7 @@ function LegacyUploadRow({ onReplaceIncomingCases, row, onChange, onRemove, inco
       const span = remainingPkgs.slice(Math.min(from, index), Math.max(from, index) + 1).map((p) => p.code);
       next = [...new Set([...cur, ...span])];
     } else {
-      next = cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code];
+      next = toggleOccurrence(remainingPkgs || [], index, cur);
     }
     setLastTappedByItem((prev) => ({ ...prev, [itemId]: index }));
     onChange({ ...row, selectedByItem: { ...selectedByItem, [itemId]: next } });
@@ -7715,9 +7742,6 @@ function LegacyUploadRow({ onReplaceIncomingCases, row, onChange, onRemove, inco
                       {sheetSel.missing.length > 0 && (
                         <span style={{ color: colors.red }}> {"\u00b7"} {t.legacyIncomingCasesMissing(sheetSel.missing.join(", "))}</span>
                       )}
-                      {(sheetSel.repeated || []).length > 0 && (
-                        <div style={{ color: colors.red }}>{t.legacyEntryDuplicateCases(sheetSel.repeated.join(", "))}</div>
-                      )}
                       {sheetSel.replaceable && onReplaceIncomingCases && (
                         <div style={{ color: colors.amberText }}>
                           <div>{t.legacyReplaceCasesHint(sheetSel.differences.length)}</div>
@@ -7769,22 +7793,28 @@ function LegacyUploadRow({ onReplaceIncomingCases, row, onChange, onRemove, inco
                           </div>
                         )}
                         <div className="flex flex-wrap gap-2">
-                          {grp.packages.map((p) => (
+                          {grp.packages.map((p) => {
+                            // Chips are keyed and highlighted by position, not by marking,
+                            // so two cases sharing a marking can be picked apart.
+                            const gi = remainingPkgs.findIndex((x) => x === p);
+                            const on = occurrenceSelected(remainingPkgs, gi, selectedCodes);
+                            return (
                             <button
-                              key={p.code}
+                              key={`${p.code}-${gi}`}
                               type="button"
-                              onClick={() => toggleIncomingCode(inc.id, p.code)}
+                              onClick={() => setSelectedForIncoming(inc.id, toggleOccurrence(remainingPkgs, gi, selectedCodes))}
                               className="px-2.5 py-1.5 rounded text-xs font-semibold text-left"
                               style={{
-                                border: `1px solid ${selectedCodes.includes(p.code) ? colors.amber : colors.line}`,
-                                background: selectedCodes.includes(p.code) ? colors.amberSoft : colors.surface,
-                                color: selectedCodes.includes(p.code) ? colors.amberText : colors.ink,
+                                border: `1px solid ${on ? colors.amber : colors.line}`,
+                                background: on ? colors.amberSoft : colors.surface,
+                                color: on ? colors.amberText : colors.ink,
                               }}
                               title={p.description}
                             >
                               {p.code}{p.description ? ` \u2014 ${p.description}` : ""}
                             </button>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     ))}
@@ -7859,9 +7889,6 @@ function LegacyUploadRow({ onReplaceIncomingCases, row, onChange, onRemove, inco
                       {t.legacySheetCasesNote(sheetSel.text, sheetSel.codes.length)}
                       {sheetSel.missing.length > 0 && (
                         <span style={{ color: colors.red }}> {"\u00b7"} {t.legacySheetCasesMissing(sheetSel.missing.join(", "))}</span>
-                      )}
-                      {(sheetSel.repeated || []).length > 0 && (
-                        <div style={{ color: colors.red }}>{t.legacyEntryDuplicateCases(sheetSel.repeated.join(", "))}</div>
                       )}
                     </div>
                   )}
@@ -7969,14 +7996,14 @@ function LegacyUploadRow({ onReplaceIncomingCases, row, onChange, onRemove, inco
                   <div className="flex flex-wrap gap-2">
                     {remainingPkgs.map((p, idx) => (
                       <button
-                        key={p.code}
+                        key={`${p.code}-${idx}`}
                         type="button"
                         onClick={(e) => toggleItemCode(it.id, p.code, idx, e.shiftKey, remainingPkgs)}
                         className="px-2.5 py-1.5 rounded text-xs font-semibold text-left"
                         style={{
-                          border: `1px solid ${selectedCodes.includes(p.code) ? colors.amber : colors.line}`,
-                          background: selectedCodes.includes(p.code) ? colors.amberSoft : colors.surface,
-                          color: selectedCodes.includes(p.code) ? colors.amberText : colors.ink,
+                          border: `1px solid ${occurrenceSelected(remainingPkgs, idx, selectedCodes) ? colors.amber : colors.line}`,
+                          background: occurrenceSelected(remainingPkgs, idx, selectedCodes) ? colors.amberSoft : colors.surface,
+                          color: occurrenceSelected(remainingPkgs, idx, selectedCodes) ? colors.amberText : colors.ink,
                         }}
                         title={p.description}
                       >
@@ -7997,6 +8024,16 @@ function LegacyUploadRow({ onReplaceIncomingCases, row, onChange, onRemove, inco
       )}
       {(row.docType === "Devan" || row.docType === "CFS") && (
         <div className="text-xs" style={{ color: colors.inkFaint }}>{t.legacyArrivalStaysOpenHint}</div>
+      )}
+      {row.scanError && (
+        <div className="px-2 py-1.5 rounded text-xs" style={{ background: colors.redSoft, color: colors.red }}>
+          {t.legacyScanFailed(row.scanError)}
+        </div>
+      )}
+      {row.scannedFromPdf && (
+        <div className="px-2 py-1.5 rounded text-xs" style={{ background: colors.amberSoft, color: colors.amberText }}>
+          {t.legacyScannedFromPdf}
+        </div>
       )}
       {(row.caseCountMismatches || []).length > 0 && (
         <div className="px-2 py-1.5 rounded text-xs" style={{ background: colors.redSoft, color: colors.red }}>
@@ -8599,6 +8636,112 @@ function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, 
   );
 }
 
+// Reads a scanned Farspeed job sheet. The Excel originals are parsed properly by
+// guessFieldsFromWorkbook; a PDF has no cells to read, so the page is scanned and the same
+// structures are rebuilt here from what comes back. Everything downstream - the referral
+// blocks, the case markings, the declared figures - is then identical to an Excel upload.
+async function scanLegacyJobSheetPdf(file) {
+  const base64 = await new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result).split(",")[1]);
+    r.onerror = () => rej(new Error("read failed"));
+    r.readAsDataURL(file);
+  });
+  const prompt = `This is a scanned Farspeed Contractors job sheet (工單 / JOB SHEET) for a Hong Kong lift depot. Read it and return JSON only - no prose, no markdown fences.
+
+The header carries: ACCOUNT (客戶) the client; TO (送) the site, often an English line and a Chinese line; JOB NO. (快達單號); DATE (日期); ORDERED BY (落單人); JOB REF. (地盤代號); P.O. NO.; SS/D.O. NO. (提單資料).
+
+The body is one or more referral blocks. Each begins "Ref Job no. NNNNNNN on DD/MM/YYYY" (sometimes "Refer to job no."), and contains a "C/S No." line stating that block's PKGS, KGS and CBM, followed by that block's case numbers. Case numbers are printed exactly as they are used - "01A11", "02D5102A", "01C3101-4-1", or plain numbers like "1-3/3" - listed comma-separated and wrapped over as many lines as needed. A "LIFT NO." line above the blocks gives the lift(s). A handwritten or printed "Refer. DM no. 13-DM-26-NNNN" may appear; return it as dmNo. A final "共:" line gives the sheet total.
+
+Return exactly this shape:
+{"docType":"Delivery or CFS or Devan or Shifting or Hoisting","client":"","projectEn":"","projectZh":"","jobNumber":"","date":"YYYY-MM-DD","jobRef":"","orderedBy":"","poNo":"","ssDoNo":"","shkNumber":"","dmNo":"","liftNo":"","blocks":[{"refJobNumber":"","refDate":"YYYY-MM-DD","liftNo":"","dmNo":"","shippingMark":"","pkgs":"","kg":"","cbm":"","caseNumbers":["every case number of this block, one per entry, exactly as printed"]}],"total":{"pkgs":"","kg":"","cbm":""}}
+
+Rules: numbers as plain digits with no thousands separators. Dates as YYYY-MM-DD; the sheet writes them day-first. Use '' for anything not present. Never invent a case number and never renumber one - if a block lists no cases, return an empty array.`;
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 8000,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
+          { type: "text", text: prompt },
+        ],
+      }],
+    }),
+  });
+  if (!response.ok) throw new Error(`scan failed (${response.status})`);
+  const data = await response.json();
+  const text = (data.content || []).map((c) => (c.type === "text" ? c.text : "")).join("\n");
+  return JSON.parse(text.replace(/```json|```/g, "").trim());
+}
+// Rebuilds the row fields a workbook upload would have produced.
+function legacyFieldsFromScan(parsed) {
+  const out = {
+    client: parsed.client || "", projectEn: parsed.projectEn || "", projectZh: parsed.projectZh || "",
+    jobNumber: parsed.jobNumber || "", date: parsed.date || "", jobRef: parsed.jobRef || "",
+    ssDoNo: parsed.ssDoNo || "", shkNumber: parsed.shkNumber || "",
+    packageCount: (parsed.total && parsed.total.pkgs) || "",
+    weightKg: (parsed.total && parsed.total.kg) || "",
+    volumeCbm: (parsed.total && parsed.total.cbm) || "",
+    unitCode: parsed.liftNo || "",
+    refBlocks: [], declaredTotalsList: [], caseMarksByLot: {}, caseMarksByRef: {},
+    caseCodesByLot: {}, caseCountMismatches: [],
+  };
+  const blocks = parsed.blocks || [];
+  out.referJobNumber = [...new Set(blocks.map((b) => String(b.refJobNumber || "").trim()).filter(Boolean))].join(", ");
+  out.referDate = (blocks.find((b) => b.refDate) || {}).refDate || "";
+  for (const b of blocks) {
+    const codes = (b.caseNumbers || []).map((c) => String(c || "").trim()).filter(Boolean);
+    // A block whose cases are plain numbers keeps the numeric reading, so "1-3/3" still
+    // behaves like a marking off an Excel sheet; anything with letters is a code.
+    const numeric = codes.length > 0 && codes.every((c) => /^\d+(\/\d+)?$/.test(c));
+    const lotRef = String(b.dmNo || parsed.dmNo || b.shippingMark || b.refJobNumber || "").trim();
+    const unitCode = String(b.liftNo || parsed.liftNo || "").trim();
+    const lot = {
+      lotRef, altRef: String(b.shippingMark || "").trim(), unitCode,
+      caseNumbers: numeric ? codes.map((c) => Number(String(c).split("/")[0])) : [],
+      caseCodes: numeric ? [] : codes,
+      caseText: codes.join(", "), lotCases: null,
+      pkgs: String(b.pkgs || ""), kg: String(b.kg || ""), cbm: String(b.cbm || ""),
+      shkNumber: parsed.shkNumber || "",
+    };
+    out.refBlocks.push({
+      refJobNumber: String(b.refJobNumber || "").trim(), refDate: b.refDate || "",
+      shkNumber: parsed.shkNumber || "", liftNo: unitCode, lots: [lot],
+      pkgs: lot.pkgs, kg: lot.kg, cbm: lot.cbm, caseNumbers: lot.caseNumbers,
+    });
+    const stated = Number(lot.pkgs);
+    if (stated > 0 && codes.length > 0 && stated !== codes.length) {
+      out.caseCountMismatches.push({ lot: lotRef || unitCode || "", stated, listed: codes.length });
+    }
+    if (lot.kg || lot.cbm) {
+      out.declaredTotalsList.push({
+        pkgs: lot.pkgs, kg: lot.kg, cbm: lot.cbm,
+        refJobNumber: lot.lotRef ? String(b.refJobNumber || "") : "", shkNumber: parsed.shkNumber || "",
+        context: [b.refJobNumber, parsed.shkNumber, unitCode, lotRef, lot.altRef].filter(Boolean).join(" "),
+      });
+    }
+    for (const key of [lotRef, lot.altRef, unitCode, String(b.refJobNumber || "").trim()]) {
+      if (!key) continue;
+      const k = key.toUpperCase();
+      if (lot.caseCodes.length) {
+        out.caseCodesByLot[k] = {
+          codes: [...new Set([...((out.caseCodesByLot[k] || {}).codes || []), ...lot.caseCodes])],
+          text: lot.caseText,
+        };
+      } else if (lot.caseNumbers.length) {
+        out.caseMarksByLot[k] = {
+          numbers: [...new Set([...((out.caseMarksByLot[k] || {}).numbers || []), ...lot.caseNumbers])].sort((x, y) => x - y),
+          text: lot.caseText, lotCases: null,
+        };
+      }
+    }
+  }
+  return out;
+}
 function LegacyUploadsPanel({ onReplaceIncomingCases, legacyArchive, setLegacyArchive, items, incoming, onLegacyCheckIn, onLegacyCheckInBatch, directory, onLegacyImport, onLegacyDeliver, onLegacyEnrich, onAddIncoming, colors, t, lang }) {
   const [rows, setRows] = useState([]);
   const [processing, setProcessing] = useState(false);
@@ -8747,6 +8890,39 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, legacyArchive, setLegacyAr
           });
           if (base.docType === "Delivery" && guessed.referJobNumber) base.jobNumber = base.jobNumber || guessed.referJobNumber;
         } catch (err) { /* fall back to filename-only guesses */ }
+      } else if (/\.pdf$/i.test(file.name)) {
+        try {
+          const parsed = await scanLegacyJobSheetPdf(file);
+          const guessed = legacyFieldsFromScan(parsed);
+          const clientMatch = resolveClientGuess(guessed.client);
+          Object.assign(base, {
+            docType: parsed.docType || base.docType,
+            client: clientMatch || base.client,
+            projectEn: guessed.projectEn || base.projectEn,
+            projectZh: guessed.projectZh || base.projectZh,
+            jobNumber: guessed.jobNumber || base.jobNumber,
+            date: guessed.date || base.date,
+            unitCode: guessed.unitCode || base.unitCode,
+            packageCount: guessed.packageCount || base.packageCount,
+            weightKg: guessed.weightKg || base.weightKg,
+            volumeCbm: guessed.volumeCbm || base.volumeCbm,
+            ssDoNo: guessed.ssDoNo || base.ssDoNo,
+            jobRef: guessed.jobRef || base.jobRef,
+            shkNumber: guessed.shkNumber || base.shkNumber,
+            referJobNumber: guessed.referJobNumber || base.referJobNumber,
+            referDate: guessed.referDate || base.referDate,
+            declaredTotalsList: guessed.declaredTotalsList,
+            refBlocks: guessed.refBlocks,
+            caseMarksByLot: guessed.caseMarksByLot,
+            caseCodesByLot: guessed.caseCodesByLot,
+            caseCountMismatches: guessed.caseCountMismatches,
+            autoDetected: true,
+            scannedFromPdf: true,
+          });
+          if (base.docType === "Delivery" && guessed.referJobNumber) base.jobNumber = base.jobNumber || guessed.referJobNumber;
+        } catch (err) {
+          base.scanError = String(err && err.message ? err.message : err);
+        }
       }
       newRows.push(base);
     }
@@ -9766,6 +9942,7 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
   // packing list, so they are shown for copying across rather than silently dropped.
   const [pdfTerminalDates, setPdfTerminalDates] = useState(null);
   const [pdfWarnings, setPdfWarnings] = useState([]);
+  const [pdfDocumentTotals, setPdfDocumentTotals] = useState(null);
   const inputStyle = inputStyleFor(colors);
   const siteSuggestions = useMemo(() => {
     const fromDirectory = (directory || []).map((s) => s.siteEn).filter(Boolean);
@@ -9801,6 +9978,7 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
     if (!file) return;
     setPdfError("");
     setPdfWarnings([]);
+    setPdfDocumentTotals(null);
     setPdfTerminalDates(null);
     setPlPreview(null);
     setPdfStatus("scanning");
@@ -9817,6 +9995,7 @@ Follow these extraction rules exactly - they keep the output compact even for lo
 
 1. Each row/block of the table is ONE case/package. For each case extract exactly these 5 things:
    - "code": the case/box number exactly as printed, letters and dashes included - "01A2101", "02C3102-3-1", "16D5416C", "C01". Never renumber or simplify them.
+   - "description" on the group: a short generic name for what the order holds, e.g. "ELEVATOR MATERIALS" or the commodity named on an accompanying delivery order ("Guide Rail"). Used for any case whose own line gives no description.
    - "lot": for a Mitsubishi document, the Delivery Memo number - "13-DM-26-0500", printed as "DM No." - which is what these lots are filed under; fall back to the shipping mark (S/M) if the DM number is blank. Otherwise the lift/unit number. This is very often printed right next to the case number in parentheses, like "(#.01)" or "(#.23)" - extract just the number (e.g. "01", "23"). Different cases sharing the same case-number prefix (e.g. multiple "C21" cases) but different lift numbers are DIFFERENT packages in DIFFERENT lots. If there's no such lift marker anywhere, use the shop order number or another batch identifier as the lot instead.
    - "description": ONLY the general category/heading text for that case (e.g. "Guide Rail", "Rail Bracket", "Traction Machine", "Installation Material"). Do NOT list the individual part numbers or sub-components underneath it even if the document itemizes many - this is the single most important rule for keeping output size manageable on long documents.
    - "weightKg": use the GROSS weight (毛重 / GROSS column), not net weight - gross is what matters here.
@@ -9825,15 +10004,22 @@ Follow these extraction rules exactly - they keep the output compact even for lo
    - "dimUnit": the unit those dimensions are printed in - "cm" or "mm". Take it from the column heading or a nearby note. If nothing says, use "" rather than guessing.
 2. Group all cases by their lot/lift number into the "groups" array - one entry per distinct lot.
 2b. Also look for shipping/bill-of-lading details anywhere on the document: vessel/ship name (often after "ex ss." or 船名), voyage number (航次), container numbers (貨櫃號), and bill-of-lading number (提單編號 / BL NO.). Combine them into one line for "ssDoNo" in roughly this style: ex ss."SHIP NAME" V.VOYAGE; CONTAINERS NO. XXXX/40GP. If none present, use ''. Also return them separately in "shipping".
+2b-ii. IMPORTANT - a factory packing list often has a "package"/"Packages"/件數 column that gives the NUMBER of packages on that line, not a case number. One line reading "29 | APK00171P001 | T89/B" is twenty-nine packages, not one. Never count table rows as packages. For a document like that, return each line of the order in "lines" and leave "packages" empty:
+   - "packages": how many packages that line covers, as a number. A dash or blank means zero - loose hardware travelling inside another line's cases.
+   - "description": the short material description on that line.
+   - "netWeightKg" and "grossWeightKg": both if both columns exist, else whichever is given. Do NOT pick between them; the app takes the heavier.
+   - "cbm": only if that line states one.
+   Group the lines by the order the document groups them under - "Order No.CED-1831" and the reference beside it - and put that whole heading in "lot", e.g. "CED-1831 (EL-1926)".
 2c. IMPORTANT - many documents are NOT per-case tables at all. A Delivery Memo (DM), an arrival/release notice (到貨通知提貨單), or a shipping order states only the OVERALL totals - "29 Package(s)", "14.088 CBM", "12,909 Kgs", "29 件" - and then lists the case markings separately under a heading like "C/S NO." or "SHIPPING MARK", one marking per line, sometimes several comma-separated per line (e.g. "01C01,01C02,01C03"). For a document like that:
    - put the stated totals in "statedPackages", "statedWeightKg" and "statedCbm" on the group;
    - put every case marking, expanded from any comma-separated lines into individual entries, into "caseNumbers" on the group, exactly as printed;
    - leave "packages" as an empty array. Do NOT invent per-case weights or volumes for these - the totals are all the document states.
+2c-ii. A packing list is often sent with a delivery order or arrival notice covering the same shipment. Where the total CBM or weight appears only on that companion page and not per order, put it in "documentTotals" - do NOT divide it between the orders yourself, and do NOT copy it onto one of them.
 2d. Look for terminal/storage dates: the arrival/ETA date (到港日期 / ETA) as "terminalArrivalDate" and the last free storage day (免費倉期 ... 至) as "lastFreeDay", both as YYYY-MM-DD. Use '' if absent.
 3. Keep everything as compact as possible: short descriptions, no commentary, no repeated sub-item lists.
 
 Respond with ONLY a raw JSON object in EXACTLY this shape and nothing else (no markdown fences, no commentary, no explanation before or after):
-{"client": "best-guess client name or ''", "project": "site/building/project name found in the document, or ''", "ssDoNo": "vessel + voyage + container line or ''", "shipping": {"vessel": "", "voyage": "", "blNo": "", "containerNo": ""}, "terminalArrivalDate": "YYYY-MM-DD or ''", "lastFreeDay": "YYYY-MM-DD or ''", "groups": [{"lot": "lift/lot/shop-order number identifying this batch", "containers": ["container numbers if any, else empty array"], "statedPackages": number_or_empty_string, "statedWeightKg": number_or_empty_string, "statedCbm": number_or_empty_string, "caseNumbers": ["case markings, one per entry, only for totals-only documents"], "packages": [{"code": "case/package number", "description": "short category name, a few words only", "weightKg": number_or_empty_string, "cbm": number_or_empty_string, "length": number_or_empty_string, "width": number_or_empty_string, "height": number_or_empty_string, "dimUnit": "cm_or_mm_or_empty"}]}]}
+{"client": "best-guess client name or ''", "project": "site/building/project name found in the document, or ''", "ssDoNo": "vessel + voyage + container line or ''", "shipping": {"vessel": "", "voyage": "", "blNo": "", "containerNo": ""}, "terminalArrivalDate": "YYYY-MM-DD or ''", "lastFreeDay": "YYYY-MM-DD or ''", "documentTotals": {"packages": number_or_empty_string, "weightKg": number_or_empty_string, "cbm": number_or_empty_string}, "groups": [{"lot": "lift/lot/shop-order number identifying this batch", "containers": ["container numbers if any, else empty array"], "statedPackages": number_or_empty_string, "statedWeightKg": number_or_empty_string, "statedCbm": number_or_empty_string, "caseNumbers": ["case markings, one per entry, only for totals-only documents"], "lines": [{"packages": number, "description": "", "netWeightKg": number_or_empty_string, "grossWeightKg": number_or_empty_string, "cbm": number_or_empty_string}], "packages": [{"code": "case/package number", "description": "short category name, a few words only", "weightKg": number_or_empty_string, "cbm": number_or_empty_string, "length": number_or_empty_string, "width": number_or_empty_string, "height": number_or_empty_string, "dimUnit": "cm_or_mm_or_empty"}]}]}
 If the document only has one overall lot/shipment with no explicit lift/case breakdown, put everything under a single group with a sensible lot name.`;
       const response = await fetch("/api/scan-pdf", {
         method: "POST",
@@ -9879,6 +10065,54 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
       // block. Those become one case per marking here, with the stated totals spread
       // evenly across them, because the document says nothing per case. The last case
       // carries the rounding so the cases still add up to what was stated.
+      // A packing list whose "package" column is a count rather than a case number:
+      // "29 | T89/B | 18,461.80" is twenty-nine cases sharing that line's weight. Each
+      // line's cases carry that line's weight divided between them, and where the heavier
+      // of net and gross differ the heavier is taken, since that is what the depot stores
+      // and bills on. A line covering zero packages - loose fastening hardware riding
+      // inside another line's cases - still has weight, so it is spread across the order's
+      // cases rather than dropped.
+      const expandLineGroup = (g) => {
+        const lines = (g.lines || []).map((l) => ({
+          n: Math.max(0, Math.round(Number(l.packages) || 0)),
+          description: l.description || "",
+          kg: Math.max(Number(l.netWeightKg) || 0, Number(l.grossWeightKg) || 0),
+          cbm: Number(l.cbm) || 0,
+        }));
+        const total = lines.reduce((s2, l) => s2 + l.n, 0);
+        if (!total) return [];
+        const orderKg = lines.reduce((s2, l) => s2 + l.kg, 0);
+        const orderCbm = lines.reduce((s2, l) => s2 + l.cbm, 0);
+        const out = [];
+        for (const l of lines) {
+          for (let i = 0; i < l.n; i += 1) {
+            out.push({
+              code: "", description: l.description,
+              kg: l.n ? l.kg / l.n : 0,
+              cbm: l.n ? l.cbm / l.n : 0,
+            });
+          }
+        }
+        // Whatever the zero-package lines contributed, shared out over every case.
+        const assignedKg = out.reduce((s2, c) => s2 + c.kg, 0);
+        const assignedCbm = out.reduce((s2, c) => s2 + c.cbm, 0);
+        const spreadKg = (orderKg - assignedKg) / out.length;
+        const spreadCbm = (orderCbm - assignedCbm) / out.length;
+        let runKg = 0, runCbm = 0;
+        return out.map((c, i) => {
+          const last = i === out.length - 1;
+          // The last case absorbs the rounding so the cases still add to the order total.
+          const kg = last ? Math.round((orderKg - runKg) * 100) / 100 : Math.round((c.kg + spreadKg) * 100) / 100;
+          const cbm = last ? Math.round((orderCbm - runCbm) * 1000) / 1000 : Math.round((c.cbm + spreadCbm) * 1000) / 1000;
+          runKg += kg; runCbm += cbm;
+          return {
+            code: `${i + 1}/${out.length}`,
+            description: c.description || g.description || "ELEVATOR MATERIALS",
+            weightKg: kg ? String(kg) : "",
+            cbm: cbm ? String(cbm) : "",
+          };
+        });
+      };
       const expandStatedGroup = (g) => {
         const marks = (g.caseNumbers || [])
           .flatMap((m) => String(m || "").split(","))
@@ -9903,7 +10137,7 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
       };
       const normalizedGroups = (parsed.groups || []).map((g) => {
         if (!(g.packages || []).length) {
-          const built = expandStatedGroup(g);
+          const built = (g.lines || []).length ? expandLineGroup(g) : expandStatedGroup(g);
           if (built.length) {
             return {
               lot: g.lot || "UNSPECIFIED",
@@ -9945,25 +10179,27 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
         terminalArrivalDate: parsed.terminalArrivalDate || "",
         lastFreeDay: parsed.lastFreeDay || "",
       });
-      // A scanned document is read off a text layer that is not always faithful: the
-      // 13-DM-26-0500 memo rendered "01C2101" as "01C01" and "02C2102" as "02C02", which
-      // left the entry holding 01C01 twice and missing two cases the job sheets ask for.
-      // A repeated case number is always wrong, and a list that disagrees with the stated
-      // package count is worth a second look before any of it reaches the depot record.
+      // A scanned document is read off a text layer that is not always faithful, so a case
+      // list that disagrees with the document's own stated package count is worth a second
+      // look before any of it reaches the depot record. A marking appearing twice is not
+      // itself an error - Mitsubishi's 13-DM-26-0500 genuinely carries two cases marked
+      // 01C01 - so it is counted, not flagged.
       const scanWarnings = [];
       for (const g of normalizedGroups) {
-        const seen = new Map();
-        for (const p of g.packages) {
-          const k = String(p.code || "").toUpperCase().replace(/\s+/g, "");
-          seen.set(k, (seen.get(k) || 0) + 1);
-        }
-        const repeated = [...seen.entries()].filter(([, n]) => n > 1).map(([c]) => c);
-        if (repeated.length) scanWarnings.push(t.pdfDuplicateCases(g.lot, repeated.join(", ")));
         const stated = Number((parsed.groups || []).find((x) => (x.lot || "UNSPECIFIED") === g.lot)?.statedPackages) || 0;
         if (stated > 0 && stated !== g.packages.length) {
           scanWarnings.push(t.pdfCaseCountMismatch(g.lot, stated, g.packages.length));
         }
       }
+      // A total the document states only once, on a companion delivery order, belongs to
+      // the shipment rather than to any one order on it. Reported so it can be entered
+      // where it belongs, instead of being split across orders on a guess.
+      const dt = parsed.documentTotals || {};
+      const readPkgs = normalizedGroups.reduce((n, g) => n + g.packages.length, 0);
+      if (Number(dt.packages) > 0 && Number(dt.packages) !== readPkgs) {
+        scanWarnings.push(t.pdfCaseCountMismatch(t.pdfWholeDocument, Number(dt.packages), readPkgs));
+      }
+      setPdfDocumentTotals(dt.cbm || dt.weightKg ? dt : null);
       setPdfWarnings(scanWarnings);
       const ok = applyParsedResult({ groups: normalizedGroups, client: parsed.client, project: parsed.project, ssDoNo });
       if (!ok) setPdfError(t.packingListNoStructure);
@@ -10121,6 +10357,11 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
             {pdfWarnings.length > 0 && (
               <div className="px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>
                 {pdfWarnings.map((w, i) => <div key={i}>{w}</div>)}
+              </div>
+            )}
+            {pdfDocumentTotals && (
+              <div className="px-3 py-2 rounded text-sm" style={{ background: colors.amberSoft, color: colors.amberText }}>
+                {t.pdfDocumentTotals(pdfDocumentTotals.cbm || "\u2014", pdfDocumentTotals.weightKg || "\u2014")}
               </div>
             )}
             {pdfTerminalDates && (pdfTerminalDates.terminalArrivalDate || pdfTerminalDates.lastFreeDay) && (
