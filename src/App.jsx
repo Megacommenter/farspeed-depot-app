@@ -10167,14 +10167,18 @@ function spreadGroupTotal(group, field, raw) {
 // walking over to the Directory tab to fix a name means losing the upload in progress.
 function InlineSiteEditor({ site, setDirectory, employees, colors, t, defaultOpen, label }) {
   const [open, setOpen] = useState(!!defaultOpen);
-  const [form, setForm] = useState(null);
+  const [edits, setEdits] = useState(null);
   const [saved, setSaved] = useState(false);
   const inputStyle = inputStyleFor(colors);
   if (!site) return null;
-  const start = () => { setForm({ ...site }); setSaved(false); setOpen(true); };
-  if (open && !form) setForm({ ...site });
+  // The draft is derived, not stored: opening straight away via defaultOpen would otherwise
+  // render before any state had been set, and reading the fields off null blanks the page.
+  const form = { ...site, ...(edits || {}) };
+  const setField = (k) => (e) => setEdits((prev) => ({ ...(prev || {}), [k]: e.target.value }));
+  const start = () => { setEdits(null); setSaved(false); setOpen(true); };
   const save = () => {
-    setDirectory((d) => (d || []).map((x) => (x.id === form.id ? { ...x, ...form } : x)));
+    setDirectory((d) => (d || []).map((x) => (x.id === site.id ? { ...x, ...form } : x)));
+    setEdits(null);
     setOpen(false);
     setSaved(true);
   };
@@ -10195,24 +10199,24 @@ function InlineSiteEditor({ site, setDirectory, employees, colors, t, defaultOpe
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
         <Field label={t.fSiteEn} colors={colors}>
-          <input className={inputClass} style={inputStyle} value={form.siteEn || ""} onChange={(e) => setForm((f) => ({ ...f, siteEn: e.target.value }))} />
+          <input className={inputClass} style={inputStyle} value={form.siteEn || ""} onChange={setField("siteEn")} />
         </Field>
         <Field label={t.fSiteZh} colors={colors}>
-          <input className={inputClass} style={inputStyle} value={form.siteZh || ""} onChange={(e) => setForm((f) => ({ ...f, siteZh: e.target.value }))} />
+          <input className={inputClass} style={inputStyle} value={form.siteZh || ""} onChange={setField("siteZh")} />
         </Field>
         <Field label={t.fDirClient} colors={colors}>
-          <select className={inputClass} style={inputStyle} value={form.client || CLIENTS[0]} onChange={(e) => setForm((f) => ({ ...f, client: e.target.value }))}>
+          <select className={inputClass} style={inputStyle} value={form.client || CLIENTS[0]} onChange={setField("client")}>
             {CLIENTS.map((c) => <option key={c}>{c}</option>)}
           </select>
         </Field>
         <Field label={t.fDirJobRef} hint={t.fJobRefHint} colors={colors}>
-          <input className={inputClass} style={inputStyle} value={form.jobRef || ""} onChange={(e) => setForm((f) => ({ ...f, jobRef: e.target.value }))} />
+          <input className={inputClass} style={inputStyle} value={form.jobRef || ""} onChange={setField("jobRef")} />
         </Field>
         <Field label={t.fDirOrderedBy} colors={colors}>
-          <input className={inputClass} style={inputStyle} value={form.orderedBy || ""} onChange={(e) => setForm((f) => ({ ...f, orderedBy: e.target.value }))} />
+          <input className={inputClass} style={inputStyle} value={form.orderedBy || ""} onChange={setField("orderedBy")} />
         </Field>
         <Field label={t.fDirOfficer} colors={colors}>
-          <select className={inputClass} style={inputStyle} value={form.accountOfficer || ""} onChange={(e) => setForm((f) => ({ ...f, accountOfficer: e.target.value }))}>
+          <select className={inputClass} style={inputStyle} value={form.accountOfficer || ""} onChange={setField("accountOfficer")}>
             <option value=""></option>
             {(employees || []).map((e) => <option key={e.id} value={e.name}>{e.name}</option>)}
           </select>
@@ -10222,7 +10226,7 @@ function InlineSiteEditor({ site, setDirectory, employees, colors, t, defaultOpe
         <button type="button" className="px-3 py-1.5 rounded text-xs font-semibold"
           style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY }} onClick={save}>{t.saveBtn}</button>
         <button type="button" className="px-3 py-1.5 rounded text-xs font-semibold"
-          style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY }} onClick={() => setOpen(false)}>{t.cancelBtn}</button>
+          style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY }} onClick={() => { setEdits(null); setOpen(false); }}>{t.cancelBtn}</button>
       </div>
       <div className="text-[11px] mt-2" style={{ color: colors.inkFaint }}>{t.dirInlineEditHint}</div>
     </div>
