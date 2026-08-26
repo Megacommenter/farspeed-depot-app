@@ -354,17 +354,18 @@ function matchField(header) {
 // lift no. like "L8 Batch 1") so each lot becomes its own manifest entry.
 const PL_HEADER_ALIASES = {
   containerNo: ["container no.", "container no", "container"],
-  caseNo: ["case no.", "case no", "case\nno", "case", "pkg#", "pkg #", "pkg no.", "pkg no", "package no."],
+  // Otis heads its case column "(Item)" or "ITEM NO." and numbers them "04#2/3".
+  caseNo: ["case no.", "case no", "case\nno", "case", "pkg#", "pkg #", "pkg no.", "pkg no", "package no.", "(item)", "item no.", "item no", "item"],
   // Schindler's own packing lists carry two case columns: a "Case No" running straight
   // through the whole list (1..12 across five lifts) and a "Cases Discript" numbering each
   // lift's own cases ("1/3", "2/3", "3/3"). The job sheets mark the second - "C/S NO. 1-3/3"
   // - so that is the numbering the depot works to, and it wins wherever it carries one.
   caseMark: ["cases discript", "cases     discript", "cases\ndiscript", "case discript", "cases description"],
-  qty: ["qty", "quantity", "qyt = quantity", "qyt"],
-  lot: ["project no.", "project no", "lift name", "lift no.", "lift no", "lift", "sap no.", "sap no", "sap"],
+  qty: ["qty", "quantity", "qyt = quantity", "qyt", "package", "packages", "pkg"],
+  lot: ["project no.", "project no", "lift name", "lift no.", "lift no", "lift", "sap no.", "sap no", "sap", "contract no.", "contract no"],
   orderNo: ["omc sales order no.", "omc sales order no", "sales order no.", "sales order no", "order no.", "com.no.", "com no.", "com no", "commission no.", "commission no"],
   description: ["description", "material description"],
-  grossWeight: ["g.weight", "gross weight", "gross", "actual   weight", "actual weight", "g.w./kg", "g.w.", "g.w"],
+  grossWeight: ["g.weight", "gross weight", "gross", "actual   weight", "actual weight", "g.w./kg", "g.w.", "g.w", "gw(kg)", "gw (kg)", "gw"],
   // Schindler's sheets carry an "Estimated weight" beside an "Actual weight". Despite the
   // names, the estimated column is the packing list's gross weight - the sheet says so
   // itself at the top ("the gross weight in the packing list is the theoretic weight") -
@@ -372,12 +373,15 @@ const PL_HEADER_ALIASES = {
   // on HPL_0060759755 it reads 517 where estimated reads 800, and totals 29,232 against
   // the sheet's declared 33,736.4. Kept as its own field so it can outrank both.
   estimatedWeight: ["estimated   weight", "estimated  weight", "estimated weight"],
-  netWeight: ["n.weight", "net weight", "net", "estimated net weight", "n.w./kg", "n.w.", "n.w"],
+  netWeight: ["n.weight", "net weight", "net", "estimated net weight", "n.w./kg", "n.w.", "n.w", "nw(kg)", "nw (kg)", "nw"],
   // "M3" is how a Chinese factory list heads its volume column - GK230208's WoodenBoxWeight
   // sheet uses it, and without it 305.096 cbm across 125 cases was read as nothing at all.
   // Matching is by whole cell for the short ones: "m3" as a substring would also fire on a
   // dimension column headed "Dimension (M3)" and on stray text elsewhere in a header.
-  cbm: ["cbm", "volume(m3)", "volume (m3)", "volume", "m3", "m³", "cbm(m3)", "cbm (m3)", "\u4f53\u79ef", "\u9ad4\u7a4d", "meas.", "measurement"],
+  // Otis heads its volume column "V (M3)", sometimes with fullwidth brackets: "V（m3）".
+  cbm: ["cbm", "volume(m3)", "volume (m3)", "volume", "m3", "m\u00b3", "cbm(m3)", "cbm (m3)",
+    "\u4f53\u79ef", "\u9ad4\u7a4d", "meas.", "measurement",
+    "v(m3)", "v (m3)", "v\uff08m3\uff09", "v\uff08m\u00b3\uff09", "v(m\u00b3)", "v (m\u00b3)"],
   dimension: ["dimension", "dimension (mm)", "dimensions", "size"],
   dimensionCm: ["dim(cm)", "dim (cm)", "dimension(cm)", "dimension (cm)", "dimensions(cm)", "dimensions (cm)"],
 };
@@ -531,6 +535,26 @@ function parsePackingListSheet(rows, legend) {
   const colMap = plMapColumns(rows[headerIdx]);
   if (colMap.lot === undefined && colMap.caseNo === undefined && colMap.caseMark === undefined) return null;
 
+  // Some workbooks give a sheet per lot rather than a lot column: Otis names the contract
+  // and lift in a labelled cell above the table - "Contract No. | 51N02002/L1" - and every
+  // case on the sheet belongs to it. Read once, and used only where no lot column exists.
+  let sheetLot = "";
+  if (colMap.lot === undefined) {
+    for (let r = 0; r < Math.min(headerIdx, rows.length); r++) {
+      const cells = rows[r] || [];
+      for (let c = 0; c < cells.length; c++) {
+        const n = plNorm(cells[c]).replace(/[:\uff1a]/g, "").trim();
+        if (!["contract no.", "contract no", "\u5408\u540c\u53f7"].includes(n)) continue;
+        for (let cc = c + 1; cc < Math.min(c + 5, cells.length); cc++) {
+          const v = String(cells[cc] == null ? "" : cells[cc]).trim();
+          if (v) { sheetLot = v; break; }
+        }
+        if (sheetLot) break;
+      }
+      if (sheetLot) break;
+    }
+  }
+
   // Translates a raw lot value (which may be a manufacturer part/SAP number, or several
   // comma-separated ones for cases shared across units) into friendly unit codes via the
   // legend pulled from the Marks block, e.g. "410217-501-003,502-004" -> "E3, E4". The
@@ -635,7 +659,7 @@ function parsePackingListSheet(rows, legend) {
     const casePrefix = /[A-Za-z]/.test(String(lastCase || "").split("/")[0] || "")
       ? String(lastCase).split("/")[0].trim()
       : "";
-    const key = translateLot(lastLot) || lastOrderNo || casePrefix || "UNSPECIFIED";
+    const key = translateLot(lastLot) || sheetLot || lastOrderNo || casePrefix || "UNSPECIFIED";
     if (!groups[key]) { groups[key] = { lot: key, packages: [], containers: new Set(), totalWeight: 0, totalCbm: 0 }; order.push(key); }
     groups[key].packages.push({
       code: lastCase || String(groups[key].packages.length + 1), orderNo: lastOrderNo, description,
@@ -914,6 +938,34 @@ function parsePackingListSummarySheet(rows) {
   };
 }
 function parsePackingListWorkbook(workbook) {
+  // A workbook may be organised one sheet per lot, with no single sheet holding the whole
+  // shipment: Otis's CLD-51N02002 has a summary page, two container pages, and one page per
+  // contract naming its own lift - "Contract No. 51N02002/L1". Picking a single best sheet
+  // returns one contract of four, and the container pages carry the same cases again under
+  // the same contract numbers, so merging everything would double them.
+  //
+  // So a per-lot workbook is recognised first: two or more sheets that each name their own
+  // contract and hold their own cases. Those are merged, and nothing else is read.
+  const perLot = [];
+  for (const sheetName of workbook.SheetNames) {
+    const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: "", raw: true });
+    const { legend } = plGuessMarksBlock(rows);
+    const result = parsePackingListSheet(rows, legend);
+    if (!result || !result.groups || result.groups.length !== 1) continue;
+    if (result.hasLotColumn) continue;
+    const lot = result.groups[0].lot;
+    if (!lot || lot === "UNSPECIFIED") continue;
+    perLot.push({ sheetName, rows, group: result.groups[0] });
+  }
+  const perLotNames = perLot.map((x) => x.group.lot);
+  if (perLot.length >= 2 && new Set(perLotNames).size === perLot.length) {
+    let c = null, pj = "";
+    for (const x of perLot) {
+      if (!c) c = plGuessClient(x.rows);
+      if (!pj) pj = plGuessProject(x.rows);
+    }
+    return { groups: perLot.map((x) => x.group), client: c, project: pj };
+  }
   let bestGroups = null;
   let bestHasLotColumn = false;
   let client = null;
