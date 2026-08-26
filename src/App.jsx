@@ -6303,8 +6303,14 @@ function guessFieldsFromWorkbook(wb) {
   // Prefer the explicit "共:" / "Total:" line for aggregate totals - a job sheet with
   // multiple case groups before the total would otherwise match the FIRST group's
   // numbers instead of the actual total.
-  const totalLineMatch = flatText.match(/(?:^|\n)[^\n]*(?:共|total)[:\uff1a][^\n]*/i);
-  const totalsText = totalLineMatch ? totalLineMatch[0] : flatText;
+  // Take the LAST such line that actually carries figures. The 2501043 Devan opens with a
+  // note reading "(共:3 個地盤)" - three sites - which is a count of sites, not a total of
+  // anything, and matching the first 共 on the page read that as the sheet's totals and
+  // then fell through to the first case group's 7 PKGS / 4,233 KGS.
+  const sheetTotalLines = [...flatText.matchAll(/(?:^|\n)([^\n]*(?:\u5171|total)[:\uff1a][^\n]*)/gi)]
+    .map((m) => m[1])
+    .filter((line) => /\d/.test(line) && /(PKGS?|KGS?|CBM)/i.test(line));
+  const totalsText = sheetTotalLines.length ? sheetTotalLines[sheetTotalLines.length - 1] : flatText;
   const pkgsMatch = totalsText.match(/(\d+)\s*PKGS?/i) || flatText.match(/(\d+)\s*PKGS?/i);
   if (pkgsMatch) out.packageCount = pkgsMatch[1];
   const kgsMatch = totalsText.match(/([\d,]+(?:\.\d+)?)\s*KGS?/i) || flatText.match(/([\d,]+(?:\.\d+)?)\s*KGS?/i);
