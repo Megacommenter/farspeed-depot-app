@@ -6025,7 +6025,18 @@ function parseJobSheetBlocks(rows) {
     blocks.push(cur);
     return cur;
   };
-  for (const raw of rows || []) {
+  const allRows = rows || [];
+  // The first cell of the next row that has anything in it - used to recognise a lot
+  // heading by what follows it rather than by what precedes it.
+  const nextMeaningful = (from) => {
+    for (let k = from + 1; k < allRows.length; k++) {
+      const cs = (allRows[k] || []).map((c) => String(c == null ? "" : c).trim());
+      if (cs.some(Boolean)) return cs.find(Boolean) || "";
+    }
+    return "";
+  };
+  for (let ri = 0; ri < allRows.length; ri++) {
+    const raw = allRows[ri];
     const cells = (raw || []).map((c) => String(c == null ? "" : c).trim());
     const line = cells.filter(Boolean).join(" ").trim();
     if (!line) {
@@ -6062,24 +6073,6 @@ function parseJobSheetBlocks(rows) {
       continue;
     }
 
-    // Chevalier heads each group with its order code on a line of its own, directly under
-    // the lifts it covers: "LIFT NO. L-W07, L-W08" then "CED1832B". It is a bare token with
-    // both letters and digits, and it is only read as a lot in that position, so a stray
-    // reference elsewhere on the page is never mistaken for one.
-    if (awaitingLotName && /^[A-Za-z0-9][A-Za-z0-9\-\.]{1,23}$/.test(line)
-        && /[A-Za-z]/.test(line) && /\d/.test(line) && !/^C\/S/i.test(line)) {
-      if (closed(cur) && cur.figuresAfterLots) startBlock(cur.refJobNumber, cur.refDateRaw);
-      if (!cur) startBlock("", "");
-      cur.lots.push({
-        lotRef: line, altRef: "", unitCode: ctx.liftNo || "",
-        caseNumbers: [], caseCodes: [], caseText: "", lotCases: null,
-        pkgs: "", kg: "", cbm: "", shkNumber: ctx.shkNumber,
-      });
-      awaitingLotName = false;
-      awaitingMark = false;
-      continue;
-    }
-    awaitingLotName = false;
     // Mitsubishi names a lot by its Delivery Memo number rather than an order/lift pair:
     // "DM No. | 13-DM-26-0500 | S/M: | 1325003000" on one row, with the lift given above as
     // "LIFT NO. #01-02". That DM number is what Irene files the cases under, so it becomes
@@ -6131,8 +6124,31 @@ function parseJobSheetBlocks(rows) {
       cur.lots.push(lot);
       if (lot.kg || lot.cbm) cur.figuresAfterLots = true;
       awaitingMark = false;
+      awaitingLotName = false;
       continue;
     }
+    // Chevalier heads each group with its own line naming the lifts and the order it
+    // covers - "CED1832B", or "L-C01 to L-C05/CED-1833/B". There is no fixed shape to it,
+    // so it is recognised by position: the line immediately above a C/S NO. row, once
+    // everything with a shape of its own has had its turn - a referral, a DM row, a
+    // numbered lot line and a figures row are all matched above this. One LIFT NO. line
+    // can cover several such groups, so keying off the lifts alone found only the first.
+    if (/^C\/S\s*NO\.?/i.test(nextMeaningful(ri))
+        && !/^C\/S/i.test(line) && !/^DM\s*No/i.test(line) && !/S\/M/i.test(line)
+        && !/(PKGS?|KGS?|CBM)\b/i.test(line)
+        && line.length <= 48 && /[A-Za-z]/.test(line) && /\d/.test(line)) {
+      if (closed(cur) && cur.figuresAfterLots) startBlock(cur.refJobNumber, cur.refDateRaw);
+      if (!cur) startBlock("", "");
+      cur.lots.push({
+        lotRef: line, altRef: "", unitCode: ctx.liftNo || "",
+        caseNumbers: [], caseCodes: [], caseText: "", lotCases: null,
+        pkgs: "", kg: "", cbm: "", shkNumber: ctx.shkNumber,
+      });
+      awaitingLotName = false;
+      awaitingMark = false;
+      continue;
+    }
+    awaitingLotName = false;
     if (!cur) continue; // ordinary header rows above the first lot or referral
 
     // A marking on a line of its own belongs to the lot named directly above it.
