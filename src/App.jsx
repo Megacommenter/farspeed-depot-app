@@ -1647,6 +1647,9 @@ const TEXT = {
     incomingCheckInBtn: (n) => n > 0 ? `Check In (${n})` : "Check In",
     incomingCheckedInNote: (incId) => `Checked in from Incoming ${incId}`,
     packingListAddToIncomingBtn: (n) => `Add ${n} Group${n === 1 ? "" : "s"} to Incoming`,
+    packingListShipmentCbmLabel: "Whole-shipment CBM",
+    packingListDistributeCbmBtn: "Split by weight",
+    packingListDistributeCbmHint: "Shares one document-wide volume across the lots in proportion to their weight. An estimate \u2014 type real per-lot figures in instead where you have them.",
     packingListCasesHint: "Case numbers for this lot, comma-separated. Renaming keeps each case's weight and volume; adding or removing one changes what the lot holds, and the totals above follow.",
     packingListRemoveGroupBtn: "Remove this group",
     incomingDeleteBtn: "Delete this Incoming shipment",
@@ -2352,6 +2355,9 @@ const TEXT = {
     incomingCheckInBtn: (n) => n > 0 ? `辦理到倉 (${n})` : "辦理到倉",
     incomingCheckedInNote: (incId) => `由待到倉記錄 ${incId} 辦理到倉`,
     packingListAddToIncomingBtn: (n) => `新增 ${n} 組至待到倉`,
+    packingListShipmentCbmLabel: "整批CBM",
+    packingListDistributeCbmBtn: "按重量分攤",
+    packingListDistributeCbmHint: "將整份文件之總體積按各批次重量比例分攤。此為估算 \u2014 如有各批次實際數據請直接輸入。",
     packingListCasesHint: "此批次之件號，以逗號分隔。更改名稱不影響各件重量及體積；增減件數則會改變批次內容，上方總數亦隨之更新。",
     packingListRemoveGroupBtn: "移除此組",
     incomingDeleteBtn: "刪除此待到倉貨件",
@@ -9942,6 +9948,31 @@ function UploadPanel({ onReplaceIncomingCases, onImportRows, onAddIncoming, exis
 // Weights and descriptions stay with their case by position, so renaming is free. Adding
 // or removing a case is a real change to what the lot holds, so the lot's totals are
 // recomputed from the cases that remain rather than being quietly kept.
+// A shipping document often gives one volume for the whole consignment - the Chevalier
+// delivery order states 24 CBM across four containers - without saying how it divides
+// between the orders on it. Weight is the only thing the packing list does give per lot,
+// and for guide rails and lift parts the two track each other closely enough to be a
+// defensible basis. So the total is shared out in proportion to each lot's weight, and
+// then across that lot's cases, with the last lot and last case absorbing the rounding so
+// the parts still add to the figure on the paper.
+//
+// It is an apportionment, not a measurement. Where the real per-lot volumes are known they
+// should be typed in instead.
+function distributeCbmByWeight(groups, totalCbm) {
+  const total = Number(totalCbm);
+  const list = groups || [];
+  if (!list.length || !isFinite(total) || total <= 0) return list;
+  const weights = list.map((g) => (g.packages || []).reduce((s, p) => s + (Number(p.weightKg) || 0), 0));
+  const sum = weights.reduce((a, b) => a + b, 0);
+  let run = 0;
+  return list.map((g, i) => {
+    const last = i === list.length - 1;
+    const share = sum > 0 ? weights[i] / sum : 1 / list.length;
+    const cbm = last ? Math.round((total - run) * 1000) / 1000 : Math.round(total * share * 1000) / 1000;
+    run += cbm;
+    return spreadGroupTotal(g, "cbm", String(cbm));
+  });
+}
 function renumberGroupCases(group, text) {
   const codes = String(text || "").split(/[,\n]/).map((c) => c.trim()).filter(Boolean);
   const old = group.packages || [];
@@ -9986,6 +10017,7 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
   const [plError, setPlError] = useState("");
   const [plCommon, setPlCommon] = useState(null);
   const [plExpanded, setPlExpanded] = useState(null);
+  const [plShipmentCbm, setPlShipmentCbm] = useState("");
   const [pdfStatus, setPdfStatus] = useState("idle"); // idle | scanning
   const [pdfError, setPdfError] = useState("");
   // Terminal dates a release notice carries. They belong to the check-in rather than the
@@ -10029,6 +10061,7 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
     setPdfError("");
     setPdfWarnings([]);
     setPdfDocumentTotals(null);
+    setPlShipmentCbm("");
     setPdfTerminalDates(null);
     setPlPreview(null);
     setPdfStatus("scanning");
@@ -10250,6 +10283,9 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
         scanWarnings.push(t.pdfCaseCountMismatch(t.pdfWholeDocument, Number(dt.packages), readPkgs));
       }
       setPdfDocumentTotals(dt.cbm || dt.weightKg ? dt : null);
+      // Pre-fill the split box with the figure the document actually gave, so it is one
+      // press rather than a re-typing exercise.
+      if (Number(dt.cbm) > 0) setPlShipmentCbm(String(dt.cbm));
       setPdfWarnings(scanWarnings);
       const ok = applyParsedResult({ groups: normalizedGroups, client: parsed.client, project: parsed.project, ssDoNo });
       if (!ok) setPdfError(t.packingListNoStructure);
@@ -10507,6 +10543,34 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
                 <div className="px-4 py-2 text-sm font-semibold" style={{ background: colors.amberSoft, color: colors.amberText, fontFamily: FONT_DISPLAY }}>
                   {t.packingListDetectedTitle(plPreview.length)}
                 </div>
+                {plPreview.length > 1 && (
+                  <div className="px-4 py-2 flex flex-wrap items-end gap-2" style={{ borderBottom: `1px solid ${colors.surfaceDim}` }}>
+                    <Field label={t.packingListShipmentCbmLabel} colors={colors}>
+                      <input
+                        type="number" min="0" step="0.001"
+                        className={inputClass}
+                        style={{ ...inputStyleFor(colors), width: 110 }}
+                        value={plShipmentCbm}
+                        onChange={(e) => setPlShipmentCbm(e.target.value)}
+                      />
+                    </Field>
+                    <button
+                      type="button"
+                      className="px-3 py-2 rounded text-xs font-semibold"
+                      style={{
+                        background: Number(plShipmentCbm) > 0 ? colors.amber : colors.line,
+                        color: Number(plShipmentCbm) > 0 ? colors.ink : colors.inkFaint,
+                        fontFamily: FONT_DISPLAY,
+                        cursor: Number(plShipmentCbm) > 0 ? "pointer" : "not-allowed",
+                      }}
+                      disabled={!(Number(plShipmentCbm) > 0)}
+                      onClick={() => setPlPreview((prev) => distributeCbmByWeight(prev, plShipmentCbm))}
+                    >
+                      {t.packingListDistributeCbmBtn}
+                    </button>
+                    <span className="text-xs pb-2" style={{ color: colors.inkFaint }}>{t.packingListDistributeCbmHint}</span>
+                  </div>
+                )}
                 <table className="w-full text-sm" style={{ background: colors.surface }}>
                   <thead>
                     <tr style={{ background: colors.surfaceDim }}>
