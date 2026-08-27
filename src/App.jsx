@@ -6121,6 +6121,17 @@ function mergeLotMark(lot, mark) {
 // each block declares for itself (2,208kg/11.44cbm against the first, 2,228kg/6.80cbm
 // against the second) are lost behind the combined total. So the page is split here into
 // one block per "Ref Job no." line, each holding its own lots, case numbers and totals.
+// One token of a written case list: "8B-1", "01C3101-4-1", "(10-1/10B-1)". Brackets and
+// slashes are part of a marking, not punctuation around it.
+const CASE_CODE_TOKEN = "[0-9A-Za-z(][0-9A-Za-z\\-\\/\\.()]*";
+const CASE_CODE_LIST_RE = new RegExp(`^${CASE_CODE_TOKEN}(\\s*,\\s*${CASE_CODE_TOKEN})*\\s*,?$`);
+// Two markings are the same case when they read the same once spacing and the brackets a
+// sheet puts round a combined package are taken off: a job sheet writes "(10-1/10B-1)" for
+// the case the packing list holds as "10-1/10B-1".
+function sameCaseCode(a, b) {
+  const norm = (c) => String(c || "").toUpperCase().replace(/[\s()]/g, "");
+  return norm(a) === norm(b);
+}
 function parseJobSheetBlocks(rows) {
   const blocks = [];
   let cur = null;
@@ -6304,8 +6315,12 @@ function parseJobSheetBlocks(rows) {
     // 02A2102, 01C3101-4-1" - wrapped across as many lines as it takes, each continuing
     // line following on from the trailing comma of the one above. They are codes, not
     // numbers, so they are kept as written and matched whole.
-    if (awaitingMark && /^[0-9A-Za-z][0-9A-Za-z\-]*(\s*,\s*[0-9A-Za-z][0-9A-Za-z\-]*)*\s*,?$/.test(line)
-        && /[A-Za-z]/.test(line)) {
+    //
+    // A marking can also name two cases that travel as one package, bracketed and split by
+    // a slash - "(10-1/10B-1)", "(9A-1/9B-1)". Neither character was allowed here, so a
+    // line holding one failed to be a case list at all and the whole block came through
+    // with no cases: the 2607208 delivery lists eleven that way and read as none.
+    if (awaitingMark && CASE_CODE_LIST_RE.test(line) && /[A-Za-z]/.test(line) && /\d/.test(line)) {
       const codes = line.split(",").map((c) => c.trim()).filter(Boolean);
       const lot = cur.lots[cur.lots.length - 1];
       if (lot) {
@@ -6332,10 +6347,20 @@ function parseJobSheetBlocks(rows) {
     const isFigureRow = /\d+\s*PKGS?/i.test(line) && /(KGS?|CBM)\b/i.test(line);
     if (!isCsRow && !isFigureRow) awaitingFigures = false;
     if (isCsRow || (awaitingFigures && isFigureRow)) {
-      for (const cell of cells.slice(1)) {
-        // Must contain a "/n" lot size, or the PKGS count in the next column would be read
-        // as a case marking of its own.
-        if (!/^#?\s*\d[\d\s,\-]*\/\s*\d+[\d\s,\-\/]*$/.test(cell)) continue;
+      // The marking sits in a cell of its own before the package count. Scanning stops at
+      // the PKGS column so that count can never be read as a case number of its own.
+      const pkgsIdx = cells.findIndex((c) => /PKGS?/i.test(c));
+      const scanEnd = pkgsIdx > 0 ? pkgsIdx : cells.length;
+      for (let ci = 1; ci < scanEnd; ci++) {
+        const cell = cells[ci];
+        if (!cell) continue;
+        // Either "1-16/16", which states the lot size, or a plain range like "4-9". A
+        // plain one has to name at least two cases: a lone number in this position is a
+        // count, not a marking, which is why the lot size used to be required outright -
+        // at the cost of the 2607208 sheet's "4-9" being read as no cases at all.
+        const withLotSize = /^#?\s*\d[\d\s,\-]*\/\s*\d+[\d\s,\-\/]*$/.test(cell);
+        const plainList = /^#?\s*\d[\d\s,\-]*$/.test(cell) && /[,\-]/.test(cell);
+        if (!withLotSize && !plainList) continue;
         if (cur.lots.length) mergeLotMark(cur.lots[cur.lots.length - 1], parseCaseMark(cell));
         break;
       }
@@ -7476,18 +7501,25 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
       && sitesLooselyMatch(row.projectEn, row.projectZh, it.project, it.constructionSite);
     if (!deliveryRefBlocks.length) return { list: base.filter(siteOk), unmatched: [] };
     const chosen = new Map();
+    const blockByItem = new Map();
     const unmatched = [];
+    const take = (list, b) => list.forEach((it) => {
+      chosen.set(it.id, it);
+      // First block to claim an entry owns it. One sheet can name the same lot twice under
+      // two different arrivals, and the cases each block lists belong to its own arrival.
+      if (!blockByItem.has(it.id)) blockByItem.set(it.id, b);
+    });
     for (const b of deliveryRefBlocks) {
       const byJob = base.filter((it) => jobNosMatch(it.jobNumber, b.refJobNumber));
-      if (byJob.length) { byJob.forEach((it) => chosen.set(it.id, it)); continue; }
+      if (byJob.length) { take(byJob, b); continue; }
       const lotCodes = (b.lots || []).flatMap((l) => [l.unitCode, l.lotRef]).filter(Boolean);
       const byLot = lotCodes.length
         ? base.filter((it) => !chosen.has(it.id) && siteOk(it) && lotCodes.some((c) => lotTokenMatches(it.unitCode, c)))
         : [];
-      if (byLot.length) { byLot.forEach((it) => chosen.set(it.id, it)); continue; }
+      if (byLot.length) { take(byLot, b); continue; }
       unmatched.push(b.refJobNumber);
     }
-    return { list: [...chosen.values()], unmatched };
+    return { list: [...chosen.values()], unmatched, blockByItem };
   })();
   const matchedItems = deliveryMatch.list;
   const unmatchedRefs = deliveryMatch.unmatched;
@@ -7499,7 +7531,26 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
   // which is exactly the "4 PKGS" the sheet declares for that block.
   // Mitsubishi cases are markings, not numbers - "01C3101-4-1" - so they are matched whole
   // against the codes the entry holds rather than by a leading number.
+  // The lot this entry's own referral block names. Two blocks on one sheet can name the
+  // same lot under two different arrivals - the 2607208 delivery closes L0MO-029239.002
+  // twice, once against Devan 2606087 and once against 2607151 - and the maps keyed by lot
+  // name merge the two lists into one and hand it to both entries. The block that matched
+  // the entry is the only thing that says which of the two lists is this entry's, so it is
+  // asked first and the maps are the fallback for a sheet that names no block at all.
+  function blockLotFor(it) {
+    const b = deliveryMatch.blockByItem && deliveryMatch.blockByItem.get(it.id);
+    const lots = (b && b.lots) || [];
+    if (!lots.length) return null;
+    const byUnit = lots.find((l) => [l.unitCode, l.lotRef, l.altRef]
+      .filter(Boolean).some((c) => lotTokenMatches(it.unitCode, c)));
+    if (byUnit) return byUnit;
+    // One arrival covering a single lot needs no matching; several, and only an exact lot
+    // name will do, so the maps take over rather than a guess being made here.
+    return lots.length === 1 ? lots[0] : null;
+  }
   function sheetCodesFor(it) {
+    const own = blockLotFor(it);
+    if (own && (own.caseCodes || []).length) return { codes: own.caseCodes, text: own.caseText || "" };
     const byLot = row.caseCodesByLot || {};
     const keys = Object.keys(byLot);
     const hit = keys.find((k) => lotTokenMatches(it.unitCode, k))
@@ -7508,6 +7559,10 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
     return hit ? byLot[hit] : null;
   }
   function sheetCasesFor(it) {
+    const own = blockLotFor(it);
+    if (own && (own.caseNumbers || []).length) {
+      return { numbers: own.caseNumbers, text: own.caseText || "", lotCases: own.lotCases || null };
+    }
     const byLot = row.caseMarksByLot || {};
     const lotKey = Object.keys(byLot).find((k) => lotTokenMatches(it.unitCode, k));
     if (lotKey) return byLot[lotKey];
@@ -7520,10 +7575,12 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
     if (coded && (coded.codes || []).length) {
       const deliverable = deliverablePackages(it);
       // fall through to the shared shape below
-      const norm = (c) => String(c || "").toUpperCase().replace(/\s+/g, "");
-      const have = new Map(deliverable.map((p) => [norm(p.code), p.code]));
-      const codes = coded.codes.map((c) => have.get(norm(c))).filter(Boolean);
-      const missing = coded.codes.filter((c) => !have.has(norm(c)));
+      // Matched with the brackets off, so a sheet's "(10-1/10B-1)" finds the case the
+      // packing list holds as "10-1/10B-1".
+      const codes = coded.codes
+        .map((c) => (deliverable.find((p) => sameCaseCode(p.code, c)) || {}).code)
+        .filter(Boolean);
+      const missing = coded.codes.filter((c) => !deliverable.some((p) => sameCaseCode(p.code, c)));
       return { codes, missing, text: coded.text || "" };
     }
     const mark = sheetCasesFor(it);
