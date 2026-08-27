@@ -1955,6 +1955,19 @@ const TEXT = {
     legacyLinkedRecordsLabel: "Records this file created",
     legacyLinkedRecordsHint: "A weight or volume typed here is taken as stated for that lot, and replaces whatever the sheet was read as. Leave both blank to fall back to the packing-list figures. Changing the entry moves the whole record onto that lot, which is how a job sheet filed against the wrong lift gets put right. To change which cases are involved, open the entry in Inventory.",
     legacyRecordEntryLabel: "Entry",
+    legacyDeleteTitle: "Delete this file from the archive. Reversing also undoes what it did to the depot:",
+    legacyDeleteArrivalLine: (label, n, cases) => `${label}: ${n} arrival${n === 1 ? "" : "s"} covering ${cases} case${cases === 1 ? "" : "s"} lifted off.`,
+    legacyDeleteDeliveryLine: (label, n, cases) => `${label}: ${n} deliver${n === 1 ? "y" : "ies"} covering ${cases} case${cases === 1 ? "" : "s"} lifted off \u2014 those cases go back into store.`,
+    legacyDeleteEntryRemoved: (label) => `${label} was created by this file and holds nothing else, so it is removed.`,
+    legacyDeleteEntryKept: (arrivals, deliveries) => `The entry stays \u2014 ${arrivals} other arrival${arrivals === 1 ? "" : "s"} and ${deliveries} deliver${deliveries === 1 ? "y" : "ies"} remain on it.`,
+    legacyDeleteIncomingLine: (incId, n) => `Incoming ${incId}: ${n} case${n === 1 ? "" : "s"} go back to waiting for check-in.`,
+    legacyDeleteBlockedMsg: (label, n) => `${label} was created by this file but has since been delivered off (${n} deliver${n === 1 ? "y" : "ies"}), so it is left in place. Reverse those deliveries first if you want it gone.`,
+    legacyDeleteStrandedMsg: (labels) => `Nothing of this file's making is still on ${labels}, so those are left alone.`,
+    legacyDeleteNothingMsg: "This file created no depot records, so there is nothing to reverse \u2014 only the archive listing will go.",
+    legacyDeleteHint: "Site names, SS/D.O. numbers and other details this file filled in on existing entries are not undone. Cases returned to Incoming can be checked in again from the Incoming tab.",
+    legacyDeleteReverseBtn: "Reverse records and delete file",
+    legacyDeleteKeepRecordsBtn: "Delete file, keep records",
+    legacyDeleteListingOnlyBtn: "Delete file",
     legacyRecordMoveNote: (from, to, cases, kept) => `Moves off ${from} onto ${to} on save.${cases ? (kept === cases ? ` All ${cases} case${cases === 1 ? "" : "s"} carry over.` : ` ${kept} of ${cases} case numbers exist on ${to}; the other ${cases - kept} will be dropped, so check the weight and volume above.`) : ""}`,
     legacyClientUnresolved: "\u2014 select client \u2014",
     legacyClientRequiredSummaryMsg: "One or more files don't have a recognized client \u2014 select the correct client for each file before processing.",
@@ -2678,6 +2691,19 @@ const TEXT = {
     legacyLinkedRecordsLabel: "此檔案建立之記錄",
     legacyLinkedRecordsHint: "於此輸入之重量或體積會視為該批次之實際數據，並取代由單據讀取之數值。兩者留空則回復使用裝箱單數據。更改「記錄批次」會將整筆記錄轉至該批次，適用於工單原先入錯電梯之情況。如需更改所涉貨箱，請於存倉列表開啟該記錄。",
     legacyRecordEntryLabel: "記錄批次",
+    legacyDeleteTitle: "由存檔中刪除此檔案。如選擇還原，亦會撤銷此檔案對倉存所作之更改：",
+    legacyDeleteArrivalLine: (label, n, cases) => `${label}：撤銷 ${n} 筆到倉記錄，涉及 ${cases} 個貨箱。`,
+    legacyDeleteDeliveryLine: (label, n, cases) => `${label}：撤銷 ${n} 筆送貨記錄，涉及 ${cases} 個貨箱 \u2014 該等貨箱回復存倉。`,
+    legacyDeleteEntryRemoved: (label) => `${label} 由此檔案建立，且再無其他記錄，將一併刪除。`,
+    legacyDeleteEntryKept: (arrivals, deliveries) => `該批次保留 \u2014 尚有 ${arrivals} 筆到倉及 ${deliveries} 筆送貨記錄。`,
+    legacyDeleteIncomingLine: (incId, n) => `待到倉記錄 ${incId}：${n} 個貨箱回復待辦到倉。`,
+    legacyDeleteBlockedMsg: (label, n) => `${label} 由此檔案建立，但其後已有 ${n} 筆送貨記錄，故予以保留。如需刪除，請先還原該等送貨記錄。`,
+    legacyDeleteStrandedMsg: (labels) => `${labels} 已無此檔案所建立之記錄，故不作處理。`,
+    legacyDeleteNothingMsg: "此檔案並未建立任何倉存記錄，無需還原 \u2014 只會刪除存檔記錄。",
+    legacyDeleteHint: "此檔案為現有批次填入之地盤名稱、提單資料等不會撤銷。回復待辦之貨箱可於「待到倉」重新辦理到倉。",
+    legacyDeleteReverseBtn: "還原記錄並刪除檔案",
+    legacyDeleteKeepRecordsBtn: "只刪除檔案，保留記錄",
+    legacyDeleteListingOnlyBtn: "刪除檔案",
     legacyRecordMoveNote: (from, to, cases, kept) => `儲存後由 ${from} 轉至 ${to}。${cases ? (kept === cases ? `全部 ${cases} 個貨箱一併轉移。` : `${to} 只有 ${cases} 個箱號中之 ${kept} 個，其餘 ${cases - kept} 個將被移除，請核對上方重量及體積。`) : ""}`,
     legacyClientUnresolved: "— 請選擇客戶 —",
     legacyClientRequiredSummaryMsg: "部分檔案未能識別客戶 — 處理前請為每個檔案選擇正確客戶。",
@@ -9063,7 +9089,7 @@ function legacyFieldsFromScan(parsed) {
   }
   return out;
 }
-function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, legacyArchive, setLegacyArchive, items, incoming, onLegacyCheckIn, onLegacyCheckInBatch, directory, onLegacyImport, onLegacyDeliver, onLegacyEnrich, onAddIncoming, colors, t, lang }) {
+function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, legacyArchive, setLegacyArchive, items, incoming, onLegacyCheckIn, onLegacyCheckInBatch, directory, onLegacyImport, onLegacyDeliver, onLegacyEnrich, onLegacyReverse, onAddIncoming, colors, t, lang }) {
   const [rows, setRows] = useState([]);
   const [processing, setProcessing] = useState(false);
   const [results, setResults] = useState(null);
@@ -9076,6 +9102,8 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
   const [backlogSort, setBacklogSort] = useState("recent");
   const [backlogTypeFilter, setBacklogTypeFilter] = useState("All");
   const [editingBacklogId, setEditingBacklogId] = useState(null);
+  const [deletingBacklogId, setDeletingBacklogId] = useState(null);
+  const [deletePlan, setDeletePlan] = useState(null);
   // Every record a given archived file created, so it can be corrected from the archive
   // listing rather than hunted down entry by entry in Inventory. A legacy check-in stamps
   // its arrival batch with the file it came from, and a legacy delivery puts the file name
@@ -9206,6 +9234,69 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
     }
     if (entries.length) onLegacyEnrich(entries);
     return entries.map((e) => e.itemId);
+  }
+  // Everything a file put into the depot, and what undoing it would mean, worked out before
+  // anything is touched so it can be shown and agreed to first.
+  //
+  // A Devan or CFS arrival is lifted off its entry and its cases go back to the Incoming
+  // shipment they were checked in from, leaving that shipment as a packing list waiting to
+  // be checked in - which is where it stood before the file was processed. A delivery is
+  // lifted off and its cases return to store.
+  //
+  // An entry is only removed when this file is what created it and nothing else is left on
+  // it. Being empty is not enough on its own: a legacy-imported entry carries no arrival
+  // records at all, so a delivery file that happened to be the only thing on one would look
+  // just as empty while being nothing of the sort.
+  function reversalPlanFor(r) {
+    const ids = (r.linkedItemIds && r.linkedItemIds.length)
+      ? r.linkedItemIds
+      : String(r.linkedItemId || "").split(",").map((s) => s.trim()).filter(Boolean);
+    const byItem = new Map();
+    const seed = (item) => {
+      if (!byItem.has(item.id)) byItem.set(item.id, { itemId: item.id, item, arrivalIds: [], deliveryIds: [], codes: [] });
+      return byItem.get(item.id);
+    };
+    for (const id of ids) {
+      const it = (items || []).find((i) => i.id === id);
+      if (it) seed(it);
+    }
+    for (const { item, kind, rec } of linkedRecordsFor(r)) {
+      const p = seed(item);
+      if (kind === "arrival") p.arrivalIds.push(rec.id); else p.deliveryIds.push(rec.id);
+      p.codes = [...new Set([...p.codes, ...((rec.codes) || [])])];
+    }
+    const plan = { fileName: r.fileName, docType: r.docType, items: [], incoming: [], stranded: [], blocked: [] };
+    for (const p of byItem.values()) {
+      const arrivalsLeft = (p.item.arrivals || []).filter((a) => !p.arrivalIds.includes(a.id));
+      const deliveriesLeft = (p.item.deliveries || []).filter((d) => !p.deliveryIds.includes(d.id) && !d.cancelled);
+      const createdHere = String(p.item.notes || "").includes(r.fileName)
+        || (p.arrivalIds.length > 0 && arrivalsLeft.length === 0);
+      p.remove = r.docType !== "Delivery" && createdHere && arrivalsLeft.length === 0 && deliveriesLeft.length === 0;
+      p.label = itemLabel(p.item);
+      p.arrivalsLeft = arrivalsLeft.length;
+      p.deliveriesLeft = deliveriesLeft.length;
+      p.caseCount = p.codes.length;
+      if (!p.arrivalIds.length && !p.deliveryIds.length && !p.remove) {
+        // Linked, but nothing of this file's making is still on it - already reversed by
+        // hand, or moved elsewhere. Said out loud rather than silently skipped. An entry
+        // this file did create but which has since been delivered off is a different case
+        // and gets its own line, since deleting it would take that delivery with it.
+        if (createdHere && deliveriesLeft.length > 0) plan.blocked.push({ label: p.label, deliveries: deliveriesLeft.length });
+        else plan.stranded.push(p.label);
+        continue;
+      }
+      plan.items.push(p);
+      if (p.arrivalIds.length) {
+        for (const inc of (incoming || [])) {
+          if (inc.linkedItemId !== p.item.id) continue;
+          const codes = (p.item.arrivals || [])
+            .filter((a) => p.arrivalIds.includes(a.id))
+            .flatMap((a) => a.codes || []);
+          if (codes.length) plan.incoming.push({ incomingId: inc.id, codes, unlink: p.remove });
+        }
+      }
+    }
+    return plan;
   }
   const [backlogEditDraft, setBacklogEditDraft] = useState(null);
   const fileInputRef = React.useRef(null);
@@ -9630,6 +9721,14 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
     setBacklogFileFilter("All");
   }
 
+  // Drops the listing and the copy of the file kept with it. Storage has no delete, so the
+  // key is emptied the same way an invoice document is.
+  function removeArchiveRow(id) {
+    storageSet(`legacyDoc:${id}`, "").catch(() => {});
+    setLegacyArchive((prev) => prev.filter((row) => row.id !== id));
+    setDeletingBacklogId(null);
+    setDeletePlan(null);
+  }
   async function viewArchivedFile(id) {
     try {
       const res = await storageGet(`legacyDoc:${id}`);
@@ -9771,6 +9870,67 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
             {backlogSorted.map((r) => {
               const isEditing = editingBacklogId === r.id;
               const inputStyle = inputStyleFor(colors);
+              if (deletingBacklogId === r.id && deletePlan) {
+                const p = deletePlan;
+                const nothingToUndo = p.items.length === 0;
+                return (
+                  <tr key={r.id} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink, background: colors.redSoft }}>
+                    <td colSpan={9} className="px-3 py-3">
+                      <div className="text-xs font-semibold mb-2 truncate" style={{ color: colors.ink }}>{r.fileName}</div>
+                      <div className="text-sm mb-2" style={{ color: colors.ink }}>{t.legacyDeleteTitle}</div>
+                      {nothingToUndo ? (
+                        <div className="text-xs mb-2" style={{ color: colors.inkFaint }}>{t.legacyDeleteNothingMsg}</div>
+                      ) : (
+                        <ul className="text-xs mb-2" style={{ color: colors.ink, listStyle: "disc", paddingLeft: 18 }}>
+                          {p.items.map((x) => (
+                            <li key={x.itemId} className="mb-0.5">
+                              {x.deliveryIds.length > 0 && t.legacyDeleteDeliveryLine(x.label, x.deliveryIds.length, x.caseCount)}
+                              {x.arrivalIds.length > 0 && t.legacyDeleteArrivalLine(x.label, x.arrivalIds.length, x.caseCount)}
+                              {x.remove
+                                ? ` ${t.legacyDeleteEntryRemoved(x.label)}`
+                                : ` ${t.legacyDeleteEntryKept(x.arrivalsLeft, x.deliveriesLeft)}`}
+                            </li>
+                          ))}
+                          {p.incoming.map((inc) => (
+                            <li key={inc.incomingId} className="mb-0.5">{t.legacyDeleteIncomingLine(inc.incomingId, inc.codes.length)}</li>
+                          ))}
+                        </ul>
+                      )}
+                      {p.stranded.length > 0 && (
+                        <div className="text-xs mb-2" style={{ color: colors.inkFaint }}>{t.legacyDeleteStrandedMsg(p.stranded.join(", "))}</div>
+                      )}
+                      {(p.blocked || []).map((b) => (
+                        <div key={b.label} className="text-xs mb-2" style={{ color: colors.red }}>{t.legacyDeleteBlockedMsg(b.label, b.deliveries)}</div>
+                      ))}
+                      <div className="text-[11px] mb-3" style={{ color: colors.inkFaint }}>{t.legacyDeleteHint}</div>
+                      <div>
+                        {!nothingToUndo && (
+                          <button
+                            className="text-xs font-semibold mr-3"
+                            style={{ color: colors.red }}
+                            onClick={() => {
+                              if (onLegacyReverse) onLegacyReverse(p);
+                              removeArchiveRow(r.id);
+                            }}
+                          >
+                            {t.legacyDeleteReverseBtn}
+                          </button>
+                        )}
+                        <button
+                          className="text-xs font-semibold mr-3"
+                          style={{ color: colors.inkFaint }}
+                          onClick={() => removeArchiveRow(r.id)}
+                        >
+                          {nothingToUndo ? t.legacyDeleteListingOnlyBtn : t.legacyDeleteKeepRecordsBtn}
+                        </button>
+                        <button className="text-xs font-semibold" style={{ color: colors.inkFaint }} onClick={() => { setDeletingBacklogId(null); setDeletePlan(null); }}>
+                          {t.cancelBtn}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              }
               if (isEditing) {
                 const d = backlogEditDraft;
                 return (
@@ -9933,6 +10093,18 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
                   >
                     {t.editBtn}
                   </button>
+                  <button
+                    className="text-xs font-semibold ml-3"
+                    style={{ color: colors.red }}
+                    onClick={() => {
+                      setEditingBacklogId(null);
+                      setBacklogEditDraft(null);
+                      setDeletePlan(reversalPlanFor(r));
+                      setDeletingBacklogId(r.id);
+                    }}
+                  >
+                    {t.deleteBtn}
+                  </button>
                 </td>
               </tr>
               );
@@ -9944,7 +10116,7 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
   );
 }
 
-function DirectoryPanel({ directory, setDirectory, employees, setEmployees, freeRules, setFreeRules, cbmRates, setCbmRates, legacyArchive, setLegacyArchive, items, incoming, onLegacyImport, onLegacyDeliver, onLegacyEnrich, onLegacyCheckIn, onLegacyCheckInBatch, colors, t, lang }) {
+function DirectoryPanel({ directory, setDirectory, employees, setEmployees, freeRules, setFreeRules, cbmRates, setCbmRates, legacyArchive, setLegacyArchive, items, incoming, onLegacyImport, onLegacyDeliver, onLegacyEnrich, onLegacyReverse, onLegacyCheckIn, onLegacyCheckInBatch, colors, t, lang }) {
   const [mode, setMode] = useState("sites");
   const [editingSite, setEditingSite] = useState(null);
   const [siteForm, setSiteForm] = useState(null);
@@ -10328,7 +10500,7 @@ function exportToExcel(items) {
   XLSX.writeFile(wb, `farspeed-depot-export-${todayStr()}.xlsx`);
 }
 
-function UploadPanel({ onReplaceIncomingCases, onImportRows, onAddIncoming, existingItems, directory, setDirectory, employees, legacyArchive, setLegacyArchive, items, incoming, onLegacyImport, onLegacyCheckIn, onLegacyCheckInBatch, onLegacyDeliver, onLegacyEnrich, colors, t, lang }) {
+function UploadPanel({ onReplaceIncomingCases, onImportRows, onAddIncoming, existingItems, directory, setDirectory, employees, legacyArchive, setLegacyArchive, items, incoming, onLegacyImport, onLegacyCheckIn, onLegacyCheckInBatch, onLegacyDeliver, onLegacyEnrich, onLegacyReverse, colors, t, lang }) {
   const [mode, setMode] = useState("packinglist");
   return (
     <div className="flex flex-col gap-4">
@@ -10344,7 +10516,7 @@ function UploadPanel({ onReplaceIncomingCases, onImportRows, onAddIncoming, exis
         <ImportPanel onImportRows={onImportRows} onAddIncoming={onAddIncoming} existingItems={existingItems} directory={directory} setDirectory={setDirectory} employees={employees} colors={colors} t={t} lang={lang} hideExcelMode />
       )}
       {mode === "legacy" && (
-        <LegacyUploadsPanel onReplaceIncomingCases={onReplaceIncomingCases} employees={employees} setDirectory={setDirectory} legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} incoming={incoming} onLegacyCheckIn={onLegacyCheckIn} onLegacyCheckInBatch={onLegacyCheckInBatch} directory={directory} onLegacyImport={onLegacyImport} onLegacyDeliver={onLegacyDeliver} onLegacyEnrich={onLegacyEnrich} onAddIncoming={onAddIncoming} colors={colors} t={t} lang={lang} />
+        <LegacyUploadsPanel onReplaceIncomingCases={onReplaceIncomingCases} employees={employees} setDirectory={setDirectory} legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} incoming={incoming} onLegacyCheckIn={onLegacyCheckIn} onLegacyCheckInBatch={onLegacyCheckInBatch} directory={directory} onLegacyImport={onLegacyImport} onLegacyDeliver={onLegacyDeliver} onLegacyEnrich={onLegacyEnrich} onLegacyReverse={onLegacyReverse} onAddIncoming={onAddIncoming} colors={colors} t={t} lang={lang} />
       )}
     </div>
   );
@@ -12187,6 +12359,45 @@ export default function FarspeedInventory() {
     return entries.map((e) => ({ itemId: e.itemId }));
   }
 
+  // Undoes what one legacy file put into the depot. An arrival is lifted off its entry, so
+  // the entry falls back to what the packing list says and stops counting as arrived; the
+  // cases it checked in are handed back to the Incoming shipment they came from, which is
+  // where they were before the file was processed. A delivery is lifted off, and the cases
+  // it took out return to store. An entry that exists only because of this file, with
+  // nothing else arrived on it and nothing delivered off it, goes with the file.
+  //
+  // Removal is real rather than a cancelled flag: a cancelled delivery still shows in the
+  // entry's history, and the point here is to put things back as though the file had never
+  // been uploaded.
+  function handleLegacyReverse(plan) {
+    if (!plan) return { items: 0, removed: 0 };
+    const byId = new Map((plan.items || []).map((p) => [p.itemId, p]));
+    const removeIds = new Set((plan.items || []).filter((p) => p.remove).map((p) => p.itemId));
+    const next = items
+      .filter((i) => !removeIds.has(i.id))
+      .map((i) => {
+        const p = byId.get(i.id);
+        if (!p) return i;
+        const arrivals = (i.arrivals || []).filter((a) => !(p.arrivalIds || []).includes(a.id));
+        const deliveries = (i.deliveries || []).filter((d) => !(p.deliveryIds || []).includes(d.id));
+        const dates = arrivals.map((a) => a.date).filter(Boolean).sort();
+        return recomputeItemTotals({ ...i, arrivals, deliveries, depotArrivalDate: dates[0] || i.depotArrivalDate });
+      });
+    persist(next);
+    setExitingItems((prev) => prev.filter((i) => !removeIds.has(i.id)));
+    if ((plan.incoming || []).length) {
+      setIncoming((prev) => prev.map((inc) => {
+        const p = (plan.incoming || []).find((x) => x.incomingId === inc.id);
+        if (!p) return inc;
+        const drop = new Set(p.codes || []);
+        const nextInc = { ...inc, checkedInCodes: (inc.checkedInCodes || []).filter((c) => !drop.has(c)) };
+        if (p.unlink) nextInc.linkedItemId = null;
+        return nextInc;
+      }));
+    }
+    return { items: (plan.items || []).length, removed: removeIds.size };
+  }
+
   function handleAddCombinedDelivery(entries) {
     const records = entries.map(({ itemId, delivery }) => ({ itemId, record: { ...delivery, id: `D${Date.now()}${Math.floor(Math.random() * 10000)}-${itemId}` } }));
     const byItemId = new Map();
@@ -13145,7 +13356,7 @@ export default function FarspeedInventory() {
             items={items} incoming={incoming}
             onLegacyImport={handleLegacyImport}
             onLegacyCheckIn={handleCheckIn} onLegacyCheckInBatch={handleCheckInBatch}
-            onLegacyDeliver={handleAddCombinedDelivery} onLegacyEnrich={handleLegacyEnrich}
+            onLegacyDeliver={handleAddCombinedDelivery} onLegacyEnrich={handleLegacyEnrich} onLegacyReverse={handleLegacyReverse}
             colors={colors} t={t} lang={lang}
           />
         )}
@@ -13159,7 +13370,7 @@ export default function FarspeedInventory() {
         )}
 
         {view === "directory" && (
-          <DirectoryPanel directory={directory} setDirectory={setDirectory} employees={employees} setEmployees={setEmployees} freeRules={freeRules} setFreeRules={setFreeRules} cbmRates={cbmRates} setCbmRates={setCbmRates} legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} incoming={incoming} onLegacyImport={handleLegacyImport} onLegacyDeliver={handleAddCombinedDelivery} onLegacyEnrich={handleLegacyEnrich} onLegacyCheckIn={handleCheckIn} onLegacyCheckInBatch={handleCheckInBatch} colors={colors} t={t} lang={lang} />
+          <DirectoryPanel directory={directory} setDirectory={setDirectory} employees={employees} setEmployees={setEmployees} freeRules={freeRules} setFreeRules={setFreeRules} cbmRates={cbmRates} setCbmRates={setCbmRates} legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} incoming={incoming} onLegacyImport={handleLegacyImport} onLegacyDeliver={handleAddCombinedDelivery} onLegacyEnrich={handleLegacyEnrich} onLegacyReverse={handleLegacyReverse} onLegacyCheckIn={handleCheckIn} onLegacyCheckInBatch={handleCheckInBatch} colors={colors} t={t} lang={lang} />
         )}
 
         {view === "joblog" && (
