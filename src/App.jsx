@@ -1448,6 +1448,7 @@ const TEXT = {
     tabPdf: "PDF Scan",
     pdfCaseCountMismatch: (lot, stated, read) => `${lot}: the document states ${stated} package${stated === 1 ? "" : "s"} but ${read} case number${read === 1 ? "" : "s"} were read \u2014 check the C/S NO. list.`,
     pdfWholeDocument: "This document",
+    pdfWeightMismatch: (stated, read) => `The document totals ${stated} kg but the cases read come to ${read} kg \u2014 check the lots below against the paper before importing.`,
     pdfRepeatedLots: (lots) => `More than one group came back named ${lots}. If the document splits an order into groups going to different lifts, give each its own name before importing, or they will be checked in as one lot.`,
     pdfDocumentTotals: (cbm, kg) => `The document gives one total for the whole shipment \u2014 ${cbm} CBM, ${kg} kg \u2014 without splitting it between the orders, so it has not been divided up. Enter the volume per lot from the paperwork if you have it.`,
     pdfTerminalDatesFound: (eta, lastFree) => `This document also gives terminal dates \u2014 arrival ${eta}, last free day ${lastFree}. Enter them on the entry when you check these cases in; they are not part of the packing list.`,
@@ -2167,6 +2168,7 @@ const TEXT = {
     tabPdf: "掃描PDF",
     pdfCaseCountMismatch: (lot, stated, read) => `${lot}：文件註明 ${stated} 件，但讀取到 ${read} 個件號 \u2014 請核對 C/S NO. 清單。`,
     pdfWholeDocument: "此文件",
+    pdfWeightMismatch: (stated, read) => `文件總重為 ${stated} 公斤，但讀取到之各件合計為 ${read} 公斤 \u2014 匯入前請與紙本核對下方批次。`,
     pdfRepeatedLots: (lots) => `有多於一組名為 ${lots}。如文件將同一訂單分為不同批次送往不同電梯，請於匯入前分別命名，否則會合併為同一批次。`,
     pdfDocumentTotals: (cbm, kg) => `文件只提供整批總數 \u2014 ${cbm} CBM、${kg} 公斤 \u2014 並未按訂單分列，故系統不作分攤。如有資料請自行輸入各批次體積。`,
     pdfTerminalDatesFound: (eta, lastFree) => `此文件另有碼頭日期 \u2014 到港 ${eta}，免費倉期至 ${lastFree}。辦理到倉時請於記錄輸入；此並非裝箱單資料。`,
@@ -10381,6 +10383,10 @@ Follow these extraction rules exactly - they keep the output compact even for lo
    Group the lines by the order the document groups them under - "Order No.CED-1831" and the reference beside it - and put that whole heading in "lot", e.g. "CED-1831 (EL-1926)".
 2b-iii. IMPORTANT - a single order is often subdivided further by a "Group" column carrying A, B, C, D against runs of lines, with a handwritten or printed annotation in the left margin beside each group naming what it is for: an INS reference like "0/24/576", a project number like "EL-1924" or "EL-1876", and the lifts like "#L2-L4", "#L-C01, L-C02, #L-C03, L-C04, #L-C05" or "#L-C06". Those groups go to different lifts and must NOT be merged.
    Return ONE entry in "groups" per group letter, each holding only that group's lines, and build its "lot" from the order, the group letter and the annotation, e.g. "CED-1833/B (EL-1876 #L-C01 to L-C05)". Put the group letter in "group" and the INS reference in "insRef". Read the margin annotations even when handwritten; where a group has none, use just the order and letter.
+2b-iv. IMPORTANT - a Fujitec packing list has two levels of row and only the outer one is a package. An outer row carries a C/NO. (the case number), a PK NO. like "ZDZ1703+K-05A", N.W(KGS), G.W(KGS), Volume(M3) and a TYPE such as WOODEN CASE. Underneath it sit indented ITEM NO. rows listing that case's contents - PART NAME, PART NO., Job No., QTY PCS. Those inner rows are contents, NOT packages: never count them, and never take their weights.
+   The lot is the job number at the FRONT of the PK NO., before the "+": "ZDZ1703+K-05A" and "ZDZ1703+Z-12HA" are both lot ZDZ1703. Use exactly that, e.g. "ZDZ1703".
+   CRITICAL - do NOT use the inner rows' "Job No." column to decide which lot a case belongs to. One case can hold parts for several jobs: case 32 is PK NO. "ZDZ1703+Z-12HA" and its contents list both ZDZ1703 and ZDZ1708, but the case is ZDZ1703's. The PK NO. decides, always.
+   Set "code" to the C/NO. exactly as printed ("01", "06", "32"), the weight from G.W(KGS), and the volume from Volume(M3). A Shipping Marks block at the end usually lists the C/NO. belonging to each job - use it to check your grouping, and if it disagrees with what you read, follow the Shipping Marks.
 2c. IMPORTANT - many documents are NOT per-case tables at all. A Delivery Memo (DM), an arrival/release notice (到貨通知提貨單), or a shipping order states only the OVERALL totals - "29 Package(s)", "14.088 CBM", "12,909 Kgs", "29 件" - and then lists the case markings separately under a heading like "C/S NO." or "SHIPPING MARK", one marking per line, sometimes several comma-separated per line (e.g. "01C01,01C02,01C03"). For a document like that:
    - put the stated totals in "statedPackages", "statedWeightKg" and "statedCbm" on the group;
    - put every case marking, expanded from any comma-separated lines into individual entries, into "caseNumbers" on the group, exactly as printed;
@@ -10590,6 +10596,16 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
       if (repeatedLots.length) scanWarnings.push(t.pdfRepeatedLots(repeatedLots.join(", ")));
       if (Number(dt.packages) > 0 && Number(dt.packages) !== readPkgs) {
         scanWarnings.push(t.pdfCaseCountMismatch(t.pdfWholeDocument, Number(dt.packages), readPkgs));
+      }
+      // The document's own total is the one figure that can be checked without knowing the
+      // layout. A weight that disagrees means cases were read into the wrong lots or missed
+      // altogether - a swap between two lots keeps the total right, so this is a floor, not
+      // a guarantee, but it catches the coarser errors before anything is imported.
+      const readKg = Math.round(normalizedGroups
+        .reduce((n, g) => n + g.packages.reduce((a, p) => a + (Number(p.weightKg) || 0), 0), 0) * 100) / 100;
+      const statedKg = Number(dt.weightKg) || 0;
+      if (statedKg > 0 && readKg > 0 && Math.abs(statedKg - readKg) > Math.max(1, statedKg * 0.005)) {
+        scanWarnings.push(t.pdfWeightMismatch(statedKg, readKg));
       }
       setPdfDocumentTotals(dt.cbm || dt.weightKg ? dt : null);
       // Pre-fill the split box with the figure the document actually gave, so it is one
