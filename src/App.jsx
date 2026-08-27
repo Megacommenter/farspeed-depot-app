@@ -8844,6 +8844,55 @@ function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, 
 // a plain-text page, so a failed scan surfaced as "Unexpected token 'A'" rather than as
 // what actually happened - and a 19-page packing list is exactly the kind of document that
 // takes long enough to time one out.
+// Reassembles a streamed reply. The stream is server-sent events: one "data:" line per
+// chunk, each a small JSON object. Only the text deltas matter here; the stop reason is kept
+// so that a reply which ran out of room can be reported as that rather than as bad JSON.
+async function readPdfScanStream(response) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let text = "";
+  let stopReason = "";
+  let streamError = "";
+  const handle = (payload) => {
+    if (payload === "[DONE]") return;
+    let evt;
+    try { evt = JSON.parse(payload); } catch (err) { return; }
+    if (evt.type === "content_block_delta" && evt.delta && typeof evt.delta.text === "string") {
+      text += evt.delta.text;
+    } else if (evt.type === "message_delta" && evt.delta && evt.delta.stop_reason) {
+      stopReason = evt.delta.stop_reason;
+    } else if (evt.type === "error") {
+      streamError = (evt.error && (evt.error.message || evt.error)) || "stream error";
+    }
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // Events are separated by a blank line; anything after the last one is a partial event
+    // and stays in the buffer until the rest of it arrives.
+    let sep;
+    while ((sep = buffer.indexOf("\n\n")) !== -1) {
+      const chunk = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      for (const line of chunk.split("\n")) {
+        if (line.startsWith("data:")) handle(line.slice(5).trim());
+      }
+    }
+  }
+  for (const line of buffer.split("\n")) {
+    if (line.startsWith("data:")) handle(line.slice(5).trim());
+  }
+  if (streamError) throw new Error(streamError);
+  const clean = text.replace(/```json|```/g, "").trim();
+  if (!clean) throw new Error("empty reply from the scanner");
+  try {
+    return JSON.parse(clean);
+  } catch (parseErr) {
+    throw new Error(stopReason === "max_tokens" ? "reply-too-long" : "truncated-or-invalid-json");
+  }
+}
 async function postPdfScan(body, attempt = 0) {
   let response;
   try {
@@ -8860,6 +8909,13 @@ async function postPdfScan(body, attempt = 0) {
   }
   if ((response.status >= 500 || response.status === 408) && attempt === 0) {
     return postPdfScan(body, 1);
+  }
+  // The proxy streams the reply so that it starts arriving within the edge function's
+  // time-to-first-byte limit. Plain JSON is still accepted, both for errors (which are never
+  // streamed) and for a proxy that has not been updated yet.
+  const contentType = (response.headers && response.headers.get("content-type")) || "";
+  if (contentType.includes("text/event-stream") && response.body) {
+    return readPdfScanStream(response);
   }
   const raw = await response.text();
   let data;
