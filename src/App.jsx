@@ -1490,6 +1490,8 @@ const TEXT = {
     choosePdfBtn: "Choose PDF",
     scanningMsg: "Reading document…",
     pdfReadErrorMsg: "Couldn't automatically read this PDF. Please check the file, or enter the details manually below.",
+    pdfTooLargeMsg: (kb, why) => `This PDF (${kb} KB) was too much for the scanner to finish \u2014 long packing lists that list every case's contents often are. Try the Excel version of the list if there is one, split the PDF, or enter the lots by hand below. (${why})`,
+    pdfTooLargeMsg: (kb, why) => `此PDF（${kb} KB）內容過多，掃描未能完成 \u2014 逐件列出內容之裝箱單常有此情況。如有Excel版本請改用，或將PDF分割，亦可於下方手動輸入。（${why}）`,
     pdfTruncatedMsg: "This document is very dense (lots of cases/items) and the automatic read got cut off partway through. Try again \u2014 it sometimes succeeds on a second attempt \u2014 or enter the details manually below.",
     pdfKeyWarning: "This uses your own Anthropic API key, entered below and saved only in this browser. Since it's used directly from this page, anyone who opens this file's developer tools could see it — fine for internal testing among trusted staff, not for wider distribution.",
     pdfApiKeyLabel: "Anthropic API Key",
@@ -8836,6 +8838,51 @@ function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, 
 // guessFieldsFromWorkbook; a PDF has no cells to read, so the page is scanned and the same
 // structures are rebuilt here from what comes back. Everything downstream - the referral
 // blocks, the case markings, the declared figures - is then identical to an Excel upload.
+// One way in for both PDF scans. Two things were wrong before: the legacy job-sheet scan
+// posted straight to api.anthropic.com, which has no key attached outside the preview, and
+// both paths called response.json() on whatever came back. A proxy that times out returns
+// a plain-text page, so a failed scan surfaced as "Unexpected token 'A'" rather than as
+// what actually happened - and a 19-page packing list is exactly the kind of document that
+// takes long enough to time one out.
+async function postPdfScan(body, attempt = 0) {
+  let response;
+  try {
+    response = await fetch("/api/scan-pdf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (netErr) {
+    // A dropped connection on a long document is often transient; one retry is worth more
+    // than making someone re-pick the file.
+    if (attempt === 0) return postPdfScan(body, 1);
+    throw new Error(`network: ${netErr && netErr.message ? netErr.message : netErr}`);
+  }
+  if ((response.status >= 500 || response.status === 408) && attempt === 0) {
+    return postPdfScan(body, 1);
+  }
+  const raw = await response.text();
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (parseErr) {
+    // Not JSON at all: report the status and the first of the body, which is usually the
+    // one line that says what went wrong.
+    const snippet = raw.replace(/\s+/g, " ").trim().slice(0, 120);
+    throw new Error(`server returned ${response.status}: ${snippet || "empty response"}`);
+  }
+  if (!response.ok || data.error) {
+    throw new Error((data.error && (data.error.message || data.error)) || `server returned ${response.status}`);
+  }
+  const text = (data.content || []).map((b) => b.text || "").join("");
+  const clean = text.replace(/```json|```/g, "").trim();
+  try {
+    return JSON.parse(clean);
+  } catch (parseErr) {
+    // A reply that ran out of room mid-object is the usual cause here.
+    throw new Error(data.stop_reason === "max_tokens" ? "reply-too-long" : "truncated-or-invalid-json");
+  }
+}
 async function scanLegacyJobSheetPdf(file) {
   const base64 = await new Promise((res, rej) => {
     const r = new FileReader();
@@ -8853,25 +8900,17 @@ Return exactly this shape:
 {"docType":"Delivery or CFS or Devan or Shifting or Hoisting","client":"","projectEn":"","projectZh":"","jobNumber":"","date":"YYYY-MM-DD","jobRef":"","orderedBy":"","poNo":"","ssDoNo":"","shkNumber":"","dmNo":"","liftNo":"","blocks":[{"refJobNumber":"","refDate":"YYYY-MM-DD","liftNo":"","dmNo":"","shippingMark":"","pkgs":"","kg":"","cbm":"","caseNumbers":["every case number of this block, one per entry, exactly as printed"]}],"total":{"pkgs":"","kg":"","cbm":""}}
 
 Rules: numbers as plain digits with no thousands separators. Dates as YYYY-MM-DD; the sheet writes them day-first. Use '' for anything not present. Never invent a case number and never renumber one - if a block lists no cases, return an empty array.`;
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 8000,
-      messages: [{
-        role: "user",
-        content: [
-          { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
-          { type: "text", text: prompt },
-        ],
-      }],
-    }),
+  return postPdfScan({
+    model: "claude-sonnet-4-6",
+    max_tokens: 8000,
+    messages: [{
+      role: "user",
+      content: [
+        { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
+        { type: "text", text: prompt },
+      ],
+    }],
   });
-  if (!response.ok) throw new Error(`scan failed (${response.status})`);
-  const data = await response.json();
-  const text = (data.content || []).map((c) => (c.type === "text" ? c.text : "")).join("\n");
-  return JSON.parse(text.replace(/```json|```/g, "").trim());
 }
 // Rebuilds the row fields a workbook upload would have produced.
 function legacyFieldsFromScan(parsed) {
@@ -10353,6 +10392,11 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
     setPdfTerminalDates(null);
     setPlPreview(null);
     setPdfStatus("scanning");
+    // Only used to explain a failure afterwards: a Fujitec list runs to nineteen pages
+    // because every case is followed by its contents, and that is what takes long enough
+    // to time the scan out.
+    const bigPdf = file.size > 700 * 1024;
+    const pageHint = Math.round(file.size / 1024);
     try {
       const base64 = await new Promise((resolve, reject) => {
         const r = new FileReader();
@@ -10398,28 +10442,14 @@ Follow these extraction rules exactly - they keep the output compact even for lo
 Respond with ONLY a raw JSON object in EXACTLY this shape and nothing else (no markdown fences, no commentary, no explanation before or after):
 {"client": "best-guess client name or ''", "project": "site/building/project name found in the document, or ''", "ssDoNo": "vessel + voyage + container line or ''", "shipping": {"vessel": "", "voyage": "", "blNo": "", "containerNo": ""}, "terminalArrivalDate": "YYYY-MM-DD or ''", "lastFreeDay": "YYYY-MM-DD or ''", "documentTotals": {"packages": number_or_empty_string, "weightKg": number_or_empty_string, "cbm": number_or_empty_string}, "groups": [{"lot": "lift/lot/shop-order number identifying this batch", "containers": ["container numbers if any, else empty array"], "statedPackages": number_or_empty_string, "statedWeightKg": number_or_empty_string, "statedCbm": number_or_empty_string, "caseNumbers": ["case markings, one per entry, only for totals-only documents"], "group": "group letter if the document has one, else ''", "insRef": "INS/works reference beside the group, e.g. 0/24/576, else ''", "lines": [{"packages": number, "description": "", "netWeightKg": number_or_empty_string, "grossWeightKg": number_or_empty_string, "cbm": number_or_empty_string}], "packages": [{"code": "case/package number", "description": "short category name, a few words only", "weightKg": number_or_empty_string, "cbm": number_or_empty_string, "length": number_or_empty_string, "width": number_or_empty_string, "height": number_or_empty_string, "dimUnit": "cm_or_mm_or_empty"}]}]}
 If the document only has one overall lot/shipment with no explicit lift/case breakdown, put everything under a single group with a sensible lot name.`;
-      const response = await fetch("/api/scan-pdf", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 16000,
-          messages: [{ role: "user", content: [
-            { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
-            { type: "text", text: prompt },
-          ] }],
-        }),
+      const parsed = await postPdfScan({
+        model: "claude-sonnet-4-6",
+        max_tokens: 16000,
+        messages: [{ role: "user", content: [
+          { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
+          { type: "text", text: prompt },
+        ] }],
       });
-      const data = await response.json();
-      if (data.error) throw new Error(data.error.message || data.error || "API error");
-      const text = (data.content || []).map((b) => b.text || "").join("");
-      const clean = text.replace(/```json|```/g, "").trim();
-      let parsed;
-      try {
-        parsed = JSON.parse(clean);
-      } catch (parseErr) {
-        throw new Error("truncated-or-invalid-json");
-      }
       // Work the volume out here rather than asking the scan to do the arithmetic. The
       // Gage Street packing list prints its dimensions in three separate columns headed
       // "Length cm", "Width cm", "Height cm", and the scan simply left CBM blank for all
@@ -10616,8 +10646,12 @@ If the document only has one overall lot/shipment with no explicit lift/case bre
       if (!ok) setPdfError(t.packingListNoStructure);
       setPdfStatus("idle");
     } catch (err) {
-      if (err.message === "truncated-or-invalid-json") {
+      const msg = err && err.message ? err.message : String(err);
+      if (msg === "truncated-or-invalid-json" || msg === "reply-too-long") {
         setPdfError(t.pdfTruncatedMsg);
+      } else if (/server returned (5\d\d|408|504)|network:|timed? ?out/i.test(msg) && bigPdf) {
+        // A long packing list is the usual reason the scan never comes back.
+        setPdfError(t.pdfTooLargeMsg(pageHint, msg));
       } else {
         const friendly = t.pdfReadErrorMsg || "Couldn't read this PDF. Please check the file, or enter the details manually below.";
         const detail = err && err.message ? err.message : "";
