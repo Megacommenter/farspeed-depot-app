@@ -1953,7 +1953,9 @@ const TEXT = {
     legacyArchivedOnly: "Archived only",
     legacyEditLinkedHint: "The fields above fix this archive listing. The depot records this file created are below \u2014 correcting them here changes the linked FS-#### entries directly.",
     legacyLinkedRecordsLabel: "Records this file created",
-    legacyLinkedRecordsHint: "A weight or volume typed here is taken as stated for that lot, and replaces whatever the sheet was read as. Leave both blank to fall back to the packing-list figures. To change which cases are involved, open the entry in Inventory.",
+    legacyLinkedRecordsHint: "A weight or volume typed here is taken as stated for that lot, and replaces whatever the sheet was read as. Leave both blank to fall back to the packing-list figures. Changing the entry moves the whole record onto that lot, which is how a job sheet filed against the wrong lift gets put right. To change which cases are involved, open the entry in Inventory.",
+    legacyRecordEntryLabel: "Entry",
+    legacyRecordMoveNote: (from, to, cases, kept) => `Moves off ${from} onto ${to} on save.${cases ? (kept === cases ? ` All ${cases} case${cases === 1 ? "" : "s"} carry over.` : ` ${kept} of ${cases} case numbers exist on ${to}; the other ${cases - kept} will be dropped, so check the weight and volume above.`) : ""}`,
     legacyClientUnresolved: "\u2014 select client \u2014",
     legacyClientRequiredSummaryMsg: "One or more files don't have a recognized client \u2014 select the correct client for each file before processing.",
     legacyDeliveredFrom: (id) => `Delivered from ${id}`,
@@ -2674,7 +2676,9 @@ const TEXT = {
     legacyArchivedOnly: "僅存檔",
     legacyEditLinkedHint: "上方欄位修正此存檔記錄。下方為此檔案所建立之倉存記錄 \u2014 於此修改會直接更新相應之 FS-#### 記錄。",
     legacyLinkedRecordsLabel: "此檔案建立之記錄",
-    legacyLinkedRecordsHint: "於此輸入之重量或體積會視為該批次之實際數據，並取代由單據讀取之數值。兩者留空則回復使用裝箱單數據。如需更改所涉貨箱，請於存倉列表開啟該記錄。",
+    legacyLinkedRecordsHint: "於此輸入之重量或體積會視為該批次之實際數據，並取代由單據讀取之數值。兩者留空則回復使用裝箱單數據。更改「記錄批次」會將整筆記錄轉至該批次，適用於工單原先入錯電梯之情況。如需更改所涉貨箱，請於存倉列表開啟該記錄。",
+    legacyRecordEntryLabel: "記錄批次",
+    legacyRecordMoveNote: (from, to, cases, kept) => `儲存後由 ${from} 轉至 ${to}。${cases ? (kept === cases ? `全部 ${cases} 個貨箱一併轉移。` : `${to} 只有 ${cases} 個箱號中之 ${kept} 個，其餘 ${cases - kept} 個將被移除，請核對上方重量及體積。`) : ""}`,
     legacyClientUnresolved: "— 請選擇客戶 —",
     legacyClientRequiredSummaryMsg: "部分檔案未能識別客戶 — 處理前請為每個檔案選擇正確客戶。",
     legacyDeliveredFrom: (id) => `送出自 ${id}`,
@@ -9101,8 +9105,11 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
   function draftRecordsFor(r) {
     return linkedRecordsFor(r).map(({ item, kind, rec }) => ({
       itemId: item.id,
-      label: `${item.id}${item.unitCode ? ` \u00b7 ${item.unitCode}` : ""}`,
+      // Where the record sits today, kept apart from itemId so the picker can point it at a
+      // different entry and the save still knows which one to lift it off.
+      originalItemId: item.id,
       kind, recId: rec.id,
+      codes: rec.codes || [],
       date: rec.date || "",
       type: rec.type || ARRIVING_TYPES[0],
       jobNumber: rec.jobNumber || "",
@@ -9110,31 +9117,95 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
       cbm: (rec.declared && rec.declared.cbm) || "",
     }));
   }
+  // Entries a record can be moved to. Same client as the archive listing, since a delivery
+  // never crosses between clients, plus whichever entry the record is on now so the picker
+  // always has its own value to show.
+  function moveTargetsFor(client, currentIds) {
+    const keep = new Set(currentIds || []);
+    return (items || [])
+      .filter((i) => keep.has(i.id) || (!i.cancelled && (!client || i.client === client)))
+      .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  }
+  function itemLabel(item) {
+    if (!item) return "";
+    return `${item.id}${item.unitCode ? ` \u00b7 ${item.unitCode}` : ""}`;
+  }
+  // How many of a delivery's case numbers exist on the entry it is being moved to. A lift
+  // and its twin are cased up the same way, so most codes carry across, but any that do not
+  // would point at cases the new entry does not hold and are dropped on the move.
+  function codesCarriedOver(codes, targetId) {
+    const target = (items || []).find((i) => i.id === targetId);
+    const have = new Set(((target && target.packages) || []).map((p) => String(p.code || "").trim()));
+    return (codes || []).filter((c) => have.has(String(c || "").trim()));
+  }
   // Writes the corrected records back onto their entries. A figure typed here is stated
   // for this lot, so it drops the "share of a bigger total" flag that would otherwise mark
   // it an estimate and see it overruled by per-case packing-list weights.
+  //
+  // A record can also be moved to a different entry, which is how a delivery filed against
+  // the wrong lift gets put right: it is lifted off the entry it is on and appended to the
+  // chosen one. Every entry the save touches is worked on as a single copy and patched once
+  // at the end - patching per record would let two records landing on the same entry
+  // overwrite each other, since the enrich handler keys its patches by entry.
   function saveLinkedRecords(records) {
-    if (!onLegacyEnrich || !records || !records.length) return;
-    const entries = [];
+    if (!onLegacyEnrich || !records || !records.length) return [];
+    const work = new Map();
+    const load = (id) => {
+      if (!id) return null;
+      if (!work.has(id)) {
+        const it = (items || []).find((i) => i.id === id);
+        if (!it) return null;
+        work.set(id, {
+          base: it,
+          arrivals: [...(it.arrivals || [])],
+          deliveries: [...(it.deliveries || [])],
+          arrivalsDirty: false, deliveriesDirty: false,
+        });
+      }
+      return work.get(id);
+    };
     for (const rec of records) {
-      const it = (items || []).find((i) => i.id === rec.itemId);
-      if (!it) continue;
+      const from = load(rec.originalItemId || rec.itemId);
+      if (!from) continue;
+      const isArrival = rec.kind === "arrival";
+      const list = isArrival ? from.arrivals : from.deliveries;
+      const idx = list.findIndex((x) => x.id === rec.recId);
+      if (idx === -1) continue;
       const declared = (String(rec.kg).trim() || String(rec.cbm).trim())
         ? { kg: String(rec.kg).trim(), cbm: String(rec.cbm).trim(), split: false } : null;
-      if (rec.kind === "arrival") {
-        const arrivals = (it.arrivals || []).map((a) => (a.id === rec.recId
-          ? { ...a, date: rec.date, type: rec.type, declared: declared && { ...(a.declared || {}), ...declared }, declaredEdited: true }
-          : a));
-        const dates = arrivals.map((a) => a.date).filter(Boolean).sort();
-        entries.push({ itemId: it.id, patch: { arrivals, depotArrivalDate: dates[0] || it.depotArrivalDate } });
-      } else {
-        const deliveries = (it.deliveries || []).map((d) => (d.id === rec.recId
-          ? { ...d, date: rec.date, jobNumber: rec.jobNumber, declared }
-          : d));
-        entries.push({ itemId: it.id, patch: { deliveries } });
+      let next = isArrival
+        ? { ...list[idx], date: rec.date, type: rec.type, declared: declared && { ...(list[idx].declared || {}), ...declared }, declaredEdited: true }
+        : { ...list[idx], date: rec.date, jobNumber: rec.jobNumber, declared };
+      const target = rec.itemId && rec.itemId !== (rec.originalItemId || rec.itemId) ? load(rec.itemId) : null;
+      if (!target) {
+        list[idx] = next;
+        if (isArrival) from.arrivalsDirty = true; else from.deliveriesDirty = true;
+        continue;
       }
+      list.splice(idx, 1);
+      if (isArrival) from.arrivalsDirty = true; else from.deliveriesDirty = true;
+      if (!isArrival && (next.codes || []).length) {
+        next = { ...next, codes: codesCarriedOver(next.codes, rec.itemId) };
+      }
+      if (isArrival) { target.arrivals.push(next); target.arrivalsDirty = true; }
+      else { target.deliveries.push(next); target.deliveriesDirty = true; }
+    }
+    const entries = [];
+    for (const [id, w] of work) {
+      const patch = {};
+      // Only what actually changed goes into the patch: an entry carrying arrivals is
+      // recomputed from them, and recomputing one whose weight was corrected by hand would
+      // throw that correction away.
+      if (w.arrivalsDirty) {
+        patch.arrivals = w.arrivals;
+        const dates = w.arrivals.map((a) => a.date).filter(Boolean).sort();
+        patch.depotArrivalDate = dates[0] || w.base.depotArrivalDate;
+      }
+      if (w.deliveriesDirty) patch.deliveries = w.deliveries;
+      if (Object.keys(patch).length) entries.push({ itemId: id, patch });
     }
     if (entries.length) onLegacyEnrich(entries);
+    return entries.map((e) => e.itemId);
   }
   const [backlogEditDraft, setBacklogEditDraft] = useState(null);
   const fileInputRef = React.useRef(null);
@@ -9738,8 +9809,19 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
                               ...p, records: p.records.map((x, i) => (i === ri ? { ...x, ...patch } : x)),
                             }));
                             return (
-                              <div key={`${rec.itemId}-${rec.recId}`} className="flex flex-wrap items-end gap-2 mb-2">
-                                <div className="text-xs font-semibold" style={{ color: colors.green, minWidth: 120 }}>{rec.label}</div>
+                              <div key={`${rec.originalItemId}-${rec.recId}`} className="flex flex-wrap items-end gap-2 mb-2">
+                                <Field label={t.legacyRecordEntryLabel} colors={colors}>
+                                  <select
+                                    className={inputClass}
+                                    style={{ ...inputStyle, fontSize: 12, padding: "3px 6px", minWidth: 190, color: rec.itemId === rec.originalItemId ? colors.green : colors.amberText, fontWeight: 600 }}
+                                    value={rec.itemId}
+                                    onChange={(e) => patchRec({ itemId: e.target.value })}
+                                  >
+                                    {moveTargetsFor(d.client, [rec.originalItemId, rec.itemId]).map((it) => (
+                                      <option key={it.id} value={it.id}>{itemLabel(it)}</option>
+                                    ))}
+                                  </select>
+                                </Field>
                                 <Field label={t.colDate} colors={colors}>
                                   <input type="date" className={inputClass} style={{ ...inputStyle, fontSize: 12, padding: "3px 6px" }}
                                     value={rec.date} onChange={(e) => patchRec({ date: e.target.value })} />
@@ -9765,6 +9847,16 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
                                   <input type="number" min="0" step="0.001" className={inputClass} style={{ ...inputStyle, width: 88, fontSize: 12, padding: "3px 6px" }}
                                     value={rec.cbm} onChange={(e) => patchRec({ cbm: e.target.value })} />
                                 </Field>
+                                {rec.itemId !== rec.originalItemId && (
+                                  <div className="basis-full text-[11px]" style={{ color: colors.amberText }}>
+                                    {t.legacyRecordMoveNote(
+                                      itemLabel((items || []).find((i) => i.id === rec.originalItemId)) || rec.originalItemId,
+                                      itemLabel((items || []).find((i) => i.id === rec.itemId)) || rec.itemId,
+                                      (rec.codes || []).length,
+                                      codesCarriedOver(rec.codes, rec.itemId).length
+                                    )}
+                                  </div>
+                                )}
                               </div>
                             );
                           })}
@@ -9777,7 +9869,21 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
                           style={{ color: colors.green }}
                           onClick={() => {
                             const { records, ...meta } = backlogEditDraft;
-                            setLegacyArchive((prev) => prev.map((row) => (row.id === r.id ? { ...row, ...meta } : row)));
+                            // A record that moved takes the listing's link with it, or the
+                            // archive would go on pointing at the entry it just left.
+                            const moves = new Map((records || [])
+                              .filter((x) => x.itemId && x.originalItemId && x.itemId !== x.originalItemId)
+                              .map((x) => [x.originalItemId, x.itemId]));
+                            setLegacyArchive((prev) => prev.map((row) => {
+                              if (row.id !== r.id) return row;
+                              const next = { ...row, ...meta };
+                              if (!moves.size) return next;
+                              const was = (row.linkedItemIds && row.linkedItemIds.length)
+                                ? row.linkedItemIds
+                                : String(row.linkedItemId || "").split(",").map((s) => s.trim()).filter(Boolean);
+                              const ids = [...new Set(was.map((id) => moves.get(id) || id))];
+                              return { ...next, linkedItemIds: ids, linkedItemId: ids.join(", ") };
+                            }));
                             saveLinkedRecords(records);
                             setEditingBacklogId(null);
                             setBacklogEditDraft(null);
