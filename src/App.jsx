@@ -401,6 +401,29 @@ function plNum(v) {
   const n = Number(cleaned);
   return isNaN(n) ? 0 : n;
 }
+// The row at the foot of a packing list that adds the sheet up is not a case, and taking it
+// for one puts the whole sheet's weight and volume onto whichever lot happened to be last.
+// Only the English word was looked for before, so a mainland factory sheet ending in
+// "合  计" - Chinese, and spaced out to fill the cell - went straight through as a case.
+// A subtotal in the middle of a sheet is skipped rather than treated as the end of the table,
+// since real cases follow it.
+const PL_TOTAL_LABELS = ["\u5408\u8a08", "\u5408\u8a08", "\u5408\u8ba1", "\u603b\u8ba1", "\u7e3d\u8a08", "\u5171\u8ba1", "\u5171\u8a08", "\u603b\u6570", "\u7e3d\u6578", "\u5408\u5171", "\u7e3d\u91cd", "\u603b\u91cd"];
+const PL_SUBTOTAL_LABELS = ["\u5c0f\u8ba1", "\u5c0f\u8a08"];
+function plTotalsRowKind(row) {
+  let kind = "";
+  for (const cell of row || []) {
+    const text = plNorm(cell);
+    if (!text) continue;
+    // "合  计" is written with padding inside the cell, so spacing is dropped before matching.
+    const compact = text.replace(/\s+/g, "");
+    if (PL_SUBTOTAL_LABELS.some((l) => compact.startsWith(l))) return "subtotal";
+    if (PL_TOTAL_LABELS.some((l) => compact.startsWith(l))) kind = "total";
+    // The original reading, kept exactly as it was: any cell mentioning "total" anywhere
+    // ends the table, sub-totals included.
+    if (text.includes("total")) kind = "total";
+  }
+  return kind;
+}
 function plCbmFromDimension(v, unit) {
   // Parses strings like "2000*850*600" (mm) or "140*90*96" (cm) into m3.
   const parts = String(v || "").split(/[x*×]/i).map((s) => Number(s.replace(/,/g, "").trim()));
@@ -585,8 +608,9 @@ function parsePackingListSheet(rows, legend) {
   for (let i = headerIdx + 1; i < rows.length; i++) {
     const row = rows[i] || [];
     if (row.every((c) => String(c || "").trim() === "")) continue;
-    const rowText = row.map((c) => String(c || "").toLowerCase()).join(" ");
-    if (rowText.includes("total")) break;
+    const totalsKind = plTotalsRowKind(row);
+    if (totalsKind === "subtotal") continue;
+    if (totalsKind === "total") break;
 
     const lot = colMap.lot !== undefined ? String(row[colMap.lot] || "").trim() : "";
     const container = colMap.containerNo !== undefined ? String(row[colMap.containerNo] || "").trim() : "";
