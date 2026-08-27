@@ -1449,6 +1449,7 @@ const TEXT = {
     pdfCaseCountMismatch: (lot, stated, read) => `${lot}: the document states ${stated} package${stated === 1 ? "" : "s"} but ${read} case number${read === 1 ? "" : "s"} were read \u2014 check the C/S NO. list.`,
     pdfWholeDocument: "This document",
     pdfWeightMismatch: (stated, read) => `The document totals ${stated} kg but the cases read come to ${read} kg \u2014 check the lots below against the paper before importing.`,
+    pdfCasesCorrected: (lot, changes) => `${lot}: case numbers corrected to match the document's own Shipping Marks \u2014 ${changes}. Weights and volumes are unchanged.`,
     pdfRepeatedLots: (lots) => `More than one group came back named ${lots}. If the document splits an order into groups going to different lifts, give each its own name before importing, or they will be checked in as one lot.`,
     pdfDocumentTotals: (cbm, kg) => `The document gives one total for the whole shipment \u2014 ${cbm} CBM, ${kg} kg \u2014 without splitting it between the orders, so it has not been divided up. Enter the volume per lot from the paperwork if you have it.`,
     pdfTerminalDatesFound: (eta, lastFree) => `This document also gives terminal dates \u2014 arrival ${eta}, last free day ${lastFree}. Enter them on the entry when you check these cases in; they are not part of the packing list.`,
@@ -2171,6 +2172,7 @@ const TEXT = {
     pdfCaseCountMismatch: (lot, stated, read) => `${lot}：文件註明 ${stated} 件，但讀取到 ${read} 個件號 \u2014 請核對 C/S NO. 清單。`,
     pdfWholeDocument: "此文件",
     pdfWeightMismatch: (stated, read) => `文件總重為 ${stated} 公斤，但讀取到之各件合計為 ${read} 公斤 \u2014 匯入前請與紙本核對下方批次。`,
+    pdfCasesCorrected: (lot, changes) => `${lot}：已按文件嘜頭 (Shipping Marks) 修正件號 \u2014 ${changes}。重量及體積不變。`,
     pdfRepeatedLots: (lots) => `有多於一組名為 ${lots}。如文件將同一訂單分為不同批次送往不同電梯，請於匯入前分別命名，否則會合併為同一批次。`,
     pdfDocumentTotals: (cbm, kg) => `文件只提供整批總數 \u2014 ${cbm} CBM、${kg} 公斤 \u2014 並未按訂單分列，故系統不作分攤。如有資料請自行輸入各批次體積。`,
     pdfTerminalDatesFound: (eta, lastFree) => `此文件另有碼頭日期 \u2014 到港 ${eta}，免費倉期至 ${lastFree}。辦理到倉時請於記錄輸入；此並非裝箱單資料。`,
@@ -10269,6 +10271,75 @@ function renumberGroupCases(group, text) {
     totalCbm: next.reduce((s, p) => s + (Number(p.cbm) || 0), 0),
   };
 }
+// A packing list that carries two jobs ends with a Shipping Marks block for each - "FUJITEC
+// / ZDZ1703 / PO NO.HE-6717 / C/NO. 02-05, 09-10, 13-30, 34-35" - which is the shipper's own
+// statement of which case numbers belong to which job. Expanded here into one code per case,
+// keeping the printed width so "02-05" gives 02, 03, 04, 05 rather than 2, 3, 4, 5.
+function expandCaseMarkRanges(text) {
+  const out = [];
+  const cleaned = String(text || "").replace(/C\s*\/?\s*NO\.?|CASE\s*NO\.?|\u4ef6\u865f/gi, " ");
+  for (const part of cleaned.split(/[,;\u3001\n]/)) {
+    const piece = part.trim();
+    if (!piece) continue;
+    const range = piece.match(/^(\d+)\s*[-\u2013\u2014~]\s*(\d+)$/);
+    if (range) {
+      const from = Number(range[1]);
+      const to = Number(range[2]);
+      const width = Math.max(range[1].length, range[2].length);
+      // A run longer than the whole shipment is a misread, not a range; left alone.
+      if (from > 0 && to >= from && to - from < 500) {
+        for (let n = from; n <= to; n += 1) out.push(String(n).padStart(width, "0"));
+        continue;
+      }
+    }
+    out.push(piece);
+  }
+  return out;
+}
+// Two jobs on one factory packing list are numbered separately and both start at 02, so they
+// share most of their case numbers and differ only in the last few - one job ending 32-33 and
+// the other 34-35. Reading those off the page means tracking which section each row sits in
+// over nineteen pages, and the tail of the second job is exactly where that slips. The
+// Shipping Marks say it outright, so where they and the cases read disagree, the marks win.
+//
+// Only a lot whose case count already matches its mark is corrected: a count that disagrees
+// means a case was missed or duplicated, which renaming would paper over rather than fix, and
+// that is reported separately. The correction is by position, which is sound because a job's
+// cases are printed in ascending order and its mark lists them the same way.
+function reconcileGroupCaseCodes(groups, shippingMarks) {
+  const corrections = [];
+  const marks = (shippingMarks || [])
+    .map((m) => ({ lot: String((m && m.lot) || "").trim(), codes: expandCaseMarkRanges(m && m.cases) }))
+    .filter((m) => m.lot && m.codes.length);
+  if (!marks.length) return { groups: groups || [], corrections };
+  const lotKey = (s) => String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const sameCode = (c) => String(c || "").trim().toUpperCase().replace(/^0+(?=\d)/, "");
+  const rank = (c) => {
+    const n = parseFloat(String(c || "").replace(/[^\d.]/g, ""));
+    return isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
+  };
+  const next = (groups || []).map((g) => {
+    const mark = marks.find((x) => lotKey(x.lot) === lotKey(g.lot));
+    const pkgs = g.packages || [];
+    if (!mark || pkgs.length !== mark.codes.length || !pkgs.length) return g;
+    // A mark listing the same number twice cannot say which case is which; left alone.
+    if (new Set(mark.codes.map(sameCode)).size !== mark.codes.length) return g;
+    if (pkgs.map((p) => sameCode(p.code)).join("|") === mark.codes.map(sameCode).join("|")) return g;
+    const byPosition = pkgs.map((_, i) => i).sort((a, b) => rank(pkgs[a].code) - rank(pkgs[b].code) || a - b);
+    const wanted = [...mark.codes].sort((a, b) => rank(a) - rank(b));
+    const packages = pkgs.slice();
+    const changed = [];
+    byPosition.forEach((pkgIdx, i) => {
+      if (sameCode(pkgs[pkgIdx].code) === sameCode(wanted[i])) return;
+      packages[pkgIdx] = { ...pkgs[pkgIdx], code: wanted[i] };
+      changed.push(`${pkgs[pkgIdx].code || "\u2014"} \u2192 ${wanted[i]}`);
+    });
+    if (!changed.length) return g;
+    corrections.push({ lot: g.lot, changed });
+    return { ...g, packages };
+  });
+  return { groups: next, corrections };
+}
 // A Chevalier project is named by a code at the front of its site name - EL-1876, REL-2205,
 // FEEL-1330. Guide rails for several projects ship on one packing list, so the site cannot
 // be a property of the file: the A4523 list carries EL-1924 and EL-1876, and the A4366 list
@@ -10485,8 +10556,10 @@ Follow these extraction rules exactly - they keep the output compact even for lo
    Return ONE entry in "groups" per group letter, each holding only that group's lines, and build its "lot" from the order, the group letter and the annotation, e.g. "CED-1833/B (EL-1876 #L-C01 to L-C05)". Put the group letter in "group" and the INS reference in "insRef". Read the margin annotations even when handwritten; where a group has none, use just the order and letter.
 2b-iv. IMPORTANT - a Fujitec packing list has two levels of row and only the outer one is a package. An outer row carries a C/NO. (the case number), a PK NO. like "ZDZ1703+K-05A", N.W(KGS), G.W(KGS), Volume(M3) and a TYPE such as WOODEN CASE. Underneath it sit indented ITEM NO. rows listing that case's contents - PART NAME, PART NO., Job No., QTY PCS. Those inner rows are contents, NOT packages: never count them, and never take their weights.
    The lot is the job number at the FRONT of the PK NO., before the "+": "ZDZ1703+K-05A" and "ZDZ1703+Z-12HA" are both lot ZDZ1703. Use exactly that, e.g. "ZDZ1703".
-   CRITICAL - do NOT use the inner rows' "Job No." column to decide which lot a case belongs to. One case can hold parts for several jobs: case 32 is PK NO. "ZDZ1703+Z-12HA" and its contents list both ZDZ1703 and ZDZ1708, but the case is ZDZ1703's. The PK NO. decides, always.
-   Set "code" to the C/NO. exactly as printed ("01", "06", "32"), the weight from G.W(KGS), and the volume from Volume(M3). A Shipping Marks block at the end usually lists the C/NO. belonging to each job - use it to check your grouping, and if it disagrees with what you read, follow the Shipping Marks.
+   CRITICAL - do NOT use the inner rows' "Job No." column to decide which lot a case belongs to. One case can hold parts for several jobs: a case whose PK NO. begins "ZDZ1703" may list contents against both ZDZ1703 and ZDZ1708, but the case is ZDZ1703's. The PK NO. decides, always.
+   Set "code" to the C/NO. exactly as printed ("01", "06", "32"), the weight from G.W(KGS), and the volume from Volume(M3).
+   CRITICAL - each job is numbered separately and both usually start at 02, so the two jobs share most of their case numbers and differ only in their last few: one job may end 34-35 while the other ends 32-33. Read every C/NO. from the left-hand column of that case's own row and never carry a number over from the other job's section, never continue a job's numbering past what is printed, and never assume the two jobs end on the same numbers.
+2b-v. A Shipping Marks block at the end of a packing list states, per job, which case numbers belong to it - "FUJITEC / ZDZ1703 / PO NO.HE-6717 / C/NO. 02-05, 09-10, 13-30, 34-35". Return every such block in "shippingMarks", copying the C/NO. line verbatim, ranges and all, with the job/order number from the mark as its "lot". Use it to check your grouping; where it disagrees with what you read off the rows, follow the Shipping Marks.
 2c. IMPORTANT - many documents are NOT per-case tables at all. A Delivery Memo (DM), an arrival/release notice (到貨通知提貨單), or a shipping order states only the OVERALL totals - "29 Package(s)", "14.088 CBM", "12,909 Kgs", "29 件" - and then lists the case markings separately under a heading like "C/S NO." or "SHIPPING MARK", one marking per line, sometimes several comma-separated per line (e.g. "01C01,01C02,01C03"). For a document like that:
    - put the stated totals in "statedPackages", "statedWeightKg" and "statedCbm" on the group;
    - put every case marking, expanded from any comma-separated lines into individual entries, into "caseNumbers" on the group, exactly as printed;
@@ -10496,7 +10569,7 @@ Follow these extraction rules exactly - they keep the output compact even for lo
 3. Keep everything as compact as possible: short descriptions, no commentary, no repeated sub-item lists.
 
 Respond with ONLY a raw JSON object in EXACTLY this shape and nothing else (no markdown fences, no commentary, no explanation before or after):
-{"client": "best-guess client name or ''", "project": "site/building/project name found in the document, or ''", "ssDoNo": "vessel + voyage + container line or ''", "shipping": {"vessel": "", "voyage": "", "blNo": "", "containerNo": ""}, "terminalArrivalDate": "YYYY-MM-DD or ''", "lastFreeDay": "YYYY-MM-DD or ''", "documentTotals": {"packages": number_or_empty_string, "weightKg": number_or_empty_string, "cbm": number_or_empty_string}, "groups": [{"lot": "lift/lot/shop-order number identifying this batch", "containers": ["container numbers if any, else empty array"], "statedPackages": number_or_empty_string, "statedWeightKg": number_or_empty_string, "statedCbm": number_or_empty_string, "caseNumbers": ["case markings, one per entry, only for totals-only documents"], "group": "group letter if the document has one, else ''", "insRef": "INS/works reference beside the group, e.g. 0/24/576, else ''", "lines": [{"packages": number, "description": "", "netWeightKg": number_or_empty_string, "grossWeightKg": number_or_empty_string, "cbm": number_or_empty_string}], "packages": [{"code": "case/package number", "description": "short category name, a few words only", "weightKg": number_or_empty_string, "cbm": number_or_empty_string, "length": number_or_empty_string, "width": number_or_empty_string, "height": number_or_empty_string, "dimUnit": "cm_or_mm_or_empty"}]}]}
+{"client": "best-guess client name or ''", "project": "site/building/project name found in the document, or ''", "ssDoNo": "vessel + voyage + container line or ''", "shipping": {"vessel": "", "voyage": "", "blNo": "", "containerNo": ""}, "terminalArrivalDate": "YYYY-MM-DD or ''", "lastFreeDay": "YYYY-MM-DD or ''", "documentTotals": {"packages": number_or_empty_string, "weightKg": number_or_empty_string, "cbm": number_or_empty_string}, "shippingMarks": [{"lot": "job/order number in the mark", "cases": "that mark's C/NO. line exactly as printed, ranges and all"}], "groups": [{"lot": "lift/lot/shop-order number identifying this batch", "containers": ["container numbers if any, else empty array"], "statedPackages": number_or_empty_string, "statedWeightKg": number_or_empty_string, "statedCbm": number_or_empty_string, "caseNumbers": ["case markings, one per entry, only for totals-only documents"], "group": "group letter if the document has one, else ''", "insRef": "INS/works reference beside the group, e.g. 0/24/576, else ''", "lines": [{"packages": number, "description": "", "netWeightKg": number_or_empty_string, "grossWeightKg": number_or_empty_string, "cbm": number_or_empty_string}], "packages": [{"code": "case/package number", "description": "short category name, a few words only", "weightKg": number_or_empty_string, "cbm": number_or_empty_string, "length": number_or_empty_string, "width": number_or_empty_string, "height": number_or_empty_string, "dimUnit": "cm_or_mm_or_empty"}]}]}
 If the document only has one overall lot/shipment with no explicit lift/case breakdown, put everything under a single group with a sensible lot name.
 
 SIZE MATTERS - a long document has to be answered before the request times out, so keep the reply as short as it can be while staying complete. OMIT any key you would set to '' or to an empty array: write {"code":"01","weightKg":17,"cbm":0.08} rather than repeating every field with empty values. Never abbreviate or omit a case itself - every package must appear - but say nothing about its contents, and use no whitespace beyond what JSON requires.`;
@@ -10600,7 +10673,7 @@ SIZE MATTERS - a long document has to be answered before the request times out, 
           weightKg: per(kg, i, 2), cbm: per(cbm, i, 3),
         }));
       };
-      const normalizedGroups = (parsed.groups || []).map((g) => {
+      const readGroups = (parsed.groups || []).map((g) => {
         if (!(g.packages || []).length) {
           const built = (g.lines || []).length ? expandLineGroup(g) : expandStatedGroup(g);
           if (built.length) {
@@ -10634,6 +10707,11 @@ SIZE MATTERS - a long document has to be answered before the request times out, 
           packages,
         };
       });
+      // Where the document says outright which case numbers belong to which job, that is
+      // taken over what was read off the rows. Every change is reported rather than made
+      // quietly, so it can be checked against the paper.
+      const reconciled = reconcileGroupCaseCodes(readGroups, parsed.shippingMarks);
+      const normalizedGroups = reconciled.groups;
       // Compose the SS/D.O. line from the parts if the scan didn't put one together - a
       // release notice gives vessel, voyage, container and B/L in four separate fields.
       const sh = parsed.shipping || {};
@@ -10653,6 +10731,9 @@ SIZE MATTERS - a long document has to be answered before the request times out, 
       // itself an error - Mitsubishi's 13-DM-26-0500 genuinely carries two cases marked
       // 01C01 - so it is counted, not flagged.
       const scanWarnings = [];
+      for (const c of reconciled.corrections) {
+        scanWarnings.push(t.pdfCasesCorrected(c.lot, c.changed.join(", ")));
+      }
       for (const g of normalizedGroups) {
         const stated = Number((parsed.groups || []).find((x) => (x.lot || "UNSPECIFIED") === g.lot)?.statedPackages) || 0;
         if (stated > 0 && stated !== g.packages.length) {
@@ -10695,10 +10776,21 @@ SIZE MATTERS - a long document has to be answered before the request times out, 
       if (statedKg > 0 && readKg > 0 && Math.abs(statedKg - readKg) > Math.max(1, statedKg * 0.005)) {
         scanWarnings.push(t.pdfWeightMismatch(statedKg, readKg));
       }
-      setPdfDocumentTotals(dt.cbm || dt.weightKg ? dt : null);
+      // The whole-shipment notice is for a document that gives one volume and no per-case
+      // figures. A Fujitec list prints Volume(M3) against every case, so its lots already
+      // carry real volumes that add up to the stated total, and telling someone the volume
+      // "has not been divided up" invites them to replace measured figures with an estimate.
+      // So the notice, and the pre-filled split box, appear only when the cases fall short of
+      // the total.
+      const readCbm = Math.round(normalizedGroups
+        .reduce((n, g) => n + g.packages.reduce((a, p) => a + (Number(p.cbm) || 0), 0), 0) * 1000) / 1000;
+      const statedCbm = Number(dt.cbm) || 0;
+      const cbmAlreadyPerCase = statedCbm > 0 && readCbm > 0
+        && Math.abs(statedCbm - readCbm) <= Math.max(0.05, statedCbm * 0.01);
+      setPdfDocumentTotals(!cbmAlreadyPerCase && (dt.cbm || dt.weightKg) ? dt : null);
       // Pre-fill the split box with the figure the document actually gave, so it is one
       // press rather than a re-typing exercise.
-      if (Number(dt.cbm) > 0) setPlShipmentCbm(String(dt.cbm));
+      if (statedCbm > 0 && !cbmAlreadyPerCase) setPlShipmentCbm(String(dt.cbm));
       setPdfWarnings(scanWarnings);
       const ok = applyParsedResult({ groups: normalizedGroups, client: parsed.client, project: parsed.project, ssDoNo });
       if (!ok) setPdfError(t.packingListNoStructure);
