@@ -6124,7 +6124,12 @@ function mergeLotMark(lot, mark) {
 // One token of a written case list: "8B-1", "01C3101-4-1", "(10-1/10B-1)". Brackets and
 // slashes are part of a marking, not punctuation around it.
 const CASE_CODE_TOKEN = "[0-9A-Za-z(][0-9A-Za-z\\-\\/\\.()]*";
-const CASE_CODE_LIST_RE = new RegExp(`^${CASE_CODE_TOKEN}(\\s*,\\s*${CASE_CODE_TOKEN})*\\s*,?$`);
+// A hand-typed list separates its last pair with an ampersand rather than a comma - "01B81,
+// 01D41, 01Z11, 91B11, 02B71, 02D41 & 92B11" - and a Chinese keyboard reaches for the
+// ideographic comma. Both are commas as far as the list is concerned.
+const CASE_CODE_SEP = "\\s*[,&\\u3001]\\s*";
+const CASE_CODE_LIST_RE = new RegExp(`^${CASE_CODE_TOKEN}(${CASE_CODE_SEP}${CASE_CODE_TOKEN})*\\s*[,&\\u3001]?$`);
+const CASE_CODE_SPLIT_RE = /[,&\u3001]/;
 // Two markings are the same case when they read the same once spacing and the brackets a
 // sheet puts round a combined package are taken off: a job sheet writes "(10-1/10B-1)" for
 // the case the packing list holds as "10-1/10B-1".
@@ -6324,7 +6329,7 @@ function parseJobSheetBlocks(rows) {
     // line holding one failed to be a case list at all and the whole block came through
     // with no cases: the 2607208 delivery lists eleven that way and read as none.
     if (awaitingMark && CASE_CODE_LIST_RE.test(line) && /[A-Za-z]/.test(line) && /\d/.test(line)) {
-      const codes = line.split(",").map((c) => c.trim()).filter(Boolean);
+      const codes = line.split(CASE_CODE_SPLIT_RE).map((c) => c.trim()).filter(Boolean);
       const lot = cur.lots[cur.lots.length - 1];
       if (lot) {
         lot.caseCodes = [...(lot.caseCodes || []), ...codes];
