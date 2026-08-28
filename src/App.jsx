@@ -1470,7 +1470,7 @@ const TEXT = {
 
     tabExcel: "Excel Upload",
     tabPdf: "PDF Scan",
-    pdfCaseCountMismatch: (lot, stated, read) => `${lot}: the document states ${stated} package${stated === 1 ? "" : "s"} but ${read} case number${read === 1 ? "" : "s"} were read \u2014 check the C/S NO. list.`,
+    pdfCaseCountMismatch: (lot, stated, read) => `${lot}: the document states ${stated} package${stated === 1 ? "" : "s"} but ${read} case number${read === 1 ? "" : "s"} were read, ${Math.abs(stated - read)} ${stated > read ? "short" : "over"} \u2014 check the C/S NO. list against the paper. The ${read} read are used as they stand; nothing has been invented to make up the difference.`,
     pdfWholeDocument: "This document",
     pdfWeightMismatch: (stated, read) => `The document totals ${stated} kg but the cases read come to ${read} kg \u2014 check the lots below against the paper before importing.`,
     pdfCasesCorrected: (lot, changes) => `${lot}: case numbers corrected to match the document's own Shipping Marks \u2014 ${changes}. Weights and volumes are unchanged.`,
@@ -2208,7 +2208,7 @@ const TEXT = {
 
     tabExcel: "上載Excel",
     tabPdf: "掃描PDF",
-    pdfCaseCountMismatch: (lot, stated, read) => `${lot}：文件註明 ${stated} 件，但讀取到 ${read} 個件號 \u2014 請核對 C/S NO. 清單。`,
+    pdfCaseCountMismatch: (lot, stated, read) => `${lot}：文件註明 ${stated} 件，但讀取到 ${read} 個件號，相差 ${Math.abs(stated - read)} 件 \u2014 請與紙本核對 C/S NO. 清單。系統只採用已讀取之 ${read} 件，不會自行補足差額。`,
     pdfWholeDocument: "此文件",
     pdfWeightMismatch: (stated, read) => `文件總重為 ${stated} 公斤，但讀取到之各件合計為 ${read} 公斤 \u2014 匯入前請與紙本核對下方批次。`,
     pdfCasesCorrected: (lot, changes) => `${lot}：已按文件嘜頭 (Shipping Marks) 修正件號 \u2014 ${changes}。重量及體積不變。`,
@@ -6236,6 +6236,9 @@ function parseJobSheetBlocks(rows) {
         cur.lots.push({
           lotRef: (dmNo || shippingMark).replace(/\s+/g, ""),
           altRef: dmNo ? shippingMark : "", unitCode: ctx.liftNo || "",
+          // Set when the DM number was missing and the mark had to stand in for it. A mark
+          // covers a whole contract rather than one lot, so this is checked below.
+          markOnly: !dmNo,
           caseNumbers: [], caseCodes: [], caseText: "", lotCases: null,
           pkgs: "", kg: "", cbm: "", shkNumber: ctx.shkNumber,
         });
@@ -6396,6 +6399,27 @@ function parseJobSheetBlocks(rows) {
       continue;
     }
   }
+  // A shipping mark identifies a lot only for as long as it belongs to one. It covers a
+  // whole contract, so the 2608174 CFS carries 1324003000A on both of its halves - and its
+  // second DM row was written before the number was issued ("DM No. 13-DM-26-"), leaving
+  // that half with nothing but the mark. Matched on the mark, a shipment of lifts 09-12
+  // could be handed lifts 19-22's sixty-four case numbers. So where a mark stood in for a
+  // missing DM number and another lot on the sheet carries the same mark, the lift number
+  // takes over as the reference and the mark drops to a secondary one.
+  const allLots = blocks.flatMap((b) => b.lots);
+  const refUse = new Map();
+  for (const l of allLots) {
+    for (const ref of [l.lotRef, l.altRef].filter(Boolean)) {
+      refUse.set(ref, (refUse.get(ref) || 0) + 1);
+    }
+  }
+  for (const l of allLots) {
+    if (l.markOnly && l.unitCode && (refUse.get(l.lotRef) || 0) > 1) {
+      l.altRef = l.lotRef;
+      l.lotRef = l.unitCode;
+    }
+    delete l.markOnly;
+  }
   return { blocks, orphanFigureRows };
 }
 function guessFieldsFromWorkbook(wb) {
@@ -6473,6 +6497,19 @@ function guessFieldsFromWorkbook(wb) {
   // disagreement means the list was mis-read or the sheet is short, and either way it is
   // worth saying so rather than quietly working from the shorter number.
   out.caseCountMismatches = [];
+  // A reference that more than one lot answers to cannot say which of them a case list
+  // belongs to. Merging the two lists under it, as this used to, hands every lot on the
+  // sheet the whole sheet's cases - the contract number 1324003000A sits on both halves of
+  // the 2608174 CFS, 128 cases between them. Such a key is dropped instead, leaving the
+  // references that do identify one lot to do the matching.
+  const keysFor = (lot) => [lot.lotRef, lot.altRef, lot.unitCode].filter(Boolean).map((k) => String(k).toUpperCase());
+  const keyOwners = new Map();
+  for (const b of out.refBlocks) {
+    for (const lot of b.lots) {
+      for (const k of new Set(keysFor(lot))) keyOwners.set(k, (keyOwners.get(k) || 0) + 1);
+    }
+  }
+  const ambiguousKey = (k) => (keyOwners.get(k) || 0) > 1;
   for (const b of out.refBlocks) {
     for (const lot of b.lots) {
       if ((lot.caseCodes || []).length) {
@@ -6483,6 +6520,7 @@ function guessFieldsFromWorkbook(wb) {
         for (const key of [lot.lotRef, lot.altRef, lot.unitCode]) {
           if (!key) continue;
           const k = String(key).toUpperCase();
+          if (ambiguousKey(k)) continue;
           out.caseCodesByLot[k] = {
             codes: [...new Set([...((out.caseCodesByLot[k] || {}).codes || []), ...lot.caseCodes])],
             text: lot.caseText || "",
@@ -6493,6 +6531,7 @@ function guessFieldsFromWorkbook(wb) {
       for (const key of [lot.unitCode, lot.lotRef, `${lot.lotRef}/${lot.unitCode}`]) {
         if (!key) continue;
         const k = String(key).toUpperCase();
+        if (ambiguousKey(k)) continue;
         const prev = out.caseMarksByLot[k];
         out.caseMarksByLot[k] = {
           numbers: [...new Set([...(prev ? prev.numbers : []), ...lot.caseNumbers])].sort((x, y) => x - y),
@@ -10923,7 +10962,10 @@ Follow these extraction rules exactly - they keep the output compact even for lo
    - put the stated totals in "statedPackages", "statedWeightKg" and "statedCbm" on the group;
    - put every case marking, expanded from any comma-separated lines into individual entries, into "caseNumbers" on the group, exactly as printed;
    - leave "packages" as an empty array. Do NOT invent per-case weights or volumes for these - the totals are all the document states.
-2c-ii. A packing list is often sent with a delivery order or arrival notice covering the same shipment. Where the total CBM or weight appears only on that companion page and not per order, put it in "documentTotals" - do NOT divide it between the orders yourself, and do NOT copy it onto one of them.
+2c-ii. The list of markings is often on a separate attached page laid out in several columns across the page, each row holding the marking split into parts - a lift number, a component code and a case suffix, e.g. "09  B11  09" or "19  D41  21-2-2". Read each column from top to bottom, then move to the next column to its right. Every row is ONE package. Join that row's parts, in the order printed and with no spaces, to form the marking - "09B1109", "19D4121-2-2" - following the style the memo's own face uses where it prints a few of them.
+2c-iii. CRITICAL - return exactly the markings that are printed, and no others. If they come to fewer than the stated package count, return the ones you can see: do NOT invent, pad, repeat or renumber markings to reach the stated total, and do NOT drop any to match a smaller one. The document disagreeing with itself is something the reader needs told, and it is reported from the two figures.
+2c-iv. Where a totals-only document's markings fall into more than one group, its face totals cover the whole document, so put them in "documentTotals" and NOT in "statedPackages"/"statedWeightKg"/"statedCbm" on any single group. Where everything is one group, put them on that group. Either way, state them once and never divide them yourself.
+2c-v. A packing list is often sent with a delivery order or arrival notice covering the same shipment. Where the total CBM or weight appears only on that companion page and not per order, put it in "documentTotals" - do NOT divide it between the orders yourself, and do NOT copy it onto one of them.
 2d. Look for terminal/storage dates: the arrival/ETA date (到港日期 / ETA) as "terminalArrivalDate" and the last free storage day (免費倉期 ... 至) as "lastFreeDay", both as YYYY-MM-DD. Use '' if absent.
 3. Keep everything as compact as possible: short descriptions, no commentary, no repeated sub-item lists.
 
@@ -11016,9 +11058,17 @@ SIZE MATTERS - a long document has to be answered before the request times out, 
           .map((m) => m.trim())
           .filter(Boolean);
         const stated = Number(g.statedPackages) || 0;
+        // Real markings always win, even when there are fewer of them than the document
+        // says. The 13-DM-26-0523 memo declares 128 packages and its attached list holds
+        // 120: topping the list up to 128 with placeholders would invent eight cases that
+        // nobody can find on a pallet. The gap is reported instead. Placeholders are only
+        // for a document that lists no markings at all.
         const codes = marks.length ? marks
           : (stated > 0 ? Array.from({ length: stated }, (_, i) => `${i + 1}/${stated}`) : []);
         if (!codes.length) return [];
+        // The stated weight and volume are the shipment's and stay whole: they are shared
+        // over the cases actually listed, so the totals still add up to what arrived even
+        // though the case count is short.
         const kg = Number(g.statedWeightKg) || 0;
         const cbm = Number(g.statedCbm) || 0;
         const per = (total, i, dp) => {
