@@ -424,6 +424,29 @@ function plTotalsRowKind(row) {
   }
   return kind;
 }
+// Mitsubishi's factory list announces which lift a case belongs to on the case's own row,
+// in parentheses beside the description - "(#.01)", "(#.09)". That number is the first part
+// of the marking painted on the box, and the list is the only document in the chain that
+// leaves it out of the case column.
+function plLiftMarkOnRow(row) {
+  for (const cell of row || []) {
+    const m = String(cell == null ? "" : cell).match(/\(\s*#\s*\.?\s*(\d{1,3})\s*\)/);
+    if (m) return m[1];
+  }
+  return "";
+}
+// The component half of a split Mitsubishi marking is always one letter and two digits -
+// B11, E21, D51, A10, Z11 - optionally with a letter after it. Nothing is rebuilt unless
+// the case number looks like that. Without the check, a "(#.3)" written in passing in some
+// other maker's description column would rebuild that row's ordinary "1/17" into "31/17".
+const PL_MITSUBISHI_CASE_RE = /^[A-Za-z]\d{2}[A-Za-z]?(?=$|[\s\-0-9])/;
+function plMitsubishiMarking(caseNo, liftMark) {
+  const compact = String(caseNo || "").replace(/\s+/g, "");
+  if (!liftMark || !compact) return caseNo;
+  if (!PL_MITSUBISHI_CASE_RE.test(compact)) return caseNo;
+  if (compact.startsWith(liftMark)) return caseNo;
+  return `${liftMark}${compact}`;
+}
 function plCbmFromDimension(v, unit) {
   // Parses strings like "2000*850*600" (mm) or "140*90*96" (cm) into m3.
   const parts = String(v || "").split(/[x*×]/i).map((s) => Number(s.replace(/,/g, "").trim()));
@@ -618,7 +641,13 @@ function parsePackingListSheet(rows, legend) {
     // fallback for lists that only have the one column.
     const caseMark = colMap.caseMark !== undefined ? String(row[colMap.caseMark] || "").trim() : "";
     const plainCase = colMap.caseNo !== undefined ? String(row[colMap.caseNo] || "").trim() : "";
-    const caseNo = /^\s*\d+\s*\/\s*\d+\s*$/.test(caseMark) ? caseMark.replace(/\s+/g, "") : (plainCase || caseMark);
+    const readCase = /^\s*\d+\s*\/\s*\d+\s*$/.test(caseMark) ? caseMark.replace(/\s+/g, "") : (plainCase || caseMark);
+    // Where the row names its lift and the case number is a split Mitsubishi marking, the
+    // two are put back together: the list's own columns leave "B11 01" and "E21 01A" where
+    // the Delivery Memo, the CFS sheet and the delivery job sheet all write 01B1101 and
+    // 01E2101A. A delivery asking for the marking on the box found nothing at the depot
+    // and pre-selected nothing. Any other maker's case number is left exactly as it is.
+    const caseNo = plMitsubishiMarking(readCase, plLiftMarkOnRow(row));
     const orderNo = colMap.orderNo !== undefined ? String(row[colMap.orderNo] || "").trim() : "";
     const description = colMap.description !== undefined ? String(row[colMap.description] || "").trim() : "";
     const grossVal = colMap.grossWeight !== undefined && row[colMap.grossWeight] !== "" && row[colMap.grossWeight] != null ? plNum(row[colMap.grossWeight]) : null;
@@ -853,6 +882,15 @@ function parseMitsubishiPackingList(rows) {
     }
   }
   const codes = [];
+  // The lift a case belongs to is announced on the same row in parentheses - "(#.09)" -
+  // and it is the first part of the marking painted on the box.
+  const liftOnRow = (row) => {
+    for (const cell of row || []) {
+      const m = String(cell == null ? "" : cell).match(/\(\s*#\s*\.?\s*(\d{1,3})\s*\)/);
+      if (m) return m[1];
+    }
+    return "";
+  };
   if (caseCol >= 0) {
     const skip = ["\u6346\u5305\u5305\u88c5", "BUNDLE", "CASE", "\uff08\u5c01\u95ed\uff09\u6728\u7bb1", "\u7bb1\u53f7"];
     for (let r = headerRow + 1; r < rows.length; r++) {
@@ -865,7 +903,14 @@ function parseMitsubishiPackingList(rows) {
         if (v) { suffix = v; break; }
       }
       if (!suffix) continue;
-      const code = `${raw}-${suffix}`;
+      // The factory list splits the marking into columns; every other document in the
+      // chain - the Delivery Memo, the CFS sheet, the delivery job sheet - writes it whole
+      // as lift, type, running number: "09" + "B11" + "09" is 09B1109, and "01" + "E21" +
+      // "01A" is 01E2101A. Joining the two columns with a hyphen instead produced "B11-09",
+      // a marking that appears on no piece of paper and on no box, so a delivery asking for
+      // 01B1101 found nothing at the depot and pre-selected nothing.
+      const lift = liftOnRow(rows[r]);
+      const code = lift && PL_MITSUBISHI_CASE_RE.test(raw) ? `${lift}${raw}${suffix}` : `${raw}-${suffix}`;
       if (!codes.includes(code)) codes.push(code);
     }
   }
