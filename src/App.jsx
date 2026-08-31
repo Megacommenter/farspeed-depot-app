@@ -2075,6 +2075,7 @@ const TEXT = {
     legacyArrivalStaysOpenHint: "Stays open at the depot until a matching Delivery file is uploaded (or you record a delivery for it normally).",
     legacyNoReferralHint: "No \"Ref Job no.\" line detected \u2014 enter the arrival's job number manually, or this file will only be archived.",
     legacySheetCasesNote: (mark, n) => `Sheet marks ${mark} \u2014 ${n} case${n === 1 ? "" : "s"} pre-selected`,
+    legacyCasesFormatClash: (sheet, list) => `Not one of them matched, so nothing could be pre-selected. The sheet asks for ${sheet}\u2026 while the packing list holds ${list}\u2026 \u2014 the same cases written differently. Re-import the packing list to rebuild its markings, or tick the cases by hand this once.`,
     legacySheetCasesMissing: (list) => `case ${list} not at the depot`,
     legacySheetCasesElsewhere: (list, more) => `but checked in elsewhere: ${list}${more ? `, and ${more} more` : ""} \u2014 deliver from that entry instead, or move the cases across in Inventory`,
     legacyReplaceCasesHint: (n) => `Same number of cases, but ${n} numbered differently here than on this sheet. Either source can be wrong \u2014 a scan can drop a digit, a typed sheet can carry a typo \u2014 so check the paper before changing anything:`,
@@ -2816,6 +2817,7 @@ const TEXT = {
     legacyArrivalStaysOpenHint: "此記錄會保持在倉狀態，直至上載對應的送貨檔案（或日後手動記錄送貨）為止。",
     legacyNoReferralHint: "未有偵測到「Ref Job no.」字句 — 請手動輸入到倉工單號，否則此檔案只會被存檔。",
     legacySheetCasesNote: (mark, n) => `工單註明 ${mark} \u2014 已預先選取 ${n} 件`,
+    legacyCasesFormatClash: (sheet, list) => `全部不符，故未能預先選取。工單要求 ${sheet}…而裝箱單記載為 ${list}… \u2014 同一批貨箱但寫法不同。請重新匯入裝箱單以重建件號，或今次先手動選取。`,
     legacySheetCasesMissing: (list) => `第 ${list} 件不在倉內`,
     legacySheetCasesElsewhere: (list, more) => `但已入於其他批次：${list}${more ? `，另有 ${more} 件` : ""} \u2014 請改由該批次出貨，或於存倉列表調整貨箱歸屬`,
     legacyReplaceCasesHint: (n) => `件數相同，但其中 ${n} 個件號與本工單不符。兩者皆可能有誤 \u2014 掃描可能漏字，工單亦可能手誤 \u2014 請先核對紙本再作更改：`,
@@ -6386,6 +6388,24 @@ const CASE_CODE_SPLIT_RE = /[,&\u3001]/;
 // Two markings are the same case when they read the same once spacing and the brackets a
 // sheet puts round a combined package are taken off: a job sheet writes "(10-1/10B-1)" for
 // the case the packing list holds as "10-1/10B-1".
+// A job sheet and its packing list do not always write a case to the same length. The
+// 2607140 delivery asks for "03B11" - lift and component - where the packing list holds
+// "03B1103", the same case with its own number on the end. Compared whole, nothing matches
+// and every case has to be ticked by hand.
+//
+// So an exact match is tried first, and only then a case whose marking begins with what the
+// sheet asked for. That fallback has to be unique to be trusted: where a lot holds
+// 03B4203-2-1 and 03B4203-2-2, a sheet asking for "03B42" could mean either, and guessing
+// would put the wrong case out of the door. Ambiguous ones are left unmatched and reported.
+function resolveCaseCode(code, packages) {
+  const exact = (packages || []).find((p) => sameCaseCode(p.code, code));
+  if (exact) return exact;
+  const norm = (c) => String(c || "").toUpperCase().replace(/[\s()#'\u2018\u2019]/g, "");
+  const wanted = norm(code);
+  if (wanted.length < 4) return null;
+  const starts = (packages || []).filter((p) => norm(p.code).startsWith(wanted));
+  return starts.length === 1 ? starts[0] : null;
+}
 function sameCaseCode(a, b) {
   const norm = (c) => String(c || "").toUpperCase().replace(/[\s()#'\u2018\u2019]/g, "");
   return norm(a) === norm(b);
@@ -7863,9 +7883,11 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
       const done = new Set(inc.checkedInCodes || []);
       const available = (inc.packages || []).filter((p) => !done.has(p.code));
       const norm = (c) => String(c || "").toUpperCase().replace(/\s+/g, "");
-      const have = new Map(available.map((p) => [norm(p.code), p.code]));
       const wanted = byCode[codeKey].codes;
-      const missing = wanted.filter((c) => !have.has(norm(c)));
+      // Matched through the resolver, so a sheet's shorter "03B11" still finds the packing
+      // list's "03B1103" where only one case can possibly be meant.
+      const resolved = new Map(wanted.map((c) => [c, resolveCaseCode(c, available)]));
+      const missing = wanted.filter((c) => !resolved.get(c));
       // Same number of cases, different numbering. Which list is right is not something
       // this app can know: a scanned memo can drop a digit, and a typed job sheet can carry
       // a typo - on the 13-DM-26-0500 job both happened, and it was the typed sheet that
@@ -7879,7 +7901,7 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
         : [];
       const replaceable = missing.length > 0 && sameCount && differences.length > 0;
       return {
-        codes: wanted.map((c) => have.get(norm(c))).filter(Boolean),
+        codes: wanted.map((c) => (resolved.get(c) || {}).code).filter(Boolean),
         missing, replaceable, wanted, differences,
         elsewhere: [], text: byCode[codeKey].text || "", shared: [],
       };
@@ -8123,9 +8145,9 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
       // Matched with the brackets off, so a sheet's "(10-1/10B-1)" finds the case the
       // packing list holds as "10-1/10B-1".
       const codes = coded.codes
-        .map((c) => (deliverable.find((p) => sameCaseCode(p.code, c)) || {}).code)
+        .map((c) => (resolveCaseCode(c, deliverable) || {}).code)
         .filter(Boolean);
-      const missing = coded.codes.filter((c) => !deliverable.some((p) => sameCaseCode(p.code, c)));
+      const missing = coded.codes.filter((c) => !resolveCaseCode(c, deliverable));
       return { codes, missing, text: coded.text || "" };
     }
     const mark = sheetCasesFor(it);
@@ -8624,6 +8646,19 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
                         : t.legacySheetCasesNote(sheetSel.text, sheetSel.codes.length)}
                       {sheetSel.missing.length > 0 && (
                         <span style={{ color: colors.red }}> {"\u00b7"} {t.legacyIncomingCasesMissing(sheetSel.missing.join(", "))}</span>
+                      )}
+                      {/* Nothing matched at all. Almost always the two documents write the
+                          same case a different way - a job sheet's "01B1101" against a
+                          packing list's "B11 01" - and without seeing both side by side
+                          there is nothing to tell you that, only a screen full of cases to
+                          tick by hand. */}
+                      {sheetSel.codes.length === 0 && sheetSel.missing.length > 0 && (
+                        <div style={{ color: colors.red }}>
+                          {t.legacyCasesFormatClash(
+                            sheetSel.missing.slice(0, 3).join(", "),
+                            remainingPkgs.slice(0, 3).map((p) => p.code).join(", ")
+                          )}
+                        </div>
                       )}
                       {sheetSel.replaceable && onReplaceIncomingCases && (
                         <div style={{ color: colors.amberText }}>
