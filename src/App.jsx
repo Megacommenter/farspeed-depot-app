@@ -2031,6 +2031,8 @@ const TEXT = {
     legacyEnrichedNote: (name) => `Enriched from legacy file: ${name}`,
     legacyMatchedIncoming: (id) => `Matched to Incoming ${id} \u2014 select which of its cases arrived in this file`,
     legacyNoPackingListTitle: "No packing list on file for this site",
+    legacyPackingListLookedFor: (client, site) => `Looked for a shipment waiting under ${client || "(no client)"} at ${site || "(no site)"} and found none.`,
+    legacyPackingListNearMiss: (n, list) => `${n} shipment${n === 1 ? " is" : "s are"} waiting to be checked in under other names \u2014 ${list}. If one of those is this shipment, correct the client or site above so it matches, rather than building a second packing list here.`,
     legacyNoPackingListDesc: "Nothing here to check these cases into. This sheet names its own lots and cases, so a packing list can be built straight from it \u2014 the lot's stated weight and volume are spread evenly across its cases, which is all the sheet claims. Every case stays editable in Incoming afterwards.",
     legacyCreatePackingListBtn: (n) => `Create packing list \u2014 ${n} lot${n === 1 ? "" : "s"}`,
     legacyPackingListFromSheetNote: (src) => `Packing list entered from job sheet ${src}`,
@@ -2088,6 +2090,7 @@ const TEXT = {
     legacyMisfiledCases: (codes, from) => `Case ${codes} sits under ${from}, but the lot size on the case number says it belongs here \u2014 the packing list's lift column had it wrong.`,
     legacyMisfiledFixBtn: "Move it here",
     legacySomeArrivalsUnmatched: (jobs) => `No inventory entry found for arrival job ${jobs} \u2014 that part of this sheet won't be delivered. Upload its Devan/CFS file first, or correct the number above.`,
+    legacyArrivalLaterInBatch: (job, file) => `The arrival for job ${job} is in this batch (${file}) and has not been processed yet. Arrivals are created before deliveries when you press Process, so this delivery will find it \u2014 nothing to do.`,
     legacyNoArrivalFoundHint: (job) => `No inventory entry found with job number ${job} \u2014 check the number is correct, or upload that Devan/CFS file first. This file will still be archived, but no delivery will be recorded against it.`,
   },
   zh: {
@@ -2769,6 +2772,8 @@ const TEXT = {
     legacyEnrichedNote: (name) => `由舊資料檔案補充資料：${name}`,
     legacyMatchedIncoming: (id) => `已配對至待到倉 ${id} \u2014 請選擇此檔案中已到達的件號`,
     legacyNoPackingListTitle: "本地盤未有裝箱單記錄",
+    legacyPackingListLookedFor: (client, site) => `已按客戶「${client || "（未填）"}」及地盤「${site || "（未填）"}」搜尋待到倉貨件，未有結果。`,
+    legacyPackingListNearMiss: (n, list) => `另有 ${n} 筆待到倉貨件登記於其他名稱之下 \u2014 ${list}。如其中一筆即為本批貨，請先修正上方之客戶或地盤名稱，切勿在此另建裝箱單。`,
     legacyNoPackingListDesc: "系統沒有可供入倉的貨件。此工單本身已列明批次及件號，可直接據此建立裝箱單 \u2014 該批次之重量及體積會平均分配至各件（工單只提供批次總數）。建立後可於待到倉逐件修改。",
     legacyCreatePackingListBtn: (n) => `建立裝箱單 \u2014 ${n} 個批次`,
     legacyPackingListFromSheetNote: (src) => `由工單 ${src} 手動建立之裝箱單`,
@@ -2826,6 +2831,7 @@ const TEXT = {
     legacyMisfiledCases: (codes, from) => `第 ${codes} 件現存於 ${from}，但件號所示之總件數顯示應屬此項 \u2014 裝箱單之梯號欄有誤。`,
     legacyMisfiledFixBtn: "移至此項",
     legacySomeArrivalsUnmatched: (jobs) => `找不到到倉工單號 ${jobs} 的存倉記錄 \u2014 此工單該部分不會記錄送貨。請先上載該拆櫃/CFS檔案，或修正上方號碼。`,
+    legacyArrivalLaterInBatch: (job, file) => `工單號 ${job} 之到倉檔案已在本批次內（${file}），尚未處理。按「處理」時會先建立到倉記錄，故此送貨單屆時可自行配對，無需另行處理。`,
     legacyNoArrivalFoundHint: (job) => `找不到工單號 ${job} 的存倉記錄 \u2014 請檢查號碼是否正確，或先上載該拆櫃/CFS檔案。此檔案仍會被存檔，但不會記錄任何送貨。`,
   },
 };
@@ -7763,7 +7769,7 @@ function SharedDeclaredTotal({ group, value, onPatch, colors, t, inputClass, inp
     </div>
   );
 }
-function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, employees, row, onChange, onRemove, incoming, items, onLegacyEnrich, onAddIncoming, onProcessAll, processing, processDisabled, colors, t, lang }) {
+function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, employees, row, siblingRows, onChange, onRemove, incoming, items, onLegacyEnrich, onAddIncoming, onProcessAll, processing, processDisabled, colors, t, lang }) {
   const inputStyle = inputStyleFor(colors);
   const set = (k) => (e) => onChange({ ...row, [k]: e.target.value });
   const itemized = JOB_SHEET_ITEMIZED.includes(row.docType);
@@ -7777,6 +7783,15 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
         return sitesLooselyMatch(row.projectEn, row.projectZh, inc.project, inc.constructionSite);
       })
     : [];
+  // Shipments still waiting to be checked in that this sheet did NOT match. Where any
+  // exist, the client or the site is written differently on one side or the other, and
+  // that is worth seeing before a second packing list gets built from the sheet on top of
+  // one that is already here.
+  const nearMissIncomings = (incoming || []).filter((inc) => {
+    if (matchedIncomings.includes(inc)) return false;
+    const done = new Set(inc.checkedInCodes || []);
+    return (inc.packages || []).some((p) => !done.has(p.code));
+  });
   const selectedByIncoming = row.selectedByIncoming || {};
   function setSelectedForIncoming(incId, next) {
     onChange({ ...row, selectedByIncoming: { ...selectedByIncoming, [incId]: next } });
@@ -7936,9 +7951,31 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
   // entered - the sheet itself is enough to build one from. The cases come off the C/S NO.
   // marking and the lot's stated weight and volume are spread evenly across them, which is
   // all the sheet claims: it gives a figure per lot, never per case.
+  // A delivery drawing on an arrival that is sitting in the same batch, waiting to be
+  // processed. Arrivals are created before deliveries when Process runs, so that delivery
+  // will find its entry - but the warning said flatly that no delivery would be recorded,
+  // which reads as an instruction to go away and upload the Devan and CFS files first.
+  function arrivalComingInThisBatch(jobNo) {
+    const wanted = String(jobNo || "").trim();
+    if (!wanted) return "";
+    const hit = (siblingRows || []).find((r) => r !== row
+      && ARRIVING_TYPES.includes(r.docType)
+      && jobNosMatch(r.jobNumber, wanted));
+    return hit ? legacySourceName(hit) : "";
+  }
   const sheetLots = (row.refBlocks || []).flatMap((b) => b.lots || [])
     .map((lot) => {
-      const { codes } = parseCaseSpec(lot.caseText || "");
+      // The markings the sheet gave, as they were read. This used to re-parse the joined
+      // text as a numeric case spec, which only succeeds where a lot happens to number its
+      // cases 1, 2, 3 - so a Mitsubishi sheet listing "01C01, 04C10, 05C2105" produced no
+      // lots at all, and the offer to build a packing list from the sheet never appeared on
+      // any of them. With no packing list on file for the site, that left nothing to check
+      // the cases into and every case had to be keyed in by hand.
+      const codes = (lot.caseCodes || []).length
+        ? lot.caseCodes.slice()
+        : ((lot.caseNumbers || []).length
+          ? lot.caseNumbers.map(String)
+          : parseCaseSpec(lot.caseText || "").codes);
       return { lotRef: lot.lotRef || "", altRef: lot.altRef || "", unitCode: lot.unitCode || "", codes, kg: lot.kg || "", cbm: lot.cbm || "" };
     })
     .filter((lot) => lot.codes.length);
@@ -8433,6 +8470,18 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
       {canMatchIncoming && matchedIncomings.length === 0 && matchedItems.length === 0 && sheetLots.length > 0 && onAddIncoming && (
         <div className="rounded p-3" style={{ background: colors.amberSoft, border: `1px solid ${colors.amber}` }}>
           <div className="text-sm font-semibold mb-1" style={{ color: colors.amberText }}>{t.legacyNoPackingListTitle}</div>
+          {/* A flat "nothing on file" is a claim the app cannot always support: a packing
+              list may well be here and simply not have matched, and building a second one
+              from the sheet would then double the site's cases. What was looked for, and
+              what is actually waiting, is reported instead - so a client or site written
+              differently on one side shows itself. */}
+          <div className="text-xs mb-2" style={{ color: colors.amberText }}>{t.legacyPackingListLookedFor(row.client, row.projectEn || row.projectZh)}</div>
+          {nearMissIncomings.length > 0 && (
+            <div className="text-xs mb-2 rounded px-2 py-1.5" style={{ background: colors.redSoft, color: colors.red }}>
+              {t.legacyPackingListNearMiss(nearMissIncomings.length, nearMissIncomings.slice(0, 4)
+                .map((inc) => `${inc.id} \u00b7 ${inc.client || "?"} \u00b7 ${inc.project || inc.constructionSite || "?"}`).join("; "))}
+            </div>
+          )}
           <div className="text-xs mb-2" style={{ color: colors.amberText }}>{t.legacyNoPackingListDesc}</div>
           {sheetLots.map((lot, li) => (
             <div key={li} className="text-xs flex flex-wrap gap-3" style={{ color: colors.ink }}>
@@ -8893,7 +8942,11 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
       )}
       {row.docType === "Delivery" && matchedItems.length === 0 && (
         <div className="px-2 py-1.5 rounded text-xs" style={{ background: colors.redSoft, color: colors.red }}>
-          {row.referJobNumber ? t.legacyNoArrivalFoundHint(row.referJobNumber) : t.legacyNoReferralHint}
+          {row.referJobNumber
+            ? (arrivalComingInThisBatch(row.referJobNumber)
+              ? t.legacyArrivalLaterInBatch(row.referJobNumber, arrivalComingInThisBatch(row.referJobNumber))
+              : t.legacyNoArrivalFoundHint(row.referJobNumber))
+            : t.legacyNoReferralHint}
         </div>
       )}
       {row.docType === "Delivery" && matchedItems.length > 0 && unmatchedRefs.length > 0 && (
@@ -10377,7 +10430,7 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
       {rows.length > 0 && (
         <div className="flex flex-col gap-3">
           {rows.map((row, idx) => (
-            <LegacyUploadRow key={idx} onReplaceIncomingCases={onReplaceIncomingCases} directory={directory} setDirectory={setDirectory} employees={employees} row={row} onChange={(next) => updateRow(idx, next)} onRemove={() => removeRow(idx)} incoming={incoming} items={items} onLegacyEnrich={onLegacyEnrich} onAddIncoming={onAddIncoming} onProcessAll={processAll} processing={processing} processDisabled={processing || rows.some((r) => !r.projectEn && !r.projectZh) || rows.some((r) => !r.client)} colors={colors} t={t} lang={lang} />
+            <LegacyUploadRow key={idx} onReplaceIncomingCases={onReplaceIncomingCases} directory={directory} setDirectory={setDirectory} employees={employees} row={row} siblingRows={rows} onChange={(next) => updateRow(idx, next)} onRemove={() => removeRow(idx)} incoming={incoming} items={items} onLegacyEnrich={onLegacyEnrich} onAddIncoming={onAddIncoming} onProcessAll={processAll} processing={processing} processDisabled={processing || rows.some((r) => !r.projectEn && !r.projectZh) || rows.some((r) => !r.client)} colors={colors} t={t} lang={lang} />
           ))}
           {rows.some((r) => !r.client) && (
             <div className="px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>
