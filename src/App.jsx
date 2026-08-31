@@ -6427,6 +6427,11 @@ function parseJobSheetBlocks(rows) {
   // lot had already stated one. A sheet whose C/S rows are per-case rather than per-lot
   // produces these in quantity, and that is the signal not to trust per-lot figures.
   let orphanFigureRows = 0;
+  // Set once the page has added itself up. What the sheet refers to after that point is
+  // about the job as a whole rather than another arrival being drawn from.
+  let sawGrandTotal = false;
+  // The delivery's own Delivery Memo number, written at the foot as "Refer to 13-DM-26-0228".
+  let ownDmRef = "";
   // Set by a LIFT NO. line: the row under it may name the lot those lifts belong to.
   let awaitingLotName = false;
   // Set by a C/S NO. row: the rows under it may continue the same group's figures without
@@ -6491,6 +6496,14 @@ function parseJobSheetBlocks(rows) {
       // taken as the lot's reference instead.
       if (/^\d{6,8}$/.test(ref)) {
         startBlock(ref, refDate);
+      } else if (sawGrandTotal) {
+        // Below the total, a Delivery Memo number is the one this delivery was issued
+        // under - "Refer to 13-DM-26-0228", or "Refer to 13-DM-26-0312, 0310, 0301" where
+        // several cover it. It is the sheet's own reference, not another lot going out, and
+        // reading it as a lot put a phantom row carrying no packages, weight or cases on
+        // the end of every delivery sheet in the backlog.
+        ownDmRef = ownDmRef || line.replace(/^.*?refer(?:red)?\s*(?:to\s*)?(?:job\s*no\.?)?\s*/i, "").trim();
+        continue;
       } else {
         startBlock("", refDate);
         cur.lots.push({
@@ -6505,7 +6518,7 @@ function parseJobSheetBlocks(rows) {
 
     // A 共:/Total: line closes the block it belongs to; the grand total at the foot of the
     // page belongs to no single arrival and must not overwrite the last block's figures.
-    if (/(?:共|total)\s*[:\uff1a]/i.test(line)) { cur = null; ctx = { shkNumber: "", liftNo: "" }; continue; }
+    if (/(?:共|total)\s*[:\uff1a]/i.test(line)) { cur = null; ctx = { shkNumber: "", liftNo: "" }; sawGrandTotal = true; continue; }
 
     const shkM = line.match(/\bSHK\s*[-#]?\s*(\d{3,6})\s*\/\s*(\d{2})\b/i);
     // "LIFT NO. L-W07, L-W08" names two lifts and "#01 & #02" two more; taking only the
@@ -6845,6 +6858,15 @@ function parseJobSheetBlocks(rows) {
   // could be handed lifts 19-22's sixty-four case numbers. So where a mark stood in for a
   // missing DM number and another lot on the sheet carries the same mark, the lift number
   // takes over as the reference and the mark drops to a secondary one.
+  // An escalator sheet names its Delivery Memo and then breaks the job into "A1 (E1)" and
+  // "A2 (E2)", each with its own figures and cases. The DM row has already pushed a lot by
+  // then, which stays empty and reads as a lot that arrived with nothing. Where a block
+  // holds other lots that do carry figures or cases, an empty one is the heading they sit
+  // under, and is dropped.
+  for (const b of blocks) {
+    const carries = (l) => l.pkgs || l.kg || l.cbm || (l.caseCodes || []).length || (l.caseNumbers || []).length;
+    if (b.lots.some(carries)) b.lots = b.lots.filter(carries);
+  }
   const allLots = blocks.flatMap((b) => b.lots);
   const refUse = new Map();
   for (const l of allLots) {
@@ -6859,7 +6881,7 @@ function parseJobSheetBlocks(rows) {
     }
     delete l.markOnly;
   }
-  return { blocks, orphanFigureRows };
+  return { blocks, orphanFigureRows, ownDmRef };
 }
 function guessFieldsFromWorkbook(wb) {
   const sheetIndex = 0;
@@ -6914,7 +6936,7 @@ function guessFieldsFromWorkbook(wb) {
   }
 
   // The per-arrival breakdown of the sheet - see parseJobSheetBlocks.
-  const { blocks, orphanFigureRows } = parseJobSheetBlocks(rows);
+  const { blocks, orphanFigureRows, ownDmRef } = parseJobSheetBlocks(rows);
   out.refBlocks = blocks.map((b) => ({
     refJobNumber: b.refJobNumber,
     refDate: parseSheetDayFirstDate(b.refDateRaw),
@@ -7005,6 +7027,11 @@ function guessFieldsFromWorkbook(wb) {
     .flatMap((b) => (b.lots.length ? b.lots.map((l) => l.shkNumber || b.shkNumber) : [b.shkNumber]))
     .filter(Boolean))];
   out.shkNumber = shkNumbers.length === 1 ? shkNumbers[0] : "";
+  // The Delivery Memo a job went out under - "Refer to 13-DM-26-0228" at the foot of the
+  // sheet - is the client's own reference for that delivery, so it fills the field where
+  // the sheet offered nothing else for it. Set after the SHK references are gathered, or
+  // it would be written and then overwritten.
+  if (!out.shkNumber && ownDmRef) out.shkNumber = ownDmRef;
 
   const liftMatch = flatText.match(/lift\s*no\.?\s*(?:phase\s*\d+\s*)?(#[0-9,\s]+)/i)
     || flatText.match(/unit\s*(?:no\.?|code)\s*[:\-]?\s*([A-Za-z0-9\-\.\/#, ]{2,30})/i)
