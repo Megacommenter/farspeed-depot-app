@@ -2079,6 +2079,7 @@ const TEXT = {
     legacyReplaceCasesBtn: "Renumber this shipment to match the sheet",
     legacyScannedFromPdf: "Read by scanning the page \u2014 check the fields and case numbers against the paper before processing.",
     legacyScanFailed: (why) => `Could not read this PDF (${why}). Fill the fields in by hand, or upload the Excel original if there is one.`,
+    legacyCasesArePicture: "This sheet's case list is a picture pasted into it, not typed cells, so nothing can be read out of it. Type the markings into the case box below, or into the Case Numbers column of the import spreadsheet.",
     legacyCaseCountMismatch: (lot, stated, listed) => `${lot}: the sheet says ${stated} PKGS but lists ${listed} case number${listed === 1 ? "" : "s"} \u2014 check the C/S No. list before processing.`,
     legacyIncomingCasesMissing: (list) => `case ${list} is not on this shipment`,
     legacyCasesFoundInMore: (n) => `\u2026 and ${n} more shipment${n === 1 ? "" : "s"} on this lot.`,
@@ -2816,6 +2817,7 @@ const TEXT = {
     legacyReplaceCasesBtn: "將此批到貨件號改為工單所示",
     legacyScannedFromPdf: "此為掃描讀取結果 \u2014 處理前請與紙本核對各欄位及件號。",
     legacyScanFailed: (why) => `無法讀取此PDF（${why}）。請手動輸入，或改為上載Excel原檔。`,
+    legacyCasesArePicture: "此單之件號為貼上之圖片而非文字，無法讀取。請於下方件號欄輸入，或填入匯入表之 Case Numbers 欄。",
     legacyCaseCountMismatch: (lot, stated, listed) => `${lot}：工單註明 ${stated} 件，但只列出 ${listed} 個件號 \u2014 處理前請核對 C/S No. 清單。`,
     legacyIncomingCasesMissing: (list) => `第 ${list} 件不在此批到貨內`,
     legacyCasesFoundInMore: (n) => `\u2026另有 ${n} 批到貨屬同一批次。`,
@@ -6000,7 +6002,12 @@ function rowsFromJobSheetSpreadsheet(grid, file, resolveClient) {
       const codes = cell(r, "case numbers").split(",").map((c) => c.trim()).filter(Boolean);
       // Numbers and markings are held apart exactly as a read job sheet holds them, so the
       // same matching runs: a lift's plain "4, 5, 6" is a case mark, "09B1109" is a code.
-      const allNumeric = codes.length > 0 && codes.every((c) => /^\d+$/.test(c));
+      // A padded list is a marking too - an escalator's "02, 061, 081" is not two, sixty-one
+      // and eighty-one - and turning it back into numbers on the way in would undo on the
+      // return leg exactly what the sheet reader was careful to keep.
+      const allNumeric = codes.length > 0
+        && codes.every((c) => /^\d+$/.test(c))
+        && !codes.some((c) => /^0\d/.test(c));
       const lot = {
         lotRef: cell(r, "lot / dm no.") || cell(r, "lift no."),
         altRef: "", unitCode: cell(r, "lift no."),
@@ -6067,6 +6074,39 @@ function rowsFromJobSheetSpreadsheet(grid, file, resolveClient) {
     });
   }
   return out;
+}
+// Some job sheets carry their case list as a picture pasted into the sheet rather than as
+// typed cells - the 2604097 CFS has all fifty-eight of its markings in a screenshot sitting
+// under the C/S No. row. There is nothing in the cells to read, so the sheet looks exactly
+// like one that names no cases at all, and saying "no case numbers on the sheet" sends
+// someone hunting for a list that is right there in front of them.
+//
+// Every one of these sheets carries the letterhead as an image anchored at the top, so only
+// pictures placed well down the page count. Reading the anchor needs the workbook's raw
+// parts, which are kept only when the file is opened with bookFiles.
+const SHEET_IMAGE_HEADER_ROWS = 20;
+function sheetHasPastedContentImage(wb) {
+  const files = (wb && wb.files) || {};
+  for (const name of Object.keys(files)) {
+    if (!/^xl\/drawings\/drawing\d*\.xml$/i.test(name)) continue;
+    let xml = "";
+    try {
+      const f = files[name];
+      xml = typeof f === "string" ? f : (f && (f.asText ? f.asText() : (f.content ? String.fromCharCode.apply(null, f.content) : "")));
+    } catch (err) { continue; }
+    if (!xml) continue;
+    // Each anchor is taken whole, because a drawing also holds shapes and empty text boxes
+    // that carry no picture at all. These sheets have several parked far down the page, and
+    // counting those flagged every file as having a pasted case list. Only an anchor
+    // containing a picture counts, and only one placed below the header.
+    const anchors = xml.match(/<xdr:(oneCellAnchor|twoCellAnchor|absoluteAnchor)[\s\S]*?<\/xdr:\1>/g) || [];
+    for (const anchor of anchors) {
+      if (!/<xdr:pic[\s>]/.test(anchor) && !/r:embed=/.test(anchor)) continue;
+      const from = anchor.match(/<xdr:from>[\s\S]*?<xdr:row>(\d+)<\/xdr:row>/);
+      if (from && Number(from[1]) + 1 > SHEET_IMAGE_HEADER_ROWS) return true;
+    }
+  }
+  return false;
 }
 function guessJobNumberFromName(name) {
   const m = (name || "").match(/\b(\d{6,8})\b/);
@@ -6303,7 +6343,19 @@ function mergeLotMark(lot, mark) {
 // one block per "Ref Job no." line, each holding its own lots, case numbers and totals.
 // One token of a written case list: "8B-1", "01C3101-4-1", "(10-1/10B-1)". Brackets and
 // slashes are part of a marking, not punctuation around it.
-const CASE_CODE_TOKEN = "[0-9A-Za-z(][0-9A-Za-z\\-\\/\\.()]*";
+//
+// A marking is also written with a number sign in front of it - "#01C01", "#07D5107" - and
+// Excel leaves a stray apostrophe behind wherever someone typed one to force a cell to
+// text: "07C21,'08C22,08C23". Neither is part of the marking, but both have to be allowed
+// here or the line carrying them stops looking like a case list at all. The 2608058 CFS
+// lost ninety-eight of its hundred and twenty cases to a single apostrophe halfway down.
+const CASE_CODE_LEAD = "[#'\\u2018\\u2019]?";
+const CASE_CODE_TOKEN = `${CASE_CODE_LEAD}[0-9A-Za-z(][0-9A-Za-z\\-\\/\\.()]*`;
+// Taken off again before the marking is stored, so what is kept is what is painted on the
+// case and what the packing list holds.
+function cleanCaseCode(c) {
+  return String(c == null ? "" : c).trim().replace(/^[#'\u2018\u2019]+/, "").trim();
+}
 // A hand-typed list separates its last pair with an ampersand rather than a comma - "01B81,
 // 01D41, 01Z11, 91B11, 02B71, 02D41 & 92B11" - and a Chinese keyboard reaches for the
 // ideographic comma. Both are commas as far as the list is concerned.
@@ -6314,8 +6366,36 @@ const CASE_CODE_SPLIT_RE = /[,&\u3001]/;
 // sheet puts round a combined package are taken off: a job sheet writes "(10-1/10B-1)" for
 // the case the packing list holds as "10-1/10B-1".
 function sameCaseCode(a, b) {
-  const norm = (c) => String(c || "").toUpperCase().replace(/[\s()]/g, "");
+  const norm = (c) => String(c || "").toUpperCase().replace(/[\s()#'\u2018\u2019]/g, "");
   return norm(a) === norm(b);
+}
+// A case list typed as a grid rather than a line: each cell one marking, read left to right
+// then down. Every cell has to look like a marking on its own, or an ordinary row of a job
+// sheet would be swallowed whole.
+const SINGLE_CASE_CODE_RE = new RegExp(`^${CASE_CODE_TOKEN}$`);
+function gridCaseCells(cells) {
+  const vals = (cells || []).filter(Boolean);
+  if (vals.length < 2) return null;
+  for (const v of vals) {
+    if (!SINGLE_CASE_CODE_RE.test(v)) return null;
+    if (!/[A-Za-z]/.test(v) || !/\d/.test(v)) return null;
+  }
+  return vals.map(cleanCaseCode).filter(Boolean);
+}
+// A case list written out in full keeps the form it was written in. Turning "02, 03, 061,
+// 081" into the numbers 2, 3, 61, 81 throws away the padding that is painted on the case and
+// printed on the packing list, and a marking that no longer matches what the depot holds is
+// where these mistakes come from. Ranges still expand to numbers - "1-16/16" has to - but a
+// list naming each case, with a leading zero anywhere in it, is kept verbatim.
+function explicitZeroPaddedCodes(text) {
+  const tokens = String(text || "").replace(/^#/, "").split(/[,\s]+/).map((t) => t.trim()).filter(Boolean);
+  if (!tokens.length) return null;
+  if (!tokens.every((t) => /^\d+$/.test(t))) return null;
+  // A lone number is a count far more often than it is a case, so one on its own only
+  // counts when it is padded - "01", "07" on their own lines under an escalator's C/S row -
+  // or when the lot it belongs to is already collecting written markings.
+  if (!tokens.some((t) => /^0\d/.test(t))) return null;
+  return tokens;
 }
 function parseJobSheetBlocks(rows) {
   const blocks = [];
@@ -6484,21 +6564,64 @@ function parseJobSheetBlocks(rows) {
     awaitingLotName = false;
     if (!cur) continue; // ordinary header rows above the first lot or referral
 
-    // A marking on a line of its own belongs to the lot named directly above it.
+    // A marking on a line of its own belongs to the lot named directly above it. This is
+    // the numeric form - "#1-16/16", "#1-8,14,16-21" - and it is claimed only when it
+    // actually parses as one. These sheets also number their markings with a hash,
+    // "#01C01, #04C10" and "#07D5107" on a line by itself, and claiming those here as well
+    // swallowed them: nothing numeric could be made of them, so the line was consumed and
+    // thrown away, and thirty-six cases read as none.
     if (/^#/.test(line)) {
-      if (cur.lots.length) mergeLotMark(cur.lots[cur.lots.length - 1], parseCaseMark(line));
-      awaitingMark = false;
-      continue;
+      // "#1-16/16" and "#1-8,14" are markings. "#03" alone, sitting above its own C/S NO.
+      // row, is a lift heading - the 2604119 Devan writes "#03" and "#04" that way - and
+      // reading it as case number 3 gave that lot two cases against the twenty it declares
+      // and left the real lists below it unread. A single number with no range, no list and
+      // no C/S row waiting on it is a heading.
+      const looksLikeList = /[,\-\/]/.test(line);
+      const mark = looksLikeList ? parseCaseMark(line) : null;
+      if (mark && (mark.numbers || []).length) {
+        if (cur.lots.length) mergeLotMark(cur.lots[cur.lots.length - 1], mark);
+        awaitingMark = false;
+        continue;
+      }
     }
     // Some sheets write that list without the "#", on the line under a C/S NO. row that
     // stated no cases itself - "1-8,14,16-21,26,28-32" beneath L34-S1's row. A bare list of
     // numbers is only read this way in that exact position, so an ordinary figure elsewhere
     // on the page is never mistaken for a case marking.
-    if (awaitingMark && /^[\d][\d\s,\-]*$/.test(line)) {
-      if (cur.lots.length) mergeLotMark(cur.lots[cur.lots.length - 1], parseCaseMark(line));
-      awaitingMark = false;
-      continue;
+    //
+    // An escalator sheet puts the cases in the first column and what is in them in another,
+    // a row at a time: "02, 03, 04, 05, 06, 061, 08, 081 | ESC. PARTS", then "01 | UPPER
+    // TRUSS ASS'Y", then "08 (與A2疊起) | CENTRE TRUSS ASS'Y". Joined for matching, every one
+    // of those rows carries its description along and stops looking like a case list, so
+    // the 2602111 Devan read none of its eighteen. The first cell alone is what is offered
+    // here, with any note in brackets after the marking taken off, and the list stays open
+    // for the rows below it - a case named twice, once in the run and again on its own line
+    // with a note, is still one case.
+    const firstCell = cells.find(Boolean) || "";
+    const markCell = firstCell.replace(/[\(\uff08][^)\uff09]*[\)\uff09]\s*$/, "").trim();
+    // The first cell only stands in for the whole row when the row is not itself a grid of
+    // markings. On a grid row every cell is a case, and reading just the first turned the
+    // 2601009 CFS's forty-four into eleven - one per row instead of four.
+    const isGridRow = !!gridCaseCells(cells);
+    const listCandidates = !isGridRow && markCell && markCell !== line ? [line, markCell] : [line];
+    for (const candidate of listCandidates) {
+      if (!awaitingMark || !/^[\d][\d\s,\-]*$/.test(candidate)) continue;
+      const lot = cur.lots[cur.lots.length - 1];
+      const padded = explicitZeroPaddedCodes(candidate);
+      if (lot && padded) {
+        const seen = new Set((lot.caseCodes || []).map((c) => String(c).toUpperCase()));
+        const fresh = padded.filter((c) => !seen.has(c.toUpperCase()));
+        lot.caseCodes = [...(lot.caseCodes || []), ...fresh];
+        lot.caseText = lot.caseCodes.join(", ");
+        awaitingMark = true;
+        break;
+      }
+      if (lot) mergeLotMark(lot, parseCaseMark(candidate));
+      // Stay open: these lists run a row at a time rather than all on one line.
+      awaitingMark = true;
+      break;
     }
+    if (awaitingMark && listCandidates.some((c) => /^[\d][\d\s,\-]*$/.test(c))) continue;
     // Mitsubishi writes its cases as full markings rather than numbers - "01A2101,
     // 02A2102, 01C3101-4-1" - wrapped across as many lines as it takes, each continuing
     // line following on from the trailing comma of the one above. They are codes, not
@@ -6508,8 +6631,9 @@ function parseJobSheetBlocks(rows) {
     // a slash - "(10-1/10B-1)", "(9A-1/9B-1)". Neither character was allowed here, so a
     // line holding one failed to be a case list at all and the whole block came through
     // with no cases: the 2607208 delivery lists eleven that way and read as none.
-    if (awaitingMark && CASE_CODE_LIST_RE.test(line) && /[A-Za-z]/.test(line) && /\d/.test(line)) {
-      const codes = line.split(CASE_CODE_SPLIT_RE).map((c) => c.trim()).filter(Boolean);
+    const codeLine = listCandidates.find((c) => CASE_CODE_LIST_RE.test(c) && /[A-Za-z]/.test(c) && /\d/.test(c));
+    if (awaitingMark && codeLine) {
+      const codes = codeLine.split(CASE_CODE_SPLIT_RE).map(cleanCaseCode).filter(Boolean);
       const lot = cur.lots[cur.lots.length - 1];
       if (lot) {
         lot.caseCodes = [...(lot.caseCodes || []), ...codes];
@@ -6521,6 +6645,27 @@ function parseJobSheetBlocks(rows) {
       // first lift's ten. A blank row or any other kind of line ends it instead.
       awaitingMark = true;
       continue;
+    }
+    // The same list is sometimes typed into a grid instead of a line: the 2601009 CFS puts
+    // its forty-four markings one to a cell across four columns and eleven rows, with no
+    // commas anywhere. Joined up for matching that reads "23E2123 23D4123 24E2124 24D4124",
+    // which is not a comma-separated list, so the block came through with no cases at all
+    // against the forty-four it declares.
+    //
+    // A grid row counts only when every cell on it is a marking in its own right - letters
+    // and digits both, nothing that is a label or a bare number - and there are at least
+    // two of them. A single cell is indistinguishable from a lot name or a stray heading.
+    if (awaitingMark) {
+      const gridCodes = gridCaseCells(cells);
+      if (gridCodes) {
+        const lot = cur && cur.lots[cur.lots.length - 1];
+        if (lot) {
+          lot.caseCodes = [...(lot.caseCodes || []), ...gridCodes];
+          lot.caseText = lot.caseCodes.join(", ");
+        }
+        awaitingMark = true;
+        continue;
+      }
     }
     awaitingMark = false;
 
@@ -6539,6 +6684,9 @@ function parseJobSheetBlocks(rows) {
       // the PKGS column so that count can never be read as a case number of its own.
       const pkgsIdx = cells.findIndex((c) => /PKGS?/i.test(c));
       const scanEnd = pkgsIdx > 0 ? pkgsIdx : cells.length;
+      // Whether this row carried its own marking, which decides below whether the rows
+      // under it still need reading.
+      let markedHere = false;
       for (let ci = 1; ci < scanEnd; ci++) {
         const cell = cells[ci];
         if (!cell) continue;
@@ -6549,7 +6697,18 @@ function parseJobSheetBlocks(rows) {
         const withLotSize = /^#?\s*\d[\d\s,\-]*\/\s*\d+[\d\s,\-\/]*$/.test(cell);
         const plainList = /^#?\s*\d[\d\s,\-]*$/.test(cell) && /[,\-]/.test(cell);
         if (!withLotSize && !plainList) continue;
-        if (cur.lots.length) mergeLotMark(cur.lots[cur.lots.length - 1], parseCaseMark(cell));
+        // Same rule as a list written on the rows below: an explicit padded list keeps the
+        // form it was written in rather than being flattened to numbers.
+        const lotHere = cur.lots[cur.lots.length - 1];
+        const paddedHere = withLotSize ? null : explicitZeroPaddedCodes(cell);
+        if (lotHere && paddedHere) {
+          const seen = new Set((lotHere.caseCodes || []).map((c) => String(c).toUpperCase()));
+          lotHere.caseCodes = [...(lotHere.caseCodes || []), ...paddedHere.filter((c) => !seen.has(c.toUpperCase()))];
+          lotHere.caseText = lotHere.caseCodes.join(", ");
+        } else if (lotHere) {
+          mergeLotMark(lotHere, parseCaseMark(cell));
+        }
+        markedHere = true;
         break;
       }
       const pk = line.match(/(\d+)\s*PKGS?/i);
@@ -6580,7 +6739,13 @@ function parseJobSheetBlocks(rows) {
       const hadFigures = closed(cur);
       if (!hadFigures && closed(cur) && cur.lots.length > 0) cur.figuresAfterLots = true;
       const lastLot = cur.lots[cur.lots.length - 1];
-      awaitingMark = !!lastLot && !(lastLot.caseNumbers || []).length && !(lastLot.caseCodes || []).length;
+      // Armed whenever this C/S NO. row named no cases of its own. It used to check whether
+      // the lot already held any, which stopped a second C/S NO. row for the same lot from
+      // being read at all: the 2604119 Devan states "#03 | C/S NO. 10 PKGS" with its ten
+      // markings, then "#04 | C/S NO. 10 PKGS" with ten more, and only the first ten came
+      // through against the twenty the sheet totals. Anything that is not a case list
+      // closes it again on the very next row, so re-arming costs nothing.
+      awaitingMark = !!lastLot && !markedHere;
       continue;
     }
   }
@@ -6682,6 +6847,9 @@ function guessFieldsFromWorkbook(wb) {
   // disagreement means the list was mis-read or the sheet is short, and either way it is
   // worth saying so rather than quietly working from the shorter number.
   out.caseCountMismatches = [];
+  // Flagged so a lot with no cases can say whether the sheet is silent or whether its list
+  // was pasted in as a picture, which nothing can read out of the cells.
+  out.hasPastedContentImage = sheetHasPastedContentImage(wb);
   // A reference that more than one lot answers to cannot say which of them a case list
   // belongs to. Merging the two lists under it, as this used to, hands every lot on the
   // sheet the whole sheet's cases - the contract number 1324003000A sits on both halves of
@@ -8602,6 +8770,11 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
           ))}
         </div>
       )}
+      {row.hasPastedContentImage && (
+        <div className="px-2 py-1.5 rounded text-xs" style={{ background: colors.amberSoft, color: colors.amberText }}>
+          {t.legacyCasesArePicture}
+        </div>
+      )}
       {row.docType === "Delivery" && matchedItems.length === 0 && (
         <div className="px-2 py-1.5 rounded text-xs" style={{ background: colors.redSoft, color: colors.red }}>
           {row.referJobNumber ? t.legacyNoArrivalFoundHint(row.referJobNumber) : t.legacyNoReferralHint}
@@ -9650,7 +9823,9 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
       if (isExcel) {
         try {
           const buf = await file.arrayBuffer();
-          const wb = XLSX.read(buf, { type: "array", cellDates: true });
+          // bookFiles keeps the workbook's raw parts, which is the only way to see that a
+          // sheet's case list is a pasted picture rather than empty cells.
+          const wb = XLSX.read(buf, { type: "array", cellDates: true, bookFiles: true });
           // A spreadsheet from the job sheet importer carries many job sheets at once, so
           // it is unpacked back into one staged row per sheet before anything else is
           // tried. From there it is treated exactly like a stack of uploaded job sheets:
@@ -9716,6 +9891,7 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
             caseMarksByLot: guessed.caseMarksByLot,
             caseCodesByLot: guessed.caseCodesByLot,
             caseCountMismatches: guessed.caseCountMismatches,
+            hasPastedContentImage: guessed.hasPastedContentImage,
             autoDetected: true,
             scannedFromPdf: true,
           });
