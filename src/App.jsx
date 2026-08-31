@@ -6356,6 +6356,21 @@ const CASE_CODE_TOKEN = `${CASE_CODE_LEAD}[0-9A-Za-z(][0-9A-Za-z\\-\\/\\.()]*`;
 function cleanCaseCode(c) {
   return String(c == null ? "" : c).trim().replace(/^[#'\u2018\u2019]+/, "").trim();
 }
+// A full stop typed where a comma was meant: "09B11.09B81,09D41" on the 2608191 delivery,
+// which read as one case called 09B11.09B81 and left that lot a case short of the twenty-
+// seven it declares - and the case it did produce matches nothing at the depot, because no
+// such marking exists.
+//
+// The stop is only taken as a separator when both sides look like markings in their own
+// right: at least three characters with a letter among them. A decimal such as "1.5" splits
+// into "1" and "5", neither of which carries a letter, so it is left alone - and no marking
+// on any sheet here contains a full stop, so nothing legitimate is being broken up.
+function splitStrayFullStops(token) {
+  const parts = String(token || "").split(".");
+  if (parts.length < 2) return [token];
+  const looksLikeMarking = (t) => t.length >= 3 && /[A-Za-z]/.test(t) && /\d/.test(t);
+  return parts.every(looksLikeMarking) ? parts : [token];
+}
 // A hand-typed list separates its last pair with an ampersand rather than a comma - "01B81,
 // 01D41, 01Z11, 91B11, 02B71, 02D41 & 92B11" - and a Chinese keyboard reaches for the
 // ideographic comma. Both are commas as far as the list is concerned.
@@ -6380,7 +6395,7 @@ function gridCaseCells(cells) {
     if (!SINGLE_CASE_CODE_RE.test(v)) return null;
     if (!/[A-Za-z]/.test(v) || !/\d/.test(v)) return null;
   }
-  return vals.map(cleanCaseCode).filter(Boolean);
+  return vals.flatMap((v) => splitStrayFullStops(cleanCaseCode(v))).map(cleanCaseCode).filter(Boolean);
 }
 // A case list written out in full keeps the form it was written in. Turning "02, 03, 061,
 // 081" into the numbers 2, 3, 61, 81 throws away the padding that is painted on the case and
@@ -6507,7 +6522,20 @@ function parseJobSheetBlocks(rows) {
           caseNumbers: [], caseCodes: [], caseText: "", lotCases: null,
           pkgs: "", kg: "", cbm: "", shkNumber: ctx.shkNumber,
         });
-        awaitingMark = false;
+        // A delivery sheet states the lot's figures on the DM row itself - "DM No. |
+        // 13-DM-26-0073 | 10 | PKGS | ELEVATOR MATERIALS | 1994 | KGS | 7.86 | CBM" -
+        // rather than on a C/S NO. row of its own. Pushing the lot and moving on left every
+        // one of those lots with no packages, no weight and no volume at all.
+        const dmLot = cur.lots[cur.lots.length - 1];
+        const dmPk = line.match(/(\d+)\s*PKGS?/i);
+        const dmKg = line.match(/([\d,]+(?:\.\d+)?)\s*KGS?\b/i);
+        const dmCb = line.match(/([\d,]+(?:\.\d+)?)\s*CBM\b/i);
+        if (dmPk) dmLot.pkgs = dmPk[1];
+        if (dmKg) dmLot.kg = dmKg[1].replace(/,/g, "");
+        if (dmCb) dmLot.cbm = dmCb[1].replace(/,/g, "");
+        if (dmLot.kg || dmLot.cbm) cur.figuresAfterLots = true;
+        // The list under it still has to be read, so stay open unless this row named cases.
+        awaitingMark = !!(dmPk || dmKg || dmCb);
         continue;
       }
     }
@@ -6621,7 +6649,12 @@ function parseJobSheetBlocks(rows) {
       awaitingMark = true;
       break;
     }
-    if (awaitingMark && listCandidates.some((c) => /^[\d][\d\s,\-]*$/.test(c))) continue;
+    // A row can carry the list in its first column and that lot's figures in the rest -
+    // "02, 03, 04, 05, 06, 061 | 8 | PKGS | 6057 | KGS | 38.939 | CBM". Taking the list and
+    // moving on threw the figures away, which is why that lot showed no packages, weight or
+    // volume at all. The row is left to carry on to the figures below.
+    const rowAlsoStatesFigures = /\d+\s*PKGS?/i.test(line) && /(KGS?|CBM)\b/i.test(line);
+    if (awaitingMark && !rowAlsoStatesFigures && listCandidates.some((c) => /^[\d][\d\s,\-]*$/.test(c))) continue;
     // Mitsubishi writes its cases as full markings rather than numbers - "01A2101,
     // 02A2102, 01C3101-4-1" - wrapped across as many lines as it takes, each continuing
     // line following on from the trailing comma of the one above. They are codes, not
@@ -6632,8 +6665,10 @@ function parseJobSheetBlocks(rows) {
     // line holding one failed to be a case list at all and the whole block came through
     // with no cases: the 2607208 delivery lists eleven that way and read as none.
     const codeLine = listCandidates.find((c) => CASE_CODE_LIST_RE.test(c) && /[A-Za-z]/.test(c) && /\d/.test(c));
-    if (awaitingMark && codeLine) {
-      const codes = codeLine.split(CASE_CODE_SPLIT_RE).map(cleanCaseCode).filter(Boolean);
+    if (awaitingMark && codeLine && !rowAlsoStatesFigures) {
+      const codes = codeLine.split(CASE_CODE_SPLIT_RE)
+        .flatMap((c) => splitStrayFullStops(cleanCaseCode(c)))
+        .map(cleanCaseCode).filter(Boolean);
       const lot = cur.lots[cur.lots.length - 1];
       if (lot) {
         lot.caseCodes = [...(lot.caseCodes || []), ...codes];
@@ -6696,7 +6731,33 @@ function parseJobSheetBlocks(rows) {
         // at the cost of the 2607208 sheet's "4-9" being read as no cases at all.
         const withLotSize = /^#?\s*\d[\d\s,\-]*\/\s*\d+[\d\s,\-\/]*$/.test(cell);
         const plainList = /^#?\s*\d[\d\s,\-]*$/.test(cell) && /[,\-]/.test(cell);
-        if (!withLotSize && !plainList) continue;
+        // The row can equally carry the markings themselves - "C/S No. |
+        // 01A11,01B11,02B11,..." - which is how these delivery sheets write them, with the
+        // rest of the list continuing on the rows beneath. Only the continuation rows were
+        // being read, so a lot whose list fitted on one line came through with nothing and a
+        // longer one came through missing its first line.
+        // At least two markings, so a lone reference in this cell is not mistaken for a
+        // case: the 2604042 delivery writes the DM number it is drawing against here -
+        // "C/S No. | 13-DM-25-0625 | 10 | PKGS" - and reading that as a case gave the lot
+        // eleven against the ten it declares.
+        const codeList = !withLotSize && !plainList
+          && CASE_CODE_SPLIT_RE.test(cell)
+          && !/\d{1,3}\s*-\s*DM\s*-\s*\d{2}/i.test(cell)
+          && CASE_CODE_LIST_RE.test(cell) && /[A-Za-z]/.test(cell) && /\d/.test(cell);
+        if (!withLotSize && !plainList && !codeList) continue;
+        if (codeList) {
+          const lotForCodes = cur.lots[cur.lots.length - 1];
+          if (lotForCodes) {
+            const found = cell.split(CASE_CODE_SPLIT_RE)
+              .flatMap((c) => splitStrayFullStops(cleanCaseCode(c)))
+              .map(cleanCaseCode).filter(Boolean);
+            const seenCodes = new Set((lotForCodes.caseCodes || []).map((c) => String(c).toUpperCase()));
+            lotForCodes.caseCodes = [...(lotForCodes.caseCodes || []), ...found.filter((c) => !seenCodes.has(c.toUpperCase()))];
+            lotForCodes.caseText = lotForCodes.caseCodes.join(", ");
+          }
+          // Deliberately not marked as finished: the list carries on below.
+          break;
+        }
         // Same rule as a list written on the rows below: an explicit padded list keeps the
         // form it was written in rather than being flattened to numbers.
         const lotHere = cur.lots[cur.lots.length - 1];
