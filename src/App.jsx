@@ -6472,8 +6472,36 @@ function parseJobSheetBlocks(rows) {
       continue;
     }
 
-    const refM = line.match(/ref(?:er)?\.?\s*(?:to\s+)?job\s*no\.?\s*([A-Za-z0-9\-]+)\s*(?:on\s*([\d\/\.\- ]+\d))?/i);
-    if (refM) { ctx = { shkNumber: "", liftNo: "" }; startBlock(refM[1].trim(), (refM[2] || "").trim()); continue; }
+    const refM = line.match(/ref(?:er)?\.?\s*(?:to\s+)?job\s*no\.?\s*([A-Za-z0-9\-]+)\s*(?:on\s*([\d\/\.\- ]+\d))?/i)
+      // "Refer to 13-DM-26-0228", with the words "job no." left out. Only a reference that
+      // is unmistakably a lot is read this way, or every sentence beginning "refer to"
+      // would open a block of its own.
+      || line.match(/refer(?:red)?\s*to\s*(\d{1,3}\s*-\s*DM\s*-\s*\d{2}\s*-\s*\d{0,4})\s*(?:on\s*([\d\/\.\- ]+\d))?/i);
+    if (refM) {
+      ctx = { shkNumber: "", liftNo: "" };
+      const ref = refM[1].trim();
+      const refDate = (refM[2] || "").trim();
+      // A delivery refers back to the arrival job it is drawing from, and names the lot it
+      // is taking out of it. The two are different things, and the sheets say "Refer to job
+      // no." for both: "Refer to job no. 2602081" is the arrival, while "Refer to job no.
+      // 13-DM-25-0616" is a lot - Mitsubishi's Delivery Memo number, where Schindler would
+      // write an SHK reference and another maker something else again. Filed as a job
+      // number it was hunted for among arrival job numbers, which it will never be, and the
+      // block came through with no lot at all. Anything that is not a plain job number is
+      // taken as the lot's reference instead.
+      if (/^\d{6,8}$/.test(ref)) {
+        startBlock(ref, refDate);
+      } else {
+        startBlock("", refDate);
+        cur.lots.push({
+          lotRef: ref.replace(/\s+/g, ""), altRef: "", unitCode: "",
+          caseNumbers: [], caseCodes: [], caseText: "", lotCases: null,
+          pkgs: "", kg: "", cbm: "", shkNumber: "",
+        });
+        awaitingMark = true;
+      }
+      continue;
+    }
 
     // A 共:/Total: line closes the block it belongs to; the grand total at the foot of the
     // page belongs to no single arrival and must not overwrite the last block's figures.
