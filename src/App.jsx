@@ -2074,6 +2074,7 @@ const TEXT = {
     legacyNoReferralHint: "No \"Ref Job no.\" line detected \u2014 enter the arrival's job number manually, or this file will only be archived.",
     legacySheetCasesNote: (mark, n) => `Sheet marks ${mark} \u2014 ${n} case${n === 1 ? "" : "s"} pre-selected`,
     legacySheetCasesMissing: (list) => `case ${list} not at the depot`,
+    legacySheetCasesElsewhere: (list, more) => `but checked in elsewhere: ${list}${more ? `, and ${more} more` : ""} \u2014 deliver from that entry instead, or move the cases across in Inventory`,
     legacyReplaceCasesHint: (n) => `Same number of cases, but ${n} numbered differently here than on this sheet. Either source can be wrong \u2014 a scan can drop a digit, a typed sheet can carry a typo \u2014 so check the paper before changing anything:`,
     legacyReplaceCasesBtn: "Renumber this shipment to match the sheet",
     legacyScannedFromPdf: "Read by scanning the page \u2014 check the fields and case numbers against the paper before processing.",
@@ -2810,6 +2811,7 @@ const TEXT = {
     legacyNoReferralHint: "未有偵測到「Ref Job no.」字句 — 請手動輸入到倉工單號，否則此檔案只會被存檔。",
     legacySheetCasesNote: (mark, n) => `工單註明 ${mark} \u2014 已預先選取 ${n} 件`,
     legacySheetCasesMissing: (list) => `第 ${list} 件不在倉內`,
+    legacySheetCasesElsewhere: (list, more) => `但已入於其他批次：${list}${more ? `，另有 ${more} 件` : ""} \u2014 請改由該批次出貨，或於存倉列表調整貨箱歸屬`,
     legacyReplaceCasesHint: (n) => `件數相同，但其中 ${n} 個件號與本工單不符。兩者皆可能有誤 \u2014 掃描可能漏字，工單亦可能手誤 \u2014 請先核對紙本再作更改：`,
     legacyReplaceCasesBtn: "將此批到貨件號改為工單所示",
     legacyScannedFromPdf: "此為掃描讀取結果 \u2014 處理前請與紙本核對各欄位及件號。",
@@ -5933,6 +5935,139 @@ function guessDocTypeFromName(name) {
   for (const [needle, type] of map) if (n.includes(needle)) return type;
   return "Devan";
 }
+// A staged row usually comes from one uploaded file, so its name is the file's. A row that
+// came out of the job sheet importer's spreadsheet is one of many carried in a single
+// upload, and what belongs on its arrival and in the archive is the job sheet it was read
+// from - "Devan_1_2606087.xlsx" - not the spreadsheet that ferried a hundred of them in.
+function legacySourceName(row) {
+  return (row && (row.sourceName || (row.file && row.file.name))) || "";
+}
+// The columns the job sheet importer writes. Recognised by the ones that carry meaning
+// rather than by all of them, so a spreadsheet someone has added a column to still reads.
+const JOBSHEET_SS_REQUIRED = ["file name", "job number", "case numbers", "lot / dm no."];
+function jobSheetSpreadsheetColumns(headerRow) {
+  const map = {};
+  (headerRow || []).forEach((cell, i) => {
+    const key = String(cell == null ? "" : cell).trim().toLowerCase();
+    if (key && map[key] === undefined) map[key] = i;
+  });
+  return JOBSHEET_SS_REQUIRED.every((k) => map[k] !== undefined) ? map : null;
+}
+// Turns that spreadsheet back into the same staged rows an uploaded job sheet produces, so
+// everything downstream - matching to a shipment, pre-selecting cases, reporting what is not
+// at the depot, letting someone correct it by hand - is the machinery that already exists
+// rather than a second version of it.
+//
+// One job sheet becomes one staged row however many lots it had, because that is what it was
+// on the way out: the spreadsheet's rows are lots, and the File Name column says which sheet
+// they came from. Rows are grouped back by that name, and by job number under it, so two
+// sheets that somehow share a file name don't merge.
+function rowsFromJobSheetSpreadsheet(grid, file, resolveClient) {
+  const headerIdx = (grid || []).findIndex((r) => jobSheetSpreadsheetColumns(r));
+  if (headerIdx === -1) return null;
+  const col = jobSheetSpreadsheetColumns(grid[headerIdx]);
+  const cell = (row, name) => {
+    const i = col[name];
+    return i === undefined ? "" : String((row || [])[i] == null ? "" : (row || [])[i]).trim();
+  };
+  const num = (v) => {
+    const n = Number(String(v || "").replace(/[, ]/g, ""));
+    return isFinite(n) && n !== 0 ? n : "";
+  };
+
+  const bySheet = new Map();
+  for (let i = headerIdx + 1; i < grid.length; i++) {
+    const r = grid[i] || [];
+    if (r.every((c) => String(c == null ? "" : c).trim() === "")) continue;
+    const sourceName = cell(r, "file name") || cell(r, "job number") || "row " + (i + 1);
+    const key = `${sourceName}\u0000${cell(r, "job number")}`;
+    if (!bySheet.has(key)) bySheet.set(key, { sourceName, lots: [] });
+    bySheet.get(key).lots.push(r);
+  }
+  if (!bySheet.size) return null;
+
+  const out = [];
+  for (const sheet of bySheet.values()) {
+    const first = sheet.lots[0];
+    const refBlocks = [];
+    const caseCodesByLot = {};
+    const caseMarksByLot = {};
+    const declaredTotalsList = [];
+    const caseCountMismatches = [];
+    let pkgs = 0, kg = 0, cbm = 0;
+
+    for (const r of sheet.lots) {
+      const codes = cell(r, "case numbers").split(",").map((c) => c.trim()).filter(Boolean);
+      // Numbers and markings are held apart exactly as a read job sheet holds them, so the
+      // same matching runs: a lift's plain "4, 5, 6" is a case mark, "09B1109" is a code.
+      const allNumeric = codes.length > 0 && codes.every((c) => /^\d+$/.test(c));
+      const lot = {
+        lotRef: cell(r, "lot / dm no.") || cell(r, "lift no."),
+        altRef: "", unitCode: cell(r, "lift no."),
+        caseNumbers: allNumeric ? codes.map((c) => Number(c)) : [],
+        caseCodes: allNumeric ? [] : codes,
+        caseText: cell(r, "case numbers"), lotCases: null,
+        pkgs: cell(r, "# of pkgs"), kg: cell(r, "kg"), cbm: cell(r, "cbm"),
+        shkNumber: cell(r, "client reference number"),
+      };
+      const declared = Number(lot.pkgs) || 0;
+      if (declared && codes.length && declared !== codes.length) {
+        caseCountMismatches.push({ lot: lot.lotRef || lot.unitCode || "", stated: declared, listed: codes.length });
+      }
+      pkgs += declared;
+      kg += Number(lot.kg) || 0;
+      cbm += Number(lot.cbm) || 0;
+
+      const refJob = cell(r, "refer to job number");
+      let block = refBlocks.find((b) => b.refJobNumber === refJob);
+      if (!block) { block = { refJobNumber: refJob, refDate: "", shkNumber: lot.shkNumber, liftNo: lot.unitCode, lots: [] }; refBlocks.push(block); }
+      block.lots.push(lot);
+      if (lot.pkgs || lot.kg || lot.cbm) {
+        declaredTotalsList.push({
+          pkgs: lot.pkgs, kg: lot.kg, cbm: lot.cbm, refJobNumber: refJob,
+          shkNumber: lot.shkNumber, context: `${lot.lotRef} ${lot.unitCode}`.trim(),
+        });
+      }
+    }
+
+    // Lot keys, with the same rule the job-sheet reader uses: a reference more than one lot
+    // answers to identifies neither, so it is left out rather than having both lots' cases
+    // merged under it.
+    const owners = new Map();
+    const keysOf = (lot) => [lot.lotRef, lot.unitCode].filter(Boolean).map((k) => String(k).toUpperCase());
+    refBlocks.forEach((b) => b.lots.forEach((lot) => {
+      new Set(keysOf(lot)).forEach((k) => owners.set(k, (owners.get(k) || 0) + 1));
+    }));
+    refBlocks.forEach((b) => b.lots.forEach((lot) => {
+      for (const k of keysOf(lot)) {
+        if ((owners.get(k) || 0) > 1) continue;
+        if (lot.caseCodes.length) caseCodesByLot[k] = { codes: lot.caseCodes, text: lot.caseText };
+        if (lot.caseNumbers.length) caseMarksByLot[k] = { numbers: lot.caseNumbers, text: lot.caseText, lotCases: null };
+      }
+    }));
+
+    const docType = LEGACY_DOC_TYPES.includes(cell(first, "type")) ? cell(first, "type") : guessDocTypeFromName(sheet.sourceName);
+    out.push({
+      file, sourceName: sheet.sourceName, fromSpreadsheet: true,
+      docType,
+      client: (resolveClient && resolveClient(cell(first, "client"))) || "",
+      projectEn: cell(first, "project"), projectZh: "",
+      jobNumber: cell(first, "job number"),
+      date: cell(first, "date"),
+      unitCode: cell(first, "lift no."),
+      packageCount: pkgs ? String(pkgs) : "",
+      weightKg: kg ? String(Math.round(kg * 100) / 100) : "",
+      volumeCbm: cbm ? String(Math.round(cbm * 1000) / 1000) : "",
+      ssDoNo: "", shkNumber: cell(first, "client reference number"),
+      jobRef: cell(first, "job ref"),
+      oversizeByLot: {},
+      referJobNumber: cell(first, "refer to job number"), referDate: "",
+      declaredTotalsList, refBlocks, caseMarksByLot, caseCodesByLot, caseCountMismatches,
+      caseMarksByRef: {}, caseAutoApplied: {}, autoDetected: true,
+    });
+  }
+  return out;
+}
 function guessJobNumberFromName(name) {
   const m = (name || "").match(/\b(\d{6,8})\b/);
   return m ? m[1] : "";
@@ -7545,7 +7680,7 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
           code, orderNo: lot.lotRef, description: "ELEVATOR PARTS",
           weightKg: per(lot.kg, i), cbm: per(lot.cbm, i),
         })),
-        notes: t.legacyPackingListFromSheetNote((row.file && row.file.name) || row.jobNumber || ""),
+        notes: t.legacyPackingListFromSheetNote(legacySourceName(row) || row.jobNumber || ""),
       };
     }));
   }
@@ -7712,6 +7847,25 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
     const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
     if (ranked.length > 1 && ranked[0][1] === ranked[1][1]) return null;
     return ranked[0][0];
+  }
+  // A case the sheet asks for that isn't on this entry is usually somewhere - checked in
+  // under the twin lift, or under the lot the job sheet and the packing list name
+  // differently. Saying "not at the depot" when it is at the depot, one row down, is the
+  // difference between a puzzle and a correction someone can make in a few seconds. Only
+  // this client's entries are searched, and markings are compared with brackets off so a
+  // sheet's "(10-1/10B-1)" finds the case the packing list holds as "10-1/10B-1".
+  function locateMissingCases(missing, exceptId) {
+    const out = [];
+    for (const code of missing || []) {
+      for (const other of items || []) {
+        if (other.id === exceptId || other.cancelled) continue;
+        if (row.client && other.client && other.client !== row.client) continue;
+        if (!(other.packages || []).some((p) => sameCaseCode(p.code, code))) continue;
+        out.push({ code, label: `${other.id}${other.unitCode ? ` \u00b7 ${other.unitCode}` : ""}` });
+        break;
+      }
+    }
+    return out;
   }
   function misfiledCasesFor(it) {
     const mine = dominantLotSize(it);
@@ -7893,7 +8047,7 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
   return (
     <div className="rounded p-3 flex flex-col gap-3" style={{ border: `1px solid ${colors.line}`, background: colors.surface }}>
       <div className="flex items-start justify-between gap-2">
-        <div className="text-sm font-semibold" style={{ color: colors.ink, wordBreak: "break-all" }}>{row.file.name}</div>
+        <div className="text-sm font-semibold" style={{ color: colors.ink, wordBreak: "break-all" }}>{legacySourceName(row)}</div>
         <button type="button" className="text-xs font-semibold whitespace-nowrap" style={{ color: colors.red }} onClick={onRemove}>{t.deleteBtn}</button>
       </div>
       {row.autoDetected && (
@@ -8286,6 +8440,16 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
                       {sheetSel.missing.length > 0 && (
                         <span style={{ color: colors.red }}> {"\u00b7"} {t.legacySheetCasesMissing(sheetSel.missing.join(", "))}</span>
                       )}
+                      {(() => {
+                        const found = locateMissingCases(sheetSel.missing, it.id);
+                        if (!found.length) return null;
+                        return (
+                          <span style={{ color: colors.amberText }}> {"\u00b7"} {t.legacySheetCasesElsewhere(
+                            found.slice(0, 6).map((f) => `${f.code} \u2192 ${f.label}`).join(", "),
+                            found.length > 6 ? found.length - 6 : 0
+                          )}</span>
+                        );
+                      })()}
                     </div>
                   )}
                   {(() => {
@@ -9487,6 +9651,17 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
         try {
           const buf = await file.arrayBuffer();
           const wb = XLSX.read(buf, { type: "array", cellDates: true });
+          // A spreadsheet from the job sheet importer carries many job sheets at once, so
+          // it is unpacked back into one staged row per sheet before anything else is
+          // tried. From there it is treated exactly like a stack of uploaded job sheets:
+          // matched to what the depot holds, cases pre-selected, and anything missing or
+          // in the wrong place shown for correcting by hand before it is processed.
+          const grid = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "", raw: false });
+          const fromSpreadsheet = rowsFromJobSheetSpreadsheet(grid, file, resolveClientGuess);
+          if (fromSpreadsheet && fromSpreadsheet.length) {
+            newRows.push(...fromSpreadsheet);
+            continue;
+          }
           const guessed = guessFieldsFromWorkbook(wb);
           const clientMatch = resolveClientGuess(guessed.client);
           Object.assign(base, {
@@ -9581,7 +9756,7 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
         fileUri = await compressFileToDataUri(row.file);
       } catch (e) { /* archive without file if compression fails */ }
       if (fileUri) {
-        try { await storageSet(`legacyDoc:${id}`, JSON.stringify({ uri: fileUri, name: row.file.name, at: todayStr() })); } catch (e) {}
+        try { await storageSet(`legacyDoc:${id}`, JSON.stringify({ uri: fileUri, name: legacySourceName(row), at: todayStr() })); } catch (e) {}
       }
       fileUriById[i] = fileUri;
 
@@ -9605,7 +9780,7 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
       );
       const hasAnyIncomingSelection = matchedIncomings.some((inc) => (selectedByIncoming[inc.id] || []).length > 0);
       const archiveEntry = {
-        id, rowIndex: i, fileName: row.file.name, docType: row.docType, client: row.client,
+        id, rowIndex: i, fileName: legacySourceName(row), docType: row.docType, client: row.client,
         project: [row.projectEn, row.projectZh].filter(Boolean).join(" / "),
         jobNumber: row.jobNumber, jobRef: row.jobRef || "", date: row.date, uploadedAt: todayStr(), hasFile: !!fileUri,
         linkedItemId: null, linkedItemIds: [], __linkedItemIndex: null,
@@ -9639,7 +9814,7 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
                 incomingId: inc.id,
                 codes,
                 declared,
-                declaredSource: row.file ? row.file.name : "",
+                declaredSource: legacySourceName(row),
                 type: row.docType,
                 depot: row.depot || DEPOTS[0],
                 jobNumber: row.jobNumber,
@@ -9669,7 +9844,7 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
           if (!existingByJobNo.project && row.projectEn) patch.project = row.projectEn;
           if (!existingByJobNo.constructionSite && row.projectZh) patch.constructionSite = row.projectZh;
           if (!existingByJobNo.depotArrivalDate && row.date) patch.depotArrivalDate = row.date;
-          patch.notes = [existingByJobNo.notes, t.legacyEnrichedNote(row.file.name)].filter(Boolean).join(" \u00b7 ");
+          patch.notes = [existingByJobNo.notes, t.legacyEnrichedNote(legacySourceName(row))].filter(Boolean).join(" \u00b7 ");
           enrichTargetId = existingByJobNo.id;
           pendingEnrichments.push({ itemId: existingByJobNo.id, patch });
         } else {
@@ -9692,7 +9867,7 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
             arrivingType: row.docType === "CFS" ? "CFS" : "Devan",
             ssDoNo: row.ssDoNo || "",
             shkNumber: row.shkNumber || "",
-            notes: t.legacyImportedNote(row.file.name),
+            notes: t.legacyImportedNote(legacySourceName(row)),
             deliveries: [],
           };
           linkedItemIndex = importRows.length;
@@ -9752,7 +9927,7 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
             itemId,
             delivery: {
               date: row.date || todayStr(), deliveredTo: row.projectEn || row.projectZh, receivedBy: "",
-              jobNumber: row.jobNumber, recordedBy: "", notes: t.legacyImportedNote(row.file.name),
+              jobNumber: row.jobNumber, recordedBy: "", notes: t.legacyImportedNote(legacySourceName(row)),
               shkNumber: row.shkNumber || "",
               codes,
               declared: declared && (declaredNum(declared.kg) != null || declaredNum(declared.cbm) != null)
@@ -9776,7 +9951,7 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
       if (!refNos.length) continue;
       const deliveryRecord = {
         date: row.date || todayStr(), deliveredTo: row.projectEn || row.projectZh, receivedBy: "",
-        jobNumber: row.jobNumber, recordedBy: "", notes: t.legacyImportedNote(row.file.name),
+        jobNumber: row.jobNumber, recordedBy: "", notes: t.legacyImportedNote(legacySourceName(row)),
         shkNumber: row.shkNumber || "",
         packageCount: row.packageCount || 1,
       };
