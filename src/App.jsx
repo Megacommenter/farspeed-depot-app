@@ -1097,6 +1097,33 @@ function itemSignature(item) {
   if (!projectKey) return null;
   return [sigPart(item.client), projectKey, sigPart(item.unitCode), sigPart(item.itemType), sigPart(item.depotArrivalDate), sigPart(item.invoiceNumber)].join("|");
 }
+// Two consignments of one job, arriving the same day under the same reference, look alike in
+// every field the signature covers - and they are not duplicates if they hold different
+// cases. The 2501009 job came in twice, twenty-one cases on one entry and one on the other,
+// and was offered up for deletion; taking that offer would have thrown away real stock.
+//
+// So a signature group is split by what it holds. Entries sharing no case are separate
+// consignments and are left alone. Entries sharing at least one are still shown together:
+// that is the shape of a genuine double import, including one that was edited afterwards.
+// An entry with no cases at all can only be judged on its figures, so those stay grouped.
+function splitGroupByCases(group) {
+  const codesOf = (it) => new Set((it.packages || []).map((p) => String(p.code || "").toUpperCase().replace(/[\s()#'\u2018\u2019]/g, "")).filter(Boolean));
+  const buckets = [];
+  for (const it of group) {
+    const codes = codesOf(it);
+    // Nothing to compare on: judged by its figures alongside anything else in that state.
+    const hit = codes.size === 0
+      ? buckets.find((b) => b.codes.size === 0)
+      : buckets.find((b) => [...codes].some((c) => b.codes.has(c)));
+    if (hit) {
+      hit.items.push(it);
+      codes.forEach((c) => hit.codes.add(c));
+    } else {
+      buckets.push({ items: [it], codes });
+    }
+  }
+  return buckets.map((b) => b.items);
+}
 function findDuplicateGroups(items) {
   const map = {};
   items.forEach((it) => {
@@ -1104,7 +1131,10 @@ function findDuplicateGroups(items) {
     if (!sig) return;
     (map[sig] = map[sig] || []).push(it);
   });
-  return Object.values(map).filter((g) => g.length > 1);
+  return Object.values(map)
+    .filter((g) => g.length > 1)
+    .flatMap(splitGroupByCases)
+    .filter((g) => g.length > 1);
 }
 
 function todayStr() {
