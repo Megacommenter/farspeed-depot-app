@@ -2019,6 +2019,9 @@ const TEXT = {
     checkInsColLeft: "Left",
     checkInsColSource: "Came in from",
     checkInsReverseBtn: "Reverse this check-in",
+    checkInsMergeLabel: "Merge into\u2026",
+    checkInsMergedNote: (from) => `moved from ${from}`,
+    checkInsMergeConfirm: (from, keep, n, dels) => `Merge ${from} into ${keep}?\n\n${dels ? `Its ${dels} deliver${dels === 1 ? "y is" : "ies are"} moved onto ${keep} first, so nothing is lost. ` : ""}${from}'s check-in is then reversed and its ${n} case${n === 1 ? "" : "s"} go back to Incoming.\n\nThis cannot be undone from here.`,
     checkInsReverseHasDeliveries: (id, n) => `Careful \u2014 ${id} has ${n} deliver${n === 1 ? "y" : "ies"} recorded against it.\n\nUndoing its only check-in leaves those deliveries with no stock behind them. If this entry is the duplicate, note which deliveries it holds first, so they can be re-recorded against the entry you are keeping.\n\nCarry on anyway?`,
     checkInsReverseConfirm: (id, n, gone) => `Reverse this check-in?\n\n${n} case${n === 1 ? "" : "s"} go back to Incoming, waiting to be checked in again.${gone ? `\n\n${id} holds nothing else, so the entry is removed with it.` : ""}\n\nThis cannot be undone from here.`,
 
@@ -2784,6 +2787,9 @@ const TEXT = {
     checkInsColLeft: "現存",
     checkInsColSource: "來源",
     checkInsReverseBtn: "還原此到倉記錄",
+    checkInsMergeLabel: "合併至…",
+    checkInsMergedNote: (from) => `由 ${from} 轉入`,
+    checkInsMergeConfirm: (from, keep, n, dels) => `確認將 ${from} 合併至 ${keep}？\n\n${dels ? `其 ${dels} 筆送貨記錄會先轉至 ${keep}，不會遺失。` : ""}隨後還原 ${from} 之到倉記錄，其 ${n} 件貨箱退回「待到倉」。\n\n此操作無法從此頁還原。`,
     checkInsReverseHasDeliveries: (id, n) => `請注意 \u2014 ${id} 已有 ${n} 筆送貨記錄。\n\n還原其唯一到倉記錄後，該筆送貨將無對應存貨。如此筆為重複記錄，請先記下其送貨詳情，以便轉記於保留之記錄。\n\n是否繼續？`,
     checkInsReverseConfirm: (id, n, gone) => `確認還原此到倉記錄？\n\n${n} 件貨箱將退回「待到倉」。${gone ? `\n\n${id} 已無其他記錄，會一併刪除。` : ""}\n\n此操作無法從此頁還原。`,
 
@@ -13229,6 +13235,26 @@ export default function FarspeedInventory() {
   // backlog builds, so the same handler does the work: the batch comes off the entry, its
   // cases go back to the Incoming shipment they came from, and an entry left holding
   // nothing goes with it.
+  // Reversing a duplicate that has been delivered from would leave those deliveries with no
+  // stock behind them. So the delivery records are carried across to the entry being kept
+  // first, and only then is the duplicate undone - one action, in the right order, instead
+  // of a note on a piece of paper and a hope that it gets re-entered.
+  function mergeCheckInInto(item, arrival, keepId) {
+    const keep = (items || []).find((i) => i.id === keepId);
+    const moving = activeDeliveries(item);
+    if (keep && moving.length) {
+      const have = new Set((keep.packages || []).map((p) => String(p.code || "").trim()));
+      const carried = moving.map((d) => ({
+        ...d,
+        // Cases the kept entry does not hold would point at nothing, so only the ones it has
+        // travel; the record's own date, job number and stated figures come across whole.
+        codes: (d.codes || []).filter((c) => have.has(String(c).trim())),
+        notes: [d.notes, t.checkInsMergedNote(item.id)].filter(Boolean).join(" \u00b7 "),
+      }));
+      handleLegacyEnrich([{ itemId: keep.id, patch: { deliveries: [...(keep.deliveries || []), ...carried] } }]);
+    }
+    reverseOneCheckIn({ ...item, deliveries: [] }, arrival);
+  }
   function reverseOneCheckIn(item, arrival) {
     const arrivalIds = arrival ? [arrival.id] : (item.arrivals || []).map((a) => a.id);
     const remainingArrivals = (item.arrivals || []).filter((a) => !arrivalIds.includes(a.id));
@@ -14206,7 +14232,27 @@ export default function FarspeedInventory() {
                           <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{r.units}</td>
                           <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{r.left}</td>
                           <td className="px-3 py-2 text-xs" style={{ color: colors.inkFaint, maxWidth: 240 }}>{r.source || "\u2014"}</td>
-                          <td className="px-3 py-2 text-right">
+                          <td className="px-3 py-2 text-right whitespace-nowrap">
+                            {g.rows.length > 1 && (
+                              <select
+                                className="text-xs mr-3 rounded"
+                                style={{ ...inputStyleFor(colors), padding: "2px 4px", fontSize: 11 }}
+                                value=""
+                                onChange={(e) => {
+                                  const keepId = e.target.value;
+                                  e.target.value = "";
+                                  if (!keepId) return;
+                                  const dels = activeDeliveries(r.item).length;
+                                  if (!window.confirm(t.checkInsMergeConfirm(r.item.id, keepId, r.units, dels))) return;
+                                  mergeCheckInInto(r.item, r.arrival, keepId);
+                                }}
+                              >
+                                <option value="">{t.checkInsMergeLabel}</option>
+                                {[...new Set(g.rows.map((x) => x.item.id))].filter((id) => id !== r.item.id).map((id) => (
+                                  <option key={id} value={id}>{id}</option>
+                                ))}
+                              </select>
+                            )}
                             <button
                               className="text-xs font-semibold"
                               style={{ color: colors.red }}
