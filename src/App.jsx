@@ -1155,9 +1155,13 @@ function checkInAudit(items) {
       g.rows.push({ item: it, arrival: null, units, left, date: it.depotArrivalDate, source: it.notes || "" });
     }
   });
+  // What is wrong comes first, then what can be checked, then the rest. Sorting by size put
+  // the entries carrying no reference at all - the largest bucket in the depot by far - on
+  // top of everything, and the three over-checked references nobody could then find.
+  const rank = (g) => (g.over > 0 ? 0 : g.stated != null ? 1 : 2);
   return [...groups.values()]
     .map((g) => ({ ...g, over: g.stated == null ? null : g.held - g.stated }))
-    .sort((a, b) => (Math.abs(b.over || 0) - Math.abs(a.over || 0)) || b.held - a.held);
+    .sort((a, b) => rank(a) - rank(b) || (b.over || 0) - (a.over || 0) || b.held - a.held);
 }
 function findDuplicateGroups(items) {
   const map = {};
@@ -2005,6 +2009,9 @@ const TEXT = {
     checkInsHeldVsStated: (held, stated, left) => `${held} checked in against ${stated} on the paperwork \u00b7 ${left} still at the depot`,
     checkInsHeldOnly: (held, left) => `${held} checked in \u00b7 ${left} still at the depot \u00b7 the reference states no package count, so nothing to check against`,
     checkInsOverBy: (n) => `${n} too many`,
+    checkInsRowCount: (n) => `${n} check-in${n === 1 ? "" : "s"}`,
+    checkInsSearchLabel: "Find a check-in",
+    checkInsSearchPlaceholder: "Entry, shipment, lift or reference \u2014 e.g. INC-0559",
     checkInsColEntry: "Entry",
     checkInsColCode: "Lift / order",
     checkInsColArrived: "Arrived",
@@ -2766,6 +2773,9 @@ const TEXT = {
     checkInsHeldVsStated: (held, stated, left) => `已到倉 ${held} 件，單據註明 ${stated} 件 \u00b7 現存 ${left} 件`,
     checkInsHeldOnly: (held, left) => `已到倉 ${held} 件 \u00b7 現存 ${left} 件 \u00b7 參考編號未註明件數，無法核對`,
     checkInsOverBy: (n) => `多出 ${n} 件`,
+    checkInsRowCount: (n) => `${n} 筆到倉`,
+    checkInsSearchLabel: "搜尋到倉記錄",
+    checkInsSearchPlaceholder: "記錄、貨件、電梯或參考編號 \u2014 例如 INC-0559",
     checkInsColEntry: "記錄",
     checkInsColCode: "電梯 / 訂單",
     checkInsColArrived: "到倉日期",
@@ -13354,7 +13364,20 @@ export default function FarspeedInventory() {
   const pending = activeItemsList.filter((i) => deriveStatus(i) === "pending_collection");
   const billable = openForDelivery.filter((i) => storageInfo(i)?.billable);
   const lfdWarnings = activeItemsList.filter((i) => { const a = lfdAlert(i); return a && (a.level === "soon" || a.level === "overdue"); });
+  const [checkInSearch, setCheckInSearch] = useState("");
+  const [checkInOpen, setCheckInOpen] = useState({});
   const checkInGroups = useMemo(() => checkInAudit(activeItemsList), [activeItemsList]);
+  // Searching looks at everything on a row that someone might have written down - the entry
+  // id, the shipment it came in from, the lift or order code, the reference. Looking for
+  // "INC-0559" should land on it whichever of those you happen to know.
+  const checkInFiltered = useMemo(() => {
+    const q = checkInSearch.trim().toLowerCase();
+    if (!q) return checkInGroups;
+    return checkInGroups
+      .map((g) => ({ ...g, rows: g.rows.filter((r) => [g.ref, r.item.id, r.item.unitCode, r.source, r.date]
+        .some((v) => String(v || "").toLowerCase().includes(q))) }))
+      .filter((g) => g.rows.length);
+  }, [checkInGroups, checkInSearch]);
   const overCheckedIn = useMemo(
     () => checkInGroups.reduce((n, g) => n + ((g.over || 0) > 0 ? g.over : 0), 0),
     [checkInGroups]);
@@ -14130,12 +14153,30 @@ export default function FarspeedInventory() {
               {overCheckedIn > 0 && (
                 <p className="text-sm mt-2 rounded px-2 py-1.5" style={{ background: colors.redSoft, color: colors.red }}>{t.checkInsOverBanner(overCheckedIn)}</p>
               )}
+              <div className="mt-3">
+                <Field label={t.checkInsSearchLabel} colors={colors}>
+                  <input className={inputClass} style={{ ...inputStyleFor(colors), minWidth: 280 }}
+                    placeholder={t.checkInsSearchPlaceholder}
+                    value={checkInSearch} onChange={(e) => setCheckInSearch(e.target.value)} />
+                </Field>
+              </div>
             </div>
-            {checkInGroups.map((g) => {
+            {checkInFiltered.length === 0 && (
+              <div className="rounded-lg p-6 text-sm text-center" style={{ background: colors.surface, border: `1px solid ${colors.line}`, color: colors.inkFaint }}>
+                {t.noneFoundMsg}
+              </div>
+            )}
+            {checkInFiltered.map((g) => {
               const over = (g.over || 0) > 0;
+              // Open when there is something wrong with it, or when a search has narrowed it
+              // down. A depot's worth of correct check-ins otherwise buries the few that
+              // matter under thousands of rows.
+              const open = checkInOpen[g.ref] !== undefined ? checkInOpen[g.ref] : (over || !!checkInSearch.trim());
               return (
                 <div key={g.ref} className="rounded-lg overflow-hidden" style={{ border: `1px solid ${over ? colors.red : colors.line}` }}>
-                  <div className="px-4 py-2 flex flex-wrap items-baseline gap-x-3" style={{ background: over ? colors.redSoft : colors.surfaceDim }}>
+                  <div className="px-4 py-2 flex flex-wrap items-baseline gap-x-3 cursor-pointer" style={{ background: over ? colors.redSoft : colors.surfaceDim }}
+                    onClick={() => setCheckInOpen((o) => ({ ...o, [g.ref]: !open }))}>
+                    <span className="text-xs font-semibold" style={{ color: colors.amberText }}>{open ? "\u2212" : "+"}</span>
                     <span className="text-sm font-bold" style={{ fontFamily: FONT_DISPLAY, color: over ? colors.red : colors.ink }}>{g.ref}</span>
                     <span className="text-xs" style={{ color: over ? colors.red : colors.inkFaint }}>
                       {g.stated == null
@@ -14143,7 +14184,9 @@ export default function FarspeedInventory() {
                         : t.checkInsHeldVsStated(g.held, g.stated, g.remaining)}
                     </span>
                     {over && <span className="text-xs font-semibold" style={{ color: colors.red }}>{t.checkInsOverBy(g.over)}</span>}
+                    <span className="text-xs ml-auto" style={{ color: colors.inkFaint }}>{t.checkInsRowCount(g.rows.length)}</span>
                   </div>
+                  {open && (
                   <table className="w-full text-sm" style={{ background: colors.surface }}>
                     <thead>
                       <tr style={{ background: colors.surfaceDim }}>
@@ -14179,6 +14222,7 @@ export default function FarspeedInventory() {
                       ))}
                     </tbody>
                   </table>
+                  )}
                 </div>
               );
             })}
