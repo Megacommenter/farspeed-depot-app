@@ -2019,6 +2019,7 @@ const TEXT = {
     checkInsColLeft: "Left",
     checkInsColSource: "Came in from",
     checkInsReverseBtn: "Reverse this check-in",
+    checkInsReverseHasDeliveries: (id, n) => `Careful \u2014 ${id} has ${n} deliver${n === 1 ? "y" : "ies"} recorded against it.\n\nUndoing its only check-in leaves those deliveries with no stock behind them. If this entry is the duplicate, note which deliveries it holds first, so they can be re-recorded against the entry you are keeping.\n\nCarry on anyway?`,
     checkInsReverseConfirm: (id, n, gone) => `Reverse this check-in?\n\n${n} case${n === 1 ? "" : "s"} go back to Incoming, waiting to be checked in again.${gone ? `\n\n${id} holds nothing else, so the entry is removed with it.` : ""}\n\nThis cannot be undone from here.`,
 
     depotOverviewTitle: "Depot Overview",
@@ -2783,6 +2784,7 @@ const TEXT = {
     checkInsColLeft: "現存",
     checkInsColSource: "來源",
     checkInsReverseBtn: "還原此到倉記錄",
+    checkInsReverseHasDeliveries: (id, n) => `請注意 \u2014 ${id} 已有 ${n} 筆送貨記錄。\n\n還原其唯一到倉記錄後，該筆送貨將無對應存貨。如此筆為重複記錄，請先記下其送貨詳情，以便轉記於保留之記錄。\n\n是否繼續？`,
     checkInsReverseConfirm: (id, n, gone) => `確認還原此到倉記錄？\n\n${n} 件貨箱將退回「待到倉」。${gone ? `\n\n${id} 已無其他記錄，會一併刪除。` : ""}\n\n此操作無法從此頁還原。`,
 
     depotOverviewTitle: "各倉存倉概覽",
@@ -14209,9 +14211,13 @@ export default function FarspeedInventory() {
                               className="text-xs font-semibold"
                               style={{ color: colors.red }}
                               onClick={() => {
-                                const gone = activeDeliveries(r.item).length === 0
-                                  && (r.item.arrivals || []).filter((a) => !r.arrival || a.id !== r.arrival.id).length === 0;
-                                if (!window.confirm(t.checkInsReverseConfirm(r.item.id, r.units, gone))) return;
+                                const left = (r.item.arrivals || []).filter((a) => !r.arrival || a.id !== r.arrival.id).length;
+                                const dels = activeDeliveries(r.item).length;
+                                // An entry that has been delivered from is not a clean thing
+                                // to undo: taking its arrival away leaves deliveries with no
+                                // stock behind them. Said before the fact, not after.
+                                if (dels > 0 && left === 0 && !window.confirm(t.checkInsReverseHasDeliveries(r.item.id, dels))) return;
+                                if (!window.confirm(t.checkInsReverseConfirm(r.item.id, r.units, dels === 0 && left === 0))) return;
                                 reverseOneCheckIn(r.item, r.arrival);
                               }}
                             >
