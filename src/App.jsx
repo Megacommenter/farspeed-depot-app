@@ -1124,6 +1124,41 @@ function splitGroupByCases(group) {
   }
   return buckets.map((b) => b.items);
 }
+// Every check-in the depot has taken, grouped by the reference it came in under. A
+// reference states its own package count - "13-DM-25-0625_44PKGS" - so where the entries
+// filed against it hold more than that, the same consignment has been checked in twice:
+// once as a whole lot and once split per lift. It is invisible on the inventory screen,
+// which shows the entries but never adds them back up against the paper.
+function checkInAudit(items) {
+  const groups = new Map();
+  (items || []).forEach((it) => {
+    if (it.cancelled) return;
+    const ref = String(it.invoiceNumber || "").trim() || "\u2014";
+    if (!groups.has(ref)) {
+      const m = ref.match(/(\d+)\s*(?:PKGS?|CARTONS?|CASES?)/i);
+      groups.set(ref, { ref, stated: m ? Number(m[1]) : null, rows: [], held: 0, remaining: 0 });
+    }
+    const g = groups.get(ref);
+    const units = totalUnits(it);
+    const left = Math.max(0, units - deliveredUnits(it));
+    g.held += units;
+    g.remaining += left;
+    // One row per arrival batch, since a batch is what gets reversed. An entry carrying no
+    // batches is shown whole, as there is nothing finer to act on.
+    const arrivals = activeArrivals(it);
+    if (arrivals.length) {
+      arrivals.forEach((a) => g.rows.push({
+        item: it, arrival: a, units: (a.codes || []).length || units, left,
+        date: a.date || it.depotArrivalDate, source: a.declaredSource || it.notes || "",
+      }));
+    } else {
+      g.rows.push({ item: it, arrival: null, units, left, date: it.depotArrivalDate, source: it.notes || "" });
+    }
+  });
+  return [...groups.values()]
+    .map((g) => ({ ...g, over: g.stated == null ? null : g.held - g.stated }))
+    .sort((a, b) => (Math.abs(b.over || 0) - Math.abs(a.over || 0)) || b.held - a.held);
+}
 function findDuplicateGroups(items) {
   const map = {};
   items.forEach((it) => {
@@ -1749,6 +1784,9 @@ const TEXT = {
     saveNewSiteToDirectory: (name) => `Save "${name}" as a new site in the Directory, so future imports recognize it automatically`,
 
     siteTotalsTitle: "CBM & KG Remaining by Construction Site",
+    siteTotalsColLastCfs: "Last CFS",
+    siteTotalsColLastDevan: "Last Devan",
+    siteTotalsColLastDelivery: "Last delivery",
     siteTotalsColSite: "Construction Site",
     siteTotalsColClient: "Client",
     siteTotalsColPkgs: "Pkgs Left",
@@ -1959,6 +1997,22 @@ const TEXT = {
 
     settingsLabel: "Settings",
     navDuplicatesShort: "Duplicates",
+    navCheckIns: "Check-ins",
+    navCheckInsCount: (n) => `Check-ins (${n} over)`,
+    checkInsTitle: "Check-ins against the paperwork",
+    checkInsDesc: "Every check-in the depot has taken, grouped by the reference it came in under. A reference states its own package count, so where the entries under it add up to more, the same consignment has been checked in twice \u2014 usually once as a whole lot and once split per lift.",
+    checkInsOverBanner: (n) => `${n} package${n === 1 ? " is" : "s are"} counted more than once. Reversing a check-in puts its cases back to Incoming, where they can be checked in again properly.`,
+    checkInsHeldVsStated: (held, stated, left) => `${held} checked in against ${stated} on the paperwork \u00b7 ${left} still at the depot`,
+    checkInsHeldOnly: (held, left) => `${held} checked in \u00b7 ${left} still at the depot \u00b7 the reference states no package count, so nothing to check against`,
+    checkInsOverBy: (n) => `${n} too many`,
+    checkInsColEntry: "Entry",
+    checkInsColCode: "Lift / order",
+    checkInsColArrived: "Arrived",
+    checkInsColUnits: "Cases",
+    checkInsColLeft: "Left",
+    checkInsColSource: "Came in from",
+    checkInsReverseBtn: "Reverse this check-in",
+    checkInsReverseConfirm: (id, n, gone) => `Reverse this check-in?\n\n${n} case${n === 1 ? "" : "s"} go back to Incoming, waiting to be checked in again.${gone ? `\n\n${id} holds nothing else, so the entry is removed with it.` : ""}\n\nThis cannot be undone from here.`,
 
     depotOverviewTitle: "Depot Overview",
     depotOverviewItemsLabel: "item(s)",
@@ -2491,6 +2545,9 @@ const TEXT = {
     saveNewSiteToDirectory: (name) => `將「${name}」儲存為目錄中的新地盤，日後匯入將自動識別`,
 
     siteTotalsTitle: "各地盤存倉之CBM及KG",
+    siteTotalsColLastCfs: "最近CFS",
+    siteTotalsColLastDevan: "最近拆櫃",
+    siteTotalsColLastDelivery: "最近送貨",
     siteTotalsColSite: "地盤",
     siteTotalsColClient: "客戶",
     siteTotalsColPkgs: "餘下件數",
@@ -2701,6 +2758,22 @@ const TEXT = {
 
     settingsLabel: "設定",
     navDuplicatesShort: "重複記錄",
+    navCheckIns: "到倉核對",
+    navCheckInsCount: (n) => `到倉核對（多 ${n}）`,
+    checkInsTitle: "到倉記錄與單據核對",
+    checkInsDesc: "列出所有到倉記錄，以其參考編號分組。參考編號本身已註明件數，若其下各筆合計超出該數，即同一批貨被重複到倉 \u2014 通常是整批一次、再按電梯分批一次。",
+    checkInsOverBanner: (n) => `共有 ${n} 件被重複計算。還原到倉記錄會將貨箱退回「待到倉」，可重新妥善辦理。`,
+    checkInsHeldVsStated: (held, stated, left) => `已到倉 ${held} 件，單據註明 ${stated} 件 \u00b7 現存 ${left} 件`,
+    checkInsHeldOnly: (held, left) => `已到倉 ${held} 件 \u00b7 現存 ${left} 件 \u00b7 參考編號未註明件數，無法核對`,
+    checkInsOverBy: (n) => `多出 ${n} 件`,
+    checkInsColEntry: "記錄",
+    checkInsColCode: "電梯 / 訂單",
+    checkInsColArrived: "到倉日期",
+    checkInsColUnits: "件數",
+    checkInsColLeft: "現存",
+    checkInsColSource: "來源",
+    checkInsReverseBtn: "還原此到倉記錄",
+    checkInsReverseConfirm: (id, n, gone) => `確認還原此到倉記錄？\n\n${n} 件貨箱將退回「待到倉」。${gone ? `\n\n${id} 已無其他記錄，會一併刪除。` : ""}\n\n此操作無法從此頁還原。`,
 
     depotOverviewTitle: "各倉存倉概覽",
     depotOverviewItemsLabel: "項",
@@ -13140,6 +13213,24 @@ export default function FarspeedInventory() {
     return { items: (plan.items || []).length, removed: removeIds.size };
   }
 
+  // Undoes a single check-in from the audit screen. The plan is the same shape the legacy
+  // backlog builds, so the same handler does the work: the batch comes off the entry, its
+  // cases go back to the Incoming shipment they came from, and an entry left holding
+  // nothing goes with it.
+  function reverseOneCheckIn(item, arrival) {
+    const arrivalIds = arrival ? [arrival.id] : (item.arrivals || []).map((a) => a.id);
+    const remainingArrivals = (item.arrivals || []).filter((a) => !arrivalIds.includes(a.id));
+    const codes = (item.arrivals || []).filter((a) => arrivalIds.includes(a.id)).flatMap((a) => a.codes || []);
+    const remove = remainingArrivals.length === 0 && activeDeliveries(item).length === 0;
+    const plan = {
+      items: [{ itemId: item.id, arrivalIds, deliveryIds: [], remove }],
+      incoming: (incoming || [])
+        .filter((inc) => inc.linkedItemId === item.id)
+        .map((inc) => ({ incomingId: inc.id, codes, unlink: remove })),
+    };
+    handleLegacyReverse(plan);
+  }
+
   function handleAddCombinedDelivery(entries) {
     const records = entries.map(({ itemId, delivery }) => ({ itemId, record: { ...delivery, id: `D${Date.now()}${Math.floor(Math.random() * 10000)}-${itemId}` } }));
     const byItemId = new Map();
@@ -13263,6 +13354,10 @@ export default function FarspeedInventory() {
   const pending = activeItemsList.filter((i) => deriveStatus(i) === "pending_collection");
   const billable = openForDelivery.filter((i) => storageInfo(i)?.billable);
   const lfdWarnings = activeItemsList.filter((i) => { const a = lfdAlert(i); return a && (a.level === "soon" || a.level === "overdue"); });
+  const checkInGroups = useMemo(() => checkInAudit(activeItemsList), [activeItemsList]);
+  const overCheckedIn = useMemo(
+    () => checkInGroups.reduce((n, g) => n + ((g.over || 0) > 0 ? g.over : 0), 0),
+    [checkInGroups]);
   const duplicateGroups = useMemo(() => findDuplicateGroups(activeItemsList), [activeItemsList]);
   const duplicateIds = useMemo(() => new Set(duplicateGroups.flat().map((i) => i.id)), [duplicateGroups]);
   const siteTotals = useMemo(() => {
@@ -13287,10 +13382,38 @@ export default function FarspeedInventory() {
       // instead read "4" for a site holding sixteen cases across four entries.
       map[key].pkgs += Math.max(0, totalUnits(it) - deliveredUnits(it));
     });
+    // The last CFS, Devan and delivery each site saw, so a query about a site can be
+    // answered from this table instead of opening every entry under it. Taken from every
+    // entry at the site rather than only those still open, or a site whose last delivery
+    // emptied an entry would show no delivery at all.
+    const latest = {};
+    (items || []).forEach((it) => {
+      if (it.cancelled) return;
+      const key = it.directoryId || sigPart(it.project) || "unspecified";
+      if (!map[key]) return;
+      if (!latest[key]) latest[key] = {};
+      const note = (kind, date, ref) => {
+        if (!date) return;
+        const cur = latest[key][kind];
+        if (!cur || String(date) > String(cur.date)) latest[key][kind] = { date, ref: ref || "" };
+      };
+      activeArrivals(it).forEach((a) => {
+        const kind = String(a.type || it.arrivingType || "").toUpperCase() === "CFS" ? "cfs" : "devan";
+        note(kind, a.date, a.declaredSource || it.jobNumber);
+      });
+      // An entry carrying no arrival batches still records when and how it came in.
+      if (!activeArrivals(it).length) {
+        note(String(it.arrivingType || "").toUpperCase() === "CFS" ? "cfs" : "devan", it.depotArrivalDate, it.jobNumber);
+      }
+      activeDeliveries(it).forEach((d) => note("delivery", d.date, d.jobNumber));
+    });
     return Object.values(map)
-      .map((s) => ({ ...s, cbm: Math.round(s.cbm * 1000) / 1000, kg: Math.round(s.kg * 10) / 10 }))
+      .map((s) => ({
+        ...s, cbm: Math.round(s.cbm * 1000) / 1000, kg: Math.round(s.kg * 10) / 10,
+        latest: latest[s.key] || {},
+      }))
       .sort((a, b) => b.cbm - a.cbm);
-  }, [openForDelivery, directory]);
+  }, [openForDelivery, items, directory]);
   const jobLog = useMemo(() => {
     const rows = [];
     items.forEach((it) => {
@@ -13465,7 +13588,7 @@ export default function FarspeedInventory() {
                 onClick={() => { setSettingsOpen((o) => !o); setNewEntryMenuOpen(false); }}
                 title={t.settingsLabel}
                 className="px-3 py-1.5 rounded text-sm font-semibold"
-                style={{ fontFamily: FONT_DISPLAY, background: ["duplicates", "cancelledjobs"].includes(view) ? colors.amber : "transparent", color: ["duplicates", "cancelledjobs"].includes(view) ? colors.ink : colors.onDark }}
+                style={{ fontFamily: FONT_DISPLAY, background: ["duplicates", "cancelledjobs", "checkins"].includes(view) ? colors.amber : "transparent", color: ["duplicates", "cancelledjobs", "checkins"].includes(view) ? colors.ink : colors.onDark }}
               >
                 ⚙
               </button>
@@ -13527,6 +13650,7 @@ export default function FarspeedInventory() {
             ["billing", t.navBilling],
             ["directory", t.navDirectory],
             ["joblog", t.navJobLog],
+            ["checkins", overCheckedIn > 0 ? t.navCheckInsCount(overCheckedIn) : t.navCheckIns],
             ["duplicates", duplicateGroups.length > 0 ? t.navDuplicatesCount(duplicateGroups.length) : t.navDuplicatesShort],
             ["cancelledjobs", cancelledJobs.length > 0 ? `${t.navCancelledJobs} (${cancelledJobs.length})` : t.navCancelledJobs],
           ].map(([k, label]) => (
@@ -13703,14 +13827,15 @@ export default function FarspeedInventory() {
                 <table className="w-full text-sm" style={{ background: colors.surface }}>
                   <thead>
                     <tr style={{ background: colors.surfaceDim }}>
-                      {[t.siteTotalsColSite, t.siteTotalsColClient, t.siteTotalsColPkgs, t.siteTotalsColCbm, t.siteTotalsColKg].map((h) => (
+                      {[t.siteTotalsColSite, t.siteTotalsColClient, t.siteTotalsColPkgs, t.siteTotalsColCbm, t.siteTotalsColKg,
+                        t.siteTotalsColLastCfs, t.siteTotalsColLastDevan, t.siteTotalsColLastDelivery].map((h) => (
                         <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {siteTotals.length === 0 && (
-                      <tr><td colSpan={5} className="px-3 py-4 text-center text-sm" style={{ color: colors.inkFaint }}>{t.siteTotalsNoneMsg}</td></tr>
+                      <tr><td colSpan={8} className="px-3 py-4 text-center text-sm" style={{ color: colors.inkFaint }}>{t.siteTotalsNoneMsg}</td></tr>
                     )}
                     {siteTotals.map((s) => (
                       <tr key={s.key} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
@@ -13722,6 +13847,20 @@ export default function FarspeedInventory() {
                         <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{s.pkgs}</td>
                         <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{s.cbm}</td>
                         <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{s.kg}</td>
+                        {["cfs", "devan", "delivery"].map((kind) => (
+                          <td key={kind} className="px-3 py-2 whitespace-nowrap">
+                            {s.latest[kind] ? (
+                              <>
+                                <div>{fmt(s.latest[kind].date)}</div>
+                                {s.latest[kind].ref && (
+                                  <div className="text-xs truncate" style={{ color: colors.inkFaint, fontFamily: FONT_MONO, maxWidth: 170 }} title={s.latest[kind].ref}>
+                                    {s.latest[kind].ref}
+                                  </div>
+                                )}
+                              </>
+                            ) : <span style={{ color: colors.inkFaint }}>—</span>}
+                          </td>
+                        ))}
                       </tr>
                     ))}
                   </tbody>
@@ -13973,6 +14112,69 @@ export default function FarspeedInventory() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {view === "checkins" && (
+          <div className="flex flex-col gap-4">
+            <div className="rounded-lg p-4" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+              <h3 className="text-sm font-bold uppercase tracking-wider mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.checkInsTitle}</h3>
+              <p className="text-sm" style={{ color: colors.inkFaint }}>{t.checkInsDesc}</p>
+              {overCheckedIn > 0 && (
+                <p className="text-sm mt-2 rounded px-2 py-1.5" style={{ background: colors.redSoft, color: colors.red }}>{t.checkInsOverBanner(overCheckedIn)}</p>
+              )}
+            </div>
+            {checkInGroups.map((g) => {
+              const over = (g.over || 0) > 0;
+              return (
+                <div key={g.ref} className="rounded-lg overflow-hidden" style={{ border: `1px solid ${over ? colors.red : colors.line}` }}>
+                  <div className="px-4 py-2 flex flex-wrap items-baseline gap-x-3" style={{ background: over ? colors.redSoft : colors.surfaceDim }}>
+                    <span className="text-sm font-bold" style={{ fontFamily: FONT_DISPLAY, color: over ? colors.red : colors.ink }}>{g.ref}</span>
+                    <span className="text-xs" style={{ color: over ? colors.red : colors.inkFaint }}>
+                      {g.stated == null
+                        ? t.checkInsHeldOnly(g.held, g.remaining)
+                        : t.checkInsHeldVsStated(g.held, g.stated, g.remaining)}
+                    </span>
+                    {over && <span className="text-xs font-semibold" style={{ color: colors.red }}>{t.checkInsOverBy(g.over)}</span>}
+                  </div>
+                  <table className="w-full text-sm" style={{ background: colors.surface }}>
+                    <thead>
+                      <tr style={{ background: colors.surfaceDim }}>
+                        {[t.checkInsColEntry, t.checkInsColCode, t.checkInsColArrived, t.checkInsColUnits, t.checkInsColLeft, t.checkInsColSource, ""].map((h, hi) => (
+                          <th key={hi} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {g.rows.map((r, ri) => (
+                        <tr key={`${r.item.id}-${ri}`} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
+                          <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{r.item.id}</td>
+                          <td className="px-3 py-2">{r.item.unitCode || "\u2014"}</td>
+                          <td className="px-3 py-2 whitespace-nowrap">{fmt(r.date)}</td>
+                          <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{r.units}</td>
+                          <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{r.left}</td>
+                          <td className="px-3 py-2 text-xs" style={{ color: colors.inkFaint, maxWidth: 240 }}>{r.source || "\u2014"}</td>
+                          <td className="px-3 py-2 text-right">
+                            <button
+                              className="text-xs font-semibold"
+                              style={{ color: colors.red }}
+                              onClick={() => {
+                                const gone = activeDeliveries(r.item).length === 0
+                                  && (r.item.arrivals || []).filter((a) => !r.arrival || a.id !== r.arrival.id).length === 0;
+                                if (!window.confirm(t.checkInsReverseConfirm(r.item.id, r.units, gone))) return;
+                                reverseOneCheckIn(r.item, r.arrival);
+                              }}
+                            >
+                              {t.checkInsReverseBtn}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })}
           </div>
         )}
 
