@@ -13256,10 +13256,19 @@ export default function FarspeedInventory() {
     reverseOneCheckIn({ ...item, deliveries: [] }, arrival);
   }
   function reverseOneCheckIn(item, arrival) {
-    const arrivalIds = arrival ? [arrival.id] : (item.arrivals || []).map((a) => a.id);
-    const remainingArrivals = (item.arrivals || []).filter((a) => !arrivalIds.includes(a.id));
-    const codes = (item.arrivals || []).filter((a) => arrivalIds.includes(a.id)).flatMap((a) => a.codes || []);
-    const remove = remainingArrivals.length === 0 && activeDeliveries(item).length === 0;
+    // Older batches predate arrival ids, so identity falls back to the object itself rather
+    // than to an id that is undefined on every one of them and would match them all.
+    const picked = arrival ? [arrival] : (item.arrivals || []);
+    const isPicked = (a) => picked.includes(a) || (a.id && picked.some((x) => x.id === a.id));
+    const arrivalIds = picked.map((a) => a.id).filter(Boolean);
+    const remainingArrivals = (item.arrivals || []).filter((a) => !isPicked(a));
+    const codes = picked.flatMap((a) => a.codes || []);
+    // The entry goes when its last check-in does. Keeping it because it still had deliveries
+    // against it did nothing useful: an entry's cases live on its packages list, not on its
+    // arrival batches, so taking the batch away left all 44 cases and 30 remaining exactly
+    // where they were and the screen did not change. Whoever pressed the button has already
+    // been told the deliveries go with it.
+    const remove = remainingArrivals.length === 0;
     const plan = {
       items: [{ itemId: item.id, arrivalIds, deliveryIds: [], remove }],
       incoming: (incoming || [])
@@ -14263,7 +14272,7 @@ export default function FarspeedInventory() {
                                 // to undo: taking its arrival away leaves deliveries with no
                                 // stock behind them. Said before the fact, not after.
                                 if (dels > 0 && left === 0 && !window.confirm(t.checkInsReverseHasDeliveries(r.item.id, dels))) return;
-                                if (!window.confirm(t.checkInsReverseConfirm(r.item.id, r.units, dels === 0 && left === 0))) return;
+                                if (!window.confirm(t.checkInsReverseConfirm(r.item.id, r.units, left === 0))) return;
                                 reverseOneCheckIn(r.item, r.arrival);
                               }}
                             >
