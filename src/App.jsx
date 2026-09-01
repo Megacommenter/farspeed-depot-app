@@ -13593,10 +13593,17 @@ export default function FarspeedInventory() {
                 ⚙
               </button>
               {settingsOpen && (
-                <div className="absolute right-0 mt-1 rounded-lg overflow-hidden z-20" style={{ background: colors.surface, border: `1px solid ${colors.line}`, minWidth: 180 }}>
+                <div className="absolute right-0 mt-1 rounded-lg overflow-hidden z-20" style={{ background: colors.surface, border: `1px solid ${colors.line}`, minWidth: 200 }}>
                   <button
                     className="block w-full text-left px-3 py-2 text-sm font-semibold"
-                    style={{ color: colors.ink, fontFamily: FONT_DISPLAY }}
+                    style={{ color: overCheckedIn > 0 ? colors.red : colors.ink, fontFamily: FONT_DISPLAY }}
+                    onClick={() => { setView("checkins"); setSettingsOpen(false); }}
+                  >
+                    {overCheckedIn > 0 ? t.navCheckInsCount(overCheckedIn) : t.navCheckIns}
+                  </button>
+                  <button
+                    className="block w-full text-left px-3 py-2 text-sm font-semibold"
+                    style={{ color: colors.ink, fontFamily: FONT_DISPLAY, borderTop: `1px solid ${colors.surfaceDim}` }}
                     onClick={() => { setView("duplicates"); setSettingsOpen(false); }}
                   >
                     {duplicateGroups.length > 0 ? t.navDuplicatesCount(duplicateGroups.length) : t.navDuplicatesShort}
