@@ -1214,6 +1214,7 @@ function storageLedger(items, directory) {
     const arrivals = activeArrivals(it);
     if (arrivals.length) {
       arrivals.forEach((a) => g.moves.push({
+        arrivalId: a.id || "", deliveryId: "",
         date: a.date || it.depotArrivalDate || "", dir: "IN",
         jobNumber: it.jobNumber || "", ref, lot: it.unitCode || "",
         pkgs: (a.codes || []).length || totalUnits(it),
@@ -1221,11 +1222,13 @@ function storageLedger(items, directory) {
       }));
     } else {
       g.moves.push({
+        arrivalId: "", deliveryId: "",
         date: it.depotArrivalDate || "", dir: "IN", jobNumber: it.jobNumber || "", ref,
         lot: it.unitCode || "", pkgs: totalUnits(it), type: it.arrivingType || "", entryId: it.id,
       });
     }
     activeDeliveries(it).forEach((d) => g.moves.push({
+      arrivalId: "", deliveryId: d.id || "",
       date: d.date || "", dir: "OUT", jobNumber: d.jobNumber || "", ref, lot: it.unitCode || "",
       pkgs: (d.codes || []).length, type: "Delivery", entryId: it.id,
     }));
@@ -2137,6 +2140,7 @@ const TEXT = {
     ledgerTitle: "Storage ledger",
     ledgerDesc: "Every arrival and delivery the depot has recorded, a site at a time, in date order with a running balance \u2014 the same shape as a client's own store list, so the two can be read side by side. Charges and free days are not shown here; those follow the billing rules rather than the movements.",
     ledgerNoDate: "NO DATE",
+    ledgerAddDateHint: "Set the date this movement happened \u2014 it will then count in the balance",
     ledgerNotCounted: "not counted",
     ledgerUndatedTotal: (n) => `${n} movement${n === 1 ? "" : "s"} with no date \u2014 shown in red on the sites below, and left out of every balance until dated.`,
     ledgerAsOfLabel: "As of",
@@ -2957,6 +2961,7 @@ const TEXT = {
     ledgerTitle: "存倉紀錄",
     ledgerDesc: "依地盤列出所有到倉及送貨記錄，按日期排列並附累計餘數 \u2014 格式與客戶存倉清單一致，便於對照。此處不列載費用及免費期，該等項目依據收費規則而非出入記錄。",
     ledgerNoDate: "未填日期",
+    ledgerAddDateHint: "輸入此筆出入倉之實際日期 \u2014 完成後即會計入餘數",
     ledgerNotCounted: "不計入",
     ledgerUndatedTotal: (n) => `共 ${n} 筆未填日期 \u2014 已於下方地盤以紅色標示，在補上日期前不計入任何餘數。`,
     ledgerAsOfLabel: "截至日期",
@@ -13881,6 +13886,26 @@ export default function FarspeedInventory() {
     XLSX.utils.book_append_sheet(wb, ws, "Packing Lists");
     XLSX.writeFile(wb, `packing-lists-${todayStr()}.xlsx`);
   }
+  // Writes a date onto the record the ledger row came from. An arrival batch that has one
+  // takes it; an entry with no batches at all has never had an arrival date, so the date
+  // belongs on the entry itself, which is also what moves it out of "pending collection".
+  function setMovementDate(move, date) {
+    if (!date) return;
+    persist(items.map((it) => {
+      if (it.id !== move.entryId) return it;
+      if (move.dir === "OUT") {
+        return recomputeItemTotals({ ...it,
+          deliveries: (it.deliveries || []).map((d) => (d.id === move.deliveryId ? { ...d, date } : d)) });
+      }
+      if (move.arrivalId) {
+        const arrivals = (it.arrivals || []).map((a) => (a.id === move.arrivalId ? { ...a, date } : a));
+        const dates = arrivals.map((a) => a.date).filter(Boolean).sort();
+        return recomputeItemTotals({ ...it, arrivals, depotArrivalDate: dates[0] || date });
+      }
+      // No batch to hang it on: this is the entry's own arrival date.
+      return recomputeItemTotals({ ...it, depotArrivalDate: date, awaitingCollection: false });
+    }));
+  }
   const ledgerAll = useMemo(() => storageLedger(activeItemsList, directory), [activeItemsList, directory]);
   const [ledgerOpen, setLedgerOpen] = useState({});
   const [ledgerAsOf, setLedgerAsOf] = useState(todayStr());
@@ -14928,12 +14953,18 @@ export default function FarspeedInventory() {
                       <tbody>
                         {(g.undatedMoves || []).map((m, mi) => (
                           <tr key={`u${mi}`} style={{ borderTop: `1px solid ${colors.surfaceDim}`, background: colors.redSoft, color: colors.red }}>
-                            <td className="px-3 py-1.5 font-semibold whitespace-nowrap">{t.ledgerNoDate}</td>
+                            <td className="px-3 py-1.5 whitespace-nowrap">
+                              <input type="date" className={inputClass}
+                                style={{ ...inputStyleFor(colors), padding: "2px 6px", fontSize: 12, borderColor: colors.red }}
+                                value=""
+                                title={t.ledgerAddDateHint}
+                                onChange={(e) => setMovementDate(m, e.target.value)} />
+                            </td>
                             <td className="px-3 py-1.5" style={{ fontFamily: FONT_MONO }}>{m.jobNumber || "\u2014"}</td>
                             <td className="px-3 py-1.5 font-semibold">{m.dir}</td>
                             <td className="px-3 py-1.5 text-xs">{m.type || "\u2014"}</td>
                             <td className="px-3 py-1.5 text-xs">{m.ref || "\u2014"}</td>
-                            <td className="px-3 py-1.5 text-xs">{m.lot || "\u2014"}</td>
+                            <td className="px-3 py-1.5 text-xs">{m.lot && m.lot !== m.ref ? m.lot : "\u2014"}</td>
                             <td className="px-3 py-1.5 text-right" style={{ fontFamily: FONT_MONO }}>{m.dir === "IN" ? m.pkgs : ""}</td>
                             <td className="px-3 py-1.5 text-right" style={{ fontFamily: FONT_MONO }}>{m.dir === "OUT" ? m.pkgs : ""}</td>
                             <td className="px-3 py-1.5 text-right text-xs">{t.ledgerNotCounted}</td>
@@ -14946,7 +14977,7 @@ export default function FarspeedInventory() {
                             <td className="px-3 py-1.5 font-semibold" style={{ color: m.dir === "IN" ? colors.green : colors.red }}>{m.dir}</td>
                             <td className="px-3 py-1.5 text-xs" style={{ color: colors.inkFaint }}>{m.type || "\u2014"}</td>
                             <td className="px-3 py-1.5 text-xs">{m.ref || "\u2014"}</td>
-                            <td className="px-3 py-1.5 text-xs" style={{ color: colors.inkFaint }}>{m.lot || "\u2014"}</td>
+                            <td className="px-3 py-1.5 text-xs" style={{ color: colors.inkFaint }}>{m.lot && m.lot !== m.ref ? m.lot : "\u2014"}</td>
                             <td className="px-3 py-1.5 text-right" style={{ fontFamily: FONT_MONO }}>{m.dir === "IN" ? m.pkgs : ""}</td>
                             <td className="px-3 py-1.5 text-right" style={{ fontFamily: FONT_MONO }}>{m.dir === "OUT" ? m.pkgs : ""}</td>
                             <td className="px-3 py-1.5 text-right font-semibold" style={{ fontFamily: FONT_MONO, color: m.balance < 0 ? colors.red : colors.ink }}>{m.balance}</td>
