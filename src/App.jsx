@@ -12141,6 +12141,130 @@ function InlineSiteEditor({ site, setDirectory, employees, colors, t, defaultOpe
     </div>
   );
 }
+// These live at module level, not inside ImportPanel. They were nested there by accident,
+// which put them out of reach of the Packing list reader on the settings menu - a different
+// component entirely - and every file it read failed with "packingListSummaryRow is not
+// defined". Two screens use them now, so neither owns them.
+// One row of the packing list summary, from whichever kind of file it came out of. The
+// reference is what everything downstream keys on - the DM number, the SHK, whatever the
+// maker calls its lot - and the cases are the real content, so the two are checked against
+// each other here and the answer travels with the row.
+// The maker's name as the depot writes it, and as the packing list wrote it. A Mitsubishi
+// list says 三菱电梯香港有限公司 and a TK one says (蒂升); the app knows them as Mitsubishi and
+// TK Elevator. Both are kept, because the English is what everything downstream matches on
+// and the Chinese is what the paperwork in front of you actually says.
+const hasCJK = (v) => /[\u3400-\u9FFF]/.test(String(v || ""));
+function clientNamePair(raw) {
+  const en = resolveClientGuess(raw) || (hasCJK(raw) ? "" : String(raw || "").trim());
+  const zh = hasCJK(raw) ? String(raw).trim()
+    : Object.entries(CHINESE_CLIENT_ALIASES).find(([, name]) => name === en)?.[0] || "";
+  return { en, zh };
+}
+// A site is written one way or the other on a packing list, rarely both. Whichever came off
+// the sheet is kept in its own column, and the directory is asked for the other half - that
+// is what the directory is for, and guessing a translation here would put a name in the file
+// that appears nowhere else.
+function siteNamePair(raw, directory) {
+  const text = String(raw || "").trim();
+  const norm = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9\u3400-\u9FFF]/g, "");
+  const key = norm(text);
+  const hit = key && (directory || []).find((d) => {
+    const a = norm(d.siteEn), b = norm(d.siteZh);
+    return (a && (a === key || a.includes(key) || key.includes(a)))
+      || (b && (b === key || b.includes(key) || key.includes(b)));
+  });
+  if (hit) return { en: hit.siteEn || (hasCJK(text) ? "" : text), zh: hit.siteZh || (hasCJK(text) ? text : "") };
+  return hasCJK(text) ? { en: "", zh: text } : { en: text, zh: "" };
+}
+function packingListSummaryRow(fileName, client, project, ref, packages, kg, cbm, statedPkgs, directory) {
+  const codes = (packages || []).map((p) => String((p && p.code) || "").trim()).filter(Boolean);
+  const pkgs = statedPkgs || codes.length || (packages || []).length;
+  const listed = codes.length;
+  const c = clientNamePair(client);
+  const site = siteNamePair(project, directory);
+  return {
+    "File Name": fileName,
+    "Client": c.en, "Client (\u4e2d\u6587)": c.zh,
+    "Project": site.en, "Project (\u4e2d\u6587)": site.zh,
+    "DM or SHK or other Client Reference": ref || "",
+    "PKGS": pkgs || "", "KGS": kg ? Math.round(kg * 100) / 100 : "",
+    "CBM": cbm ? Math.round(cbm * 1000) / 1000 : "",
+    "Cases": codes.join(", "),
+    // Blank when they agree, so the eye goes straight to the ones that do not.
+    "Check": listed === 0 ? "no case numbers" : (listed === pkgs ? "" : "Pkgs != Case #"),
+    __listed: listed,
+  };
+}
+const PL_SUMMARY_COLUMNS = ["File Name", "Client", "Client (\u4e2d\u6587)", "Project", "Project (\u4e2d\u6587)", "DM or SHK or other Client Reference", "PKGS", "KGS", "CBM", "Cases", "Check"];
+// A sheet only has to name its file, its packages and its cases to be recognised; the
+// client and site columns may be in either language.
+const PL_SUMMARY_REQUIRED = ["file name", "pkgs", "cases"];
+function packingListSummaryColumns(headerRow) {
+  const map = {};
+  (headerRow || []).forEach((cell, i) => {
+    const key = String(cell == null ? "" : cell).trim().toLowerCase();
+    if (!key) return;
+    // "DM or SHK or other Client Reference" is the reference column, however it is worded.
+    // "Client (中文)" and "Project (中文)" are their own columns; the plain ones stay the keys.
+    const name = /\bdm\b|shk|reference/.test(key) ? "reference"
+      : /^client\s*\(/.test(key) ? "clientzh"
+      : /^project\s*\(/.test(key) ? "projectzh"
+      : key;
+    if (map[name] === undefined) map[name] = i;
+  });
+  const named = map.client !== undefined || map.clientzh !== undefined;
+  return PL_SUMMARY_REQUIRED.every((k) => map[k] !== undefined) && map.reference !== undefined && named ? map : null;
+}
+// Turns that sheet back into the lots the packing list importer already knows how to place.
+// Cases are the real thing: where a lot lists them, they become its packages one for one,
+// and the stated package count is only used when there are none to count.
+function groupsFromPackingListSummary(grid) {
+  const headerIdx = (grid || []).findIndex((r) => packingListSummaryColumns(r));
+  if (headerIdx === -1) return null;
+  const col = packingListSummaryColumns(grid[headerIdx]);
+  const cell = (row, name) => {
+    const i = col[name];
+    return i === undefined ? "" : String((row || [])[i] == null ? "" : (row || [])[i]).trim();
+  };
+  const groups = [];
+  let client = "", project = "";
+  for (let i = headerIdx + 1; i < grid.length; i++) {
+    const r = grid[i] || [];
+    if (r.every((c) => String(c == null ? "" : c).trim() === "")) continue;
+    const codes = cell(r, "cases").split(/[,&\u3001]/).map((c) => c.trim()).filter(Boolean);
+    const stated = Number(String(cell(r, "pkgs")).replace(/,/g, "")) || 0;
+    const kg = Number(String(cell(r, "kgs")).replace(/,/g, "")) || 0;
+    const cbm = Number(String(cell(r, "cbm")).replace(/,/g, "")) || 0;
+    const count = codes.length || stated;
+    if (!count) continue;
+    // Either column will do on the way back in; the English one is preferred because that
+    // is what the depot matches on, but a sheet that only filled in the Chinese still works.
+    const rowClient = cell(r, "client") || cell(r, "clientzh");
+    const rowProject = cell(r, "project") || cell(r, "projectzh");
+    client = client || rowClient;
+    project = project || rowProject;
+    // Weight and volume are stated for the lot, so they are spread evenly across its cases.
+    // Nothing in this sheet says what any single case weighs.
+    const packages = (codes.length ? codes : Array.from({ length: stated }, (_, n) => `${n + 1}/${stated}`))
+      .map((code) => ({
+        code,
+        weightKg: kg ? String(Math.round((kg / count) * 100) / 100) : "",
+        cbm: cbm ? String(Math.round((cbm / count) * 1000) / 1000) : "",
+        description: "",
+      }));
+    groups.push({
+      lot: cell(r, "reference") || cell(r, "file name") || `row ${i + 1}`,
+      client: rowClient, project: rowProject,
+      sourceFile: cell(r, "file name"),
+      packages,
+      totalWeight: kg, totalCbm: cbm,
+      statedPkgs: stated, listedCases: codes.length,
+      containers: [],
+    });
+  }
+  return groups.length ? { groups, client, project } : null;
+}
+
 function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, setDirectory, employees, colors, t, lang, hideExcelMode }) {
   const [showOlderSites, setShowOlderSites] = useState(false);
   const [mode, setMode] = useState("packinglist");
@@ -12515,125 +12639,6 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
 // The columns of the packing list summary sheet: one row per lot, each naming its own
 // client, site and reference. Several packing lists collapse into one file, which is then
 // read back here in a single upload instead of one at a time.
-// One row of the packing list summary, from whichever kind of file it came out of. The
-// reference is what everything downstream keys on - the DM number, the SHK, whatever the
-// maker calls its lot - and the cases are the real content, so the two are checked against
-// each other here and the answer travels with the row.
-// The maker's name as the depot writes it, and as the packing list wrote it. A Mitsubishi
-// list says 三菱电梯香港有限公司 and a TK one says (蒂升); the app knows them as Mitsubishi and
-// TK Elevator. Both are kept, because the English is what everything downstream matches on
-// and the Chinese is what the paperwork in front of you actually says.
-const hasCJK = (v) => /[\u3400-\u9FFF]/.test(String(v || ""));
-function clientNamePair(raw) {
-  const en = resolveClientGuess(raw) || (hasCJK(raw) ? "" : String(raw || "").trim());
-  const zh = hasCJK(raw) ? String(raw).trim()
-    : Object.entries(CHINESE_CLIENT_ALIASES).find(([, name]) => name === en)?.[0] || "";
-  return { en, zh };
-}
-// A site is written one way or the other on a packing list, rarely both. Whichever came off
-// the sheet is kept in its own column, and the directory is asked for the other half - that
-// is what the directory is for, and guessing a translation here would put a name in the file
-// that appears nowhere else.
-function siteNamePair(raw, directory) {
-  const text = String(raw || "").trim();
-  const norm = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9\u3400-\u9FFF]/g, "");
-  const key = norm(text);
-  const hit = key && (directory || []).find((d) => {
-    const a = norm(d.siteEn), b = norm(d.siteZh);
-    return (a && (a === key || a.includes(key) || key.includes(a)))
-      || (b && (b === key || b.includes(key) || key.includes(b)));
-  });
-  if (hit) return { en: hit.siteEn || (hasCJK(text) ? "" : text), zh: hit.siteZh || (hasCJK(text) ? text : "") };
-  return hasCJK(text) ? { en: "", zh: text } : { en: text, zh: "" };
-}
-function packingListSummaryRow(fileName, client, project, ref, packages, kg, cbm, statedPkgs, directory) {
-  const codes = (packages || []).map((p) => String((p && p.code) || "").trim()).filter(Boolean);
-  const pkgs = statedPkgs || codes.length || (packages || []).length;
-  const listed = codes.length;
-  const c = clientNamePair(client);
-  const site = siteNamePair(project, directory);
-  return {
-    "File Name": fileName,
-    "Client": c.en, "Client (\u4e2d\u6587)": c.zh,
-    "Project": site.en, "Project (\u4e2d\u6587)": site.zh,
-    "DM or SHK or other Client Reference": ref || "",
-    "PKGS": pkgs || "", "KGS": kg ? Math.round(kg * 100) / 100 : "",
-    "CBM": cbm ? Math.round(cbm * 1000) / 1000 : "",
-    "Cases": codes.join(", "),
-    // Blank when they agree, so the eye goes straight to the ones that do not.
-    "Check": listed === 0 ? "no case numbers" : (listed === pkgs ? "" : "Pkgs != Case #"),
-    __listed: listed,
-  };
-}
-const PL_SUMMARY_COLUMNS = ["File Name", "Client", "Client (\u4e2d\u6587)", "Project", "Project (\u4e2d\u6587)", "DM or SHK or other Client Reference", "PKGS", "KGS", "CBM", "Cases", "Check"];
-// A sheet only has to name its file, its packages and its cases to be recognised; the
-// client and site columns may be in either language.
-const PL_SUMMARY_REQUIRED = ["file name", "pkgs", "cases"];
-function packingListSummaryColumns(headerRow) {
-  const map = {};
-  (headerRow || []).forEach((cell, i) => {
-    const key = String(cell == null ? "" : cell).trim().toLowerCase();
-    if (!key) return;
-    // "DM or SHK or other Client Reference" is the reference column, however it is worded.
-    // "Client (中文)" and "Project (中文)" are their own columns; the plain ones stay the keys.
-    const name = /\bdm\b|shk|reference/.test(key) ? "reference"
-      : /^client\s*\(/.test(key) ? "clientzh"
-      : /^project\s*\(/.test(key) ? "projectzh"
-      : key;
-    if (map[name] === undefined) map[name] = i;
-  });
-  const named = map.client !== undefined || map.clientzh !== undefined;
-  return PL_SUMMARY_REQUIRED.every((k) => map[k] !== undefined) && map.reference !== undefined && named ? map : null;
-}
-// Turns that sheet back into the lots the packing list importer already knows how to place.
-// Cases are the real thing: where a lot lists them, they become its packages one for one,
-// and the stated package count is only used when there are none to count.
-function groupsFromPackingListSummary(grid) {
-  const headerIdx = (grid || []).findIndex((r) => packingListSummaryColumns(r));
-  if (headerIdx === -1) return null;
-  const col = packingListSummaryColumns(grid[headerIdx]);
-  const cell = (row, name) => {
-    const i = col[name];
-    return i === undefined ? "" : String((row || [])[i] == null ? "" : (row || [])[i]).trim();
-  };
-  const groups = [];
-  let client = "", project = "";
-  for (let i = headerIdx + 1; i < grid.length; i++) {
-    const r = grid[i] || [];
-    if (r.every((c) => String(c == null ? "" : c).trim() === "")) continue;
-    const codes = cell(r, "cases").split(/[,&\u3001]/).map((c) => c.trim()).filter(Boolean);
-    const stated = Number(String(cell(r, "pkgs")).replace(/,/g, "")) || 0;
-    const kg = Number(String(cell(r, "kgs")).replace(/,/g, "")) || 0;
-    const cbm = Number(String(cell(r, "cbm")).replace(/,/g, "")) || 0;
-    const count = codes.length || stated;
-    if (!count) continue;
-    // Either column will do on the way back in; the English one is preferred because that
-    // is what the depot matches on, but a sheet that only filled in the Chinese still works.
-    const rowClient = cell(r, "client") || cell(r, "clientzh");
-    const rowProject = cell(r, "project") || cell(r, "projectzh");
-    client = client || rowClient;
-    project = project || rowProject;
-    // Weight and volume are stated for the lot, so they are spread evenly across its cases.
-    // Nothing in this sheet says what any single case weighs.
-    const packages = (codes.length ? codes : Array.from({ length: stated }, (_, n) => `${n + 1}/${stated}`))
-      .map((code) => ({
-        code,
-        weightKg: kg ? String(Math.round((kg / count) * 100) / 100) : "",
-        cbm: cbm ? String(Math.round((cbm / count) * 1000) / 1000) : "",
-        description: "",
-      }));
-    groups.push({
-      lot: cell(r, "reference") || cell(r, "file name") || `row ${i + 1}`,
-      client: rowClient, project: rowProject,
-      sourceFile: cell(r, "file name"),
-      packages,
-      totalWeight: kg, totalCbm: cbm,
-      statedPkgs: stated, listedCases: codes.length,
-      containers: [],
-    });
-  }
-  return groups.length ? { groups, client, project } : null;
-}
   async function handlePackingListFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
