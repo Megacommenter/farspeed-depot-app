@@ -1788,6 +1788,9 @@ const TEXT = {
     saveNewSiteToDirectory: (name) => `Save "${name}" as a new site in the Directory, so future imports recognize it automatically`,
 
     siteTotalsTitle: "CBM & KG Remaining by Construction Site",
+    siteRefsColRef: "Reference (DM / SHK)",
+    siteRefsColLots: "Lifts",
+    siteRefsColCases: "Case numbers still at the depot",
     siteTotalsColLastCfs: "Last CFS",
     siteTotalsColLastDevan: "Last Devan",
     siteTotalsColLastDelivery: "Last delivery",
@@ -2556,6 +2559,9 @@ const TEXT = {
     saveNewSiteToDirectory: (name) => `將「${name}」儲存為目錄中的新地盤，日後匯入將自動識別`,
 
     siteTotalsTitle: "各地盤存倉之CBM及KG",
+    siteRefsColRef: "參考編號（DM / SHK）",
+    siteRefsColLots: "電梯",
+    siteRefsColCases: "尚存倉之件號",
     siteTotalsColLastCfs: "最近CFS",
     siteTotalsColLastDevan: "最近拆櫃",
     siteTotalsColLastDelivery: "最近送貨",
@@ -12719,6 +12725,7 @@ export default function FarspeedInventory() {
   const [deliveryFilterStatus, setDeliveryFilterStatus] = useState("All");
   const [printJobSheet, setPrintJobSheet] = useState(null);
   const [expandedRowId, setExpandedRowId] = useState(null);
+  const [openSite, setOpenSite] = useState({});
   const [siteTotalsOpen, setSiteTotalsOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -13441,6 +13448,19 @@ export default function FarspeedInventory() {
       // Cases still at the depot, to match the cbm and kg beside it. Counting entries here
       // instead read "4" for a site holding sixteen cases across four entries.
       map[key].pkgs += Math.max(0, totalUnits(it) - deliveredUnits(it));
+      // What is left at this site, broken down by the reference each lot came in under -
+      // the DM number for Mitsubishi, the SHK for Schindler, whatever the maker uses. The
+      // site row answers "how much"; this answers "which", which is the question that
+      // actually gets asked when someone rings up about a job.
+      const ref = String(it.invoiceNumber || "").trim() || String(it.unitCode || "").trim() || "\u2014";
+      const byRef = (map[key].refs = map[key].refs || {});
+      const b = (byRef[ref] = byRef[ref] || { ref, pkgs: 0, kg: 0, cbm: 0, codes: [], lots: [] });
+      const left = remainingPackages(it);
+      b.pkgs += left.length;
+      b.kg += left.reduce((n, p) => n + (Number(p.weightKg) || 0), 0);
+      b.cbm += left.reduce((n, p) => n + (Number(p.cbm) || 0), 0);
+      b.codes.push(...left.map((p) => p.code));
+      if (it.unitCode && !b.lots.includes(it.unitCode)) b.lots.push(it.unitCode);
     });
     // The last CFS, Devan and delivery each site saw, so a query about a site can be
     // answered from this table instead of opening every entry under it. Taken from every
@@ -13471,6 +13491,10 @@ export default function FarspeedInventory() {
       .map((s) => ({
         ...s, cbm: Math.round(s.cbm * 1000) / 1000, kg: Math.round(s.kg * 10) / 10,
         latest: latest[s.key] || {},
+        refs: Object.values(s.refs || {})
+          .map((b) => ({ ...b, kg: Math.round(b.kg * 10) / 10, cbm: Math.round(b.cbm * 1000) / 1000 }))
+          .filter((b) => b.pkgs > 0)
+          .sort((a, b) => b.pkgs - a.pkgs),
       }))
       .sort((a, b) => b.cbm - a.cbm);
   }, [openForDelivery, items, directory]);
@@ -13905,7 +13929,11 @@ export default function FarspeedInventory() {
                       <tr><td colSpan={8} className="px-3 py-4 text-center text-sm" style={{ color: colors.inkFaint }}>{t.siteTotalsNoneMsg}</td></tr>
                     )}
                     {siteTotals.map((s) => (
-                      <tr key={s.key} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
+                      <React.Fragment key={s.key}>
+                      <tr
+                        style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink, cursor: s.refs.length ? "pointer" : "default" }}
+                        onClick={() => s.refs.length && setOpenSite((o) => ({ ...o, [s.key]: !o[s.key] }))}
+                      >
                         <td className="px-3 py-2">
                           <div>{s.label}</div>
                           {s.labelZh && <div className="text-xs" style={{ color: colors.inkFaint }}>{s.labelZh}</div>}
@@ -13929,6 +13957,36 @@ export default function FarspeedInventory() {
                           </td>
                         ))}
                       </tr>
+                      {openSite[s.key] && s.refs.length > 0 && (
+                        <tr style={{ background: colors.surfaceDim }}>
+                          <td colSpan={8} className="px-3 py-2">
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr>
+                                  {[t.siteRefsColRef, t.siteRefsColLots, t.siteTotalsColPkgs, t.siteTotalsColKg, t.siteTotalsColCbm, t.siteRefsColCases].map((h, hi) => (
+                                    <th key={hi} className="text-left px-2 py-1 font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {s.refs.map((b) => (
+                                  <tr key={b.ref} style={{ borderTop: `1px solid ${colors.line}` }}>
+                                    <td className="px-2 py-1 font-semibold" style={{ color: colors.ink }}>{b.ref}</td>
+                                    <td className="px-2 py-1" style={{ color: colors.inkFaint }}>{b.lots.join(", ") || "\u2014"}</td>
+                                    <td className="px-2 py-1" style={{ fontFamily: FONT_MONO }}>{b.pkgs}</td>
+                                    <td className="px-2 py-1" style={{ fontFamily: FONT_MONO }}>{b.kg}</td>
+                                    <td className="px-2 py-1" style={{ fontFamily: FONT_MONO }}>{b.cbm}</td>
+                                    <td className="px-2 py-1" style={{ color: colors.inkFaint, wordBreak: "break-word", maxWidth: 420 }} title={b.codes.join(", ")}>
+                                      {b.codes.join(", ")}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </td>
+                        </tr>
+                      )}
+                      </React.Fragment>
                     ))}
                   </tbody>
                 </table>
