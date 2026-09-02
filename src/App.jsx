@@ -2280,6 +2280,13 @@ const TEXT = {
     legacyDeleteStrandedMsg: (labels) => `Nothing of this file's making is still on ${labels}, so those are left alone.`,
     legacyDeleteNothingMsg: "This file created no depot records, so there is nothing to reverse \u2014 only the archive listing will go.",
     legacyDeleteHint: "Site names, SS/D.O. numbers and other details this file filled in on existing entries are not undone. Cases returned to Incoming can be checked in again from the Incoming tab.",
+    legacySelectAllHint: "Select every file the filters above are showing",
+    legacySelectedCount: (n) => `${n} file${n === 1 ? "" : "s"} selected`,
+    legacyBulkReverseBtn: "Reverse records and delete",
+    legacyBulkDeleteBtn: "Delete listings only",
+    legacyClearSelection: "Clear selection",
+    legacyBulkDeleteConfirm: (n) => `Delete ${n} archive listing${n === 1 ? "" : "s"}?\n\nThe depot records they created stay exactly as they are \u2014 only the archived files go.\n\nThis cannot be undone.`,
+    legacyBulkReverseConfirm: (n, entries, removed) => `Reverse and delete ${n} file${n === 1 ? "" : "s"}?\n\n${entries} inventory ${entries === 1 ? "entry is" : "entries are"} affected, of which ${removed} will be removed outright. Cases return to Incoming.\n\nExport your inventory before doing this. It cannot be undone.`,
     legacyDeleteReverseBtn: "Reverse records and delete file",
     legacyDeleteKeepRecordsBtn: "Delete file, keep records",
     legacyDeleteListingOnlyBtn: "Delete file",
@@ -3104,6 +3111,13 @@ const TEXT = {
     legacyDeleteStrandedMsg: (labels) => `${labels} 已無此檔案所建立之記錄，故不作處理。`,
     legacyDeleteNothingMsg: "此檔案並未建立任何倉存記錄，無需還原 \u2014 只會刪除存檔記錄。",
     legacyDeleteHint: "此檔案為現有批次填入之地盤名稱、提單資料等不會撤銷。回復待辦之貨箱可於「待到倉」重新辦理到倉。",
+    legacySelectAllHint: "選取目前篩選結果中所有檔案",
+    legacySelectedCount: (n) => `已選 ${n} 份檔案`,
+    legacyBulkReverseBtn: "還原記錄並刪除",
+    legacyBulkDeleteBtn: "僅刪除存檔記錄",
+    legacyClearSelection: "取消選取",
+    legacyBulkDeleteConfirm: (n) => `確認刪除 ${n} 份存檔記錄？\n\n其所建立之倉庫記錄將完全保留，僅刪除存檔。\n\n此操作無法還原。`,
+    legacyBulkReverseConfirm: (n, entries, removed) => `確認還原並刪除 ${n} 份檔案？\n\n將影響 ${entries} 筆倉庫記錄，其中 ${removed} 筆會被刪除。貨箱退回「待到倉」。\n\n執行前請先匯出倉庫資料。此操作無法還原。`,
     legacyDeleteReverseBtn: "還原記錄並刪除檔案",
     legacyDeleteKeepRecordsBtn: "只刪除檔案，保留記錄",
     legacyDeleteListingOnlyBtn: "刪除檔案",
@@ -5607,7 +5621,7 @@ function InvoicesSection({ items, invoices, setInvoices, monthNames, yearOptions
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><td colSpan={9} className="px-3 py-6 text-center text-sm" style={{ color: colors.inkFaint }}>{t.invoicesNoneMsg}</td></tr>
+              <tr><td colSpan={10} className="px-3 py-6 text-center text-sm" style={{ color: colors.inkFaint }}>{t.invoicesNoneMsg}</td></tr>
             )}
             {rows.map(({ invoice, check }) => {
               const st = statusStyle[check.status];
@@ -10310,6 +10324,26 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
   const [backlogFileFilter, setBacklogFileFilter] = useState("All");
   const [backlogSort, setBacklogSort] = useState("recent");
   const [backlogTypeFilter, setBacklogTypeFilter] = useState("All");
+  const [picked, setPicked] = useState({});
+  // Deleting a site's backlog one row at a time is a hundred clicks, and a rebuild starts by
+  // clearing it. Selection follows the filters, so "select all" means all the rows on screen
+  // and never the ones a filter is hiding - which is the only way this is safe to offer.
+  const pickedIds = Object.keys(picked).filter((id) => picked[id]);
+  function deletePicked(alsoReverse) {
+    const rows = (legacyArchive || []).filter((r) => picked[r.id]);
+    if (!rows.length) return;
+    const plans = alsoReverse ? rows.map((r) => reversalPlanFor(r)) : [];
+    const entries = plans.reduce((n, p) => n + p.items.length, 0);
+    const removed = plans.reduce((n, p) => n + p.items.filter((x) => x.remove).length, 0);
+    if (!window.confirm(alsoReverse
+      ? t.legacyBulkReverseConfirm(rows.length, entries, removed)
+      : t.legacyBulkDeleteConfirm(rows.length))) return;
+    if (alsoReverse) plans.forEach((p) => onLegacyReverse && onLegacyReverse(p));
+    const ids = new Set(rows.map((r) => r.id));
+    ids.forEach((id) => storageSet(`legacyDoc:${id}`, "").catch(() => {}));
+    setLegacyArchive((prev) => prev.filter((r) => !ids.has(r.id)));
+    setPicked({});
+  }
   const [editingBacklogId, setEditingBacklogId] = useState(null);
   const [deletingBacklogId, setDeletingBacklogId] = useState(null);
   const [deletePlan, setDeletePlan] = useState(null);
@@ -11124,10 +11158,32 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
         </div>
       </div>
 
+      {pickedIds.length > 0 && (
+        <div className="rounded-lg px-4 py-2 mb-2 flex flex-wrap items-center gap-3" style={{ background: colors.navy, color: colors.onDark }}>
+          <span className="text-sm font-semibold" style={{ fontFamily: FONT_DISPLAY }}>{t.legacySelectedCount(pickedIds.length)}</span>
+          <button className="text-sm font-semibold" style={{ color: colors.amber }} onClick={() => deletePicked(true)}>
+            {t.legacyBulkReverseBtn}
+          </button>
+          <button className="text-sm font-semibold" style={{ color: "#CFC9BB" }} onClick={() => deletePicked(false)}>
+            {t.legacyBulkDeleteBtn}
+          </button>
+          <button className="text-sm ml-auto" style={{ color: "#9AA0AE" }} onClick={() => setPicked({})}>{t.legacyClearSelection}</button>
+        </div>
+      )}
       <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}` }}>
         <table className="w-full text-sm" style={{ background: colors.surface }}>
           <thead>
             <tr style={{ background: colors.surfaceDim }}>
+              <th className="px-3 py-2" style={{ width: 34 }}>
+                <input type="checkbox"
+                  title={t.legacySelectAllHint}
+                  checked={backlogSorted.length > 0 && backlogSorted.every((r) => picked[r.id])}
+                  onChange={(e) => {
+                    const next = { ...picked };
+                    backlogSorted.forEach((r) => { if (e.target.checked) next[r.id] = true; else delete next[r.id]; });
+                    setPicked(next);
+                  }} />
+              </th>
               {[t.legacyColFile, t.legacyDocType, t.clientLabel, t.legacyProjectSite, t.fJobNumber, t.fJobRef, t.colDate, t.legacyColLinked, ""].map((h) => (
                 <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
               ))}
@@ -11330,7 +11386,11 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
                 );
               }
               return (
-              <tr key={r.id} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
+               <tr key={r.id} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink, background: picked[r.id] ? colors.amberSoft : undefined }}>
+                  <td className="px-3 py-2">
+                    <input type="checkbox" checked={!!picked[r.id]}
+                      onChange={(e) => setPicked((p) => ({ ...p, [r.id]: e.target.checked }))} />
+                  </td>
                 <td className="px-3 py-2 max-w-[200px] truncate">{r.fileName}</td>
                 <td className="px-3 py-2">{r.docType}</td>
                 <td className="px-3 py-2">{r.client}</td>
