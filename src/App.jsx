@@ -2140,6 +2140,11 @@ const TEXT = {
     plrRefSiteClash: (list) => `this reference is given two different sites: ${list}`,
     plrChooseBtn: "Choose packing lists\u2026",
     plrReading: (name) => `Reading ${name}\u2026`,
+    plrSaveBtn: "Save table",
+    plrSavedNote: (n) => `${n} row${n === 1 ? "" : "s"} saved`,
+    plrSaveFailed: (err) => `could not be saved: ${err}`,
+    plrRestored: (n, at) => `${n} row${n === 1 ? "" : "s"} restored from ${at || "an earlier session"}`,
+    plrClearConfirm: (n) => `Clear all ${n} row${n === 1 ? "" : "s"}?\n\nAnything you have edited here and not downloaded will be lost.`,
     plrExportBtn: "Download spreadsheet",
     plrClearBtn: "Start over",
     plrTooBig: (kb) => `too big to scan at ${kb} KB \u2014 split it, or use the Excel version if there is one`,
@@ -2981,6 +2986,11 @@ const TEXT = {
     plrRefSiteClash: (list) => `此參考編號對應兩個不同地盤：${list}`,
     plrChooseBtn: "選擇裝箱單…",
     plrReading: (name) => `正在讀取 ${name}…`,
+    plrSaveBtn: "儲存表格",
+    plrSavedNote: (n) => `已儲存 ${n} 行`,
+    plrSaveFailed: (err) => `無法儲存：${err}`,
+    plrRestored: (n, at) => `已從 ${at || "上次"} 回復 ${n} 行`,
+    plrClearConfirm: (n) => `確認清除全部 ${n} 行？\n\n尚未匯出之修改將會遺失。`,
     plrExportBtn: "匯出表格",
     plrClearBtn: "重新開始",
     plrTooBig: (kb) => `檔案過大（${kb} KB），無法掃描 \u2014 請分割或改用 Excel 版本`,
@@ -14087,6 +14097,32 @@ export default function FarspeedInventory() {
   // packing list importer reads back in. Desktop work: a hundred files at a time is not
   // something anyone does on a phone.
   const [plrRows, setPlrRows] = useState([]);
+  const [plrSaved, setPlrSaved] = useState("");
+  // Reading a stack of PDFs takes minutes and the corrections take longer, so the table is
+  // kept and restored rather than lost to a closed tab. Saved on demand, not on every
+  // keystroke - a save that fires while someone is typing is a save nobody trusts.
+  useEffect(() => {
+    let live = true;
+    storageGet("packingListReaderRows").then((v) => {
+      if (!live || !v) return;
+      try {
+        const parsed = JSON.parse(v);
+        if (Array.isArray(parsed.rows) && parsed.rows.length) {
+          setPlrRows(parsed.rows);
+          setPlrSaved(t.plrRestored(parsed.rows.length, parsed.at || ""));
+        }
+      } catch (err) { /* nothing usable stored */ }
+    }).catch(() => {});
+    return () => { live = false; };
+  }, []);
+  async function savePackingListRows() {
+    try {
+      await storageSet("packingListReaderRows", JSON.stringify({ rows: plrRows, at: todayStr() }));
+      setPlrSaved(t.plrSavedNote(plrRows.length));
+    } catch (err) {
+      setPlrSaved(t.plrSaveFailed(String((err && err.message) || err)));
+    }
+  }
   const [plrBusy, setPlrBusy] = useState("");
   const [plrNotes, setPlrNotes] = useState([]);
   const plrInputRef = useRef(null);
@@ -15187,14 +15223,22 @@ export default function FarspeedInventory() {
                   <button className="px-3 py-1.5 rounded text-sm font-semibold mr-2"
                     style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY }}
                     onClick={exportPackingListSummary}>{t.plrExportBtn}</button>
+                  <button className="px-3 py-1.5 rounded text-sm font-semibold mr-2"
+                    style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY }}
+                    onClick={savePackingListRows}>{t.plrSaveBtn}</button>
                   <button className="text-sm font-semibold" style={{ color: colors.inkFaint }}
-                    onClick={() => { setPlrRows([]); setPlrNotes([]); }}>{t.plrClearBtn}</button>
+                    onClick={() => {
+                      if (plrRows.length && !window.confirm(t.plrClearConfirm(plrRows.length))) return;
+                      setPlrRows([]); setPlrNotes([]); setPlrSaved("");
+                      storageSet("packingListReaderRows", "").catch(() => {});
+                    }}>{t.plrClearBtn}</button>
                 </>
               )}
               {plrRows.length > 0 && (
                 <div className="text-xs mt-2" style={{ color: colors.inkFaint }}>
                   {t.plrCount(plrRows.length, new Set(plrRows.map((r) => r["File Name"])).size,
-                    plrRows.filter((r) => r.Check === "Pkgs != Case #").length)}
+                    plrRows.filter((r) => r.__conflict || r.Check).length)}
+                  {plrSaved ? ` \u00b7 ${plrSaved}` : ""}
                 </div>
               )}
             </div>
@@ -15212,23 +15256,44 @@ export default function FarspeedInventory() {
                   <tbody>
                     {plrRows.map((r, i) => (
                       <tr key={i} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
-                        {PL_SUMMARY_COLUMNS.map((c) => (
-                          <td key={c} className="px-3 py-1.5"
-                            style={{
-                              fontFamily: ["PKGS", "KGS", "CBM"].includes(c) ? FONT_MONO : undefined,
-                              // Every cell on a conflicting row reads red, not just the note,
-                              // so the row is obvious while scrolling a hundred of them.
-                              color: r.__conflict ? colors.red : (c === "Check" && r.Check ? colors.red : undefined),
-                              fontWeight: (r.__conflict || (c === "Check" && r.Check)) ? 600 : undefined,
-                              maxWidth: c === "Cases" ? 360 : undefined,
-                              overflow: c === "Cases" ? "hidden" : undefined,
-                              textOverflow: c === "Cases" ? "ellipsis" : undefined,
-                              whiteSpace: c === "Cases" ? "nowrap" : undefined,
-                            }}
-                            title={c === "Cases" ? r[c] : undefined}>
-                            {r[c] === "" || r[c] === undefined ? "\u2014" : String(r[c])}
-                          </td>
-                        ))}
+                        {PL_SUMMARY_COLUMNS.map((c) => {
+                          // File Name says where the row came from and Check is worked out
+                          // rather than typed, so those two stay read-only. Everything else
+                          // is editable: a scan puts the contract number in the client field
+                          // often enough that correcting it here, before the download, beats
+                          // correcting it in Excel afterwards and then again next time.
+                          const readOnly = c === "File Name" || c === "Check";
+                          const num = ["PKGS", "KGS", "CBM"].includes(c);
+                          const tone = r.__conflict ? colors.red : (c === "Check" && r.Check ? colors.red : colors.ink);
+                          if (readOnly) {
+                            return (
+                              <td key={c} className="px-3 py-1.5"
+                                style={{ color: tone, fontWeight: (r.__conflict || (c === "Check" && r.Check)) ? 600 : undefined, maxWidth: 260 }}>
+                                {r[c] === "" || r[c] === undefined ? "\u2014" : String(r[c])}
+                              </td>
+                            );
+                          }
+                          return (
+                            <td key={c} className="px-1 py-1">
+                              <input
+                                className="w-full rounded"
+                                style={{
+                                  border: `1px solid ${colors.line}`, background: colors.surface,
+                                  padding: "3px 6px", fontSize: 13, color: tone,
+                                  fontFamily: num ? FONT_MONO : undefined,
+                                  textAlign: num ? "right" : "left",
+                                  minWidth: c === "Cases" ? 320 : num ? 70 : 130,
+                                }}
+                                value={r[c] === undefined ? "" : String(r[c])}
+                                title={c === "Cases" ? String(r[c] || "") : undefined}
+                                onChange={(e) => {
+                                  const v = num ? (e.target.value === "" ? "" : Number(e.target.value) || e.target.value) : e.target.value;
+                                  setPlrRows((prev) => withConflicts(prev.map((row, n) => (n === i ? { ...row, [c]: v } : row))));
+                                }}
+                              />
+                            </td>
+                          );
+                        })}
                       </tr>
                     ))}
                   </tbody>
