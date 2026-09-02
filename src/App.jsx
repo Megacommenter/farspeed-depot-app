@@ -2312,6 +2312,8 @@ const TEXT = {
     legacyOversizeCbmPlaceholder: "CBM",
     legacyOversizeHint: "Bills at the oversize rate for this client, using this CBM as the basis.",
     legacyMatchedItemsCount: (n) => `Matched ${n} inventory ${n === 1 ? "entry" : "entries"} with cases still at the depot \u2014 select which left in this delivery`,
+    legacyMatchedItemsReturn: (n) => `Matched ${n} inventory ${n === 1 ? "entry" : "entries"} with cases out at site \u2014 select which came back on this return`,
+    legacyMatchedItemReturn: (id) => `Returning to ${id}`,
     legacyTypeSelectPlaceholder: "e.g. 1,3-5,7",
     legacyTypeSelectBtn: "Add",
     legacySelectedTotals: (count, kg, cbm) => `Selected: ${count} pkg${count === 1 ? "" : "s"} \u00b7 ${kg} kg \u00b7 ${cbm} cbm`,
@@ -3134,6 +3136,8 @@ const TEXT = {
     legacyOversizeCbmPlaceholder: "CBM",
     legacyOversizeHint: "將按此客戶的超大件收費標準計算，以此CBM為基礎。",
     legacyMatchedItemsCount: (n) => `配對到 ${n} 項倉內仍有貨件的存倉記錄 \u2014 請選擇此次送貨送出的件號`,
+    legacyMatchedItemsReturn: (n) => `配對到 ${n} 項已出貨之存倉記錄 \u2014 請選擇本次退回之件號`,
+    legacyMatchedItemReturn: (id) => `退回至 ${id}`,
     legacyTypeSelectPlaceholder: "例如 1,3-5,7",
     legacyTypeSelectBtn: "加入",
     legacySelectedTotals: (count, kg, cbm) => `已選：${count} 件 \u00b7 ${kg} kg \u00b7 ${cbm} cbm`,
@@ -6435,7 +6439,7 @@ function rowsFromJobSheetSpreadsheet(grid, file, resolveClient) {
       client: (resolveClient && resolveClient(cell(first, "client"))) || "",
       projectEn: cell(first, "project"), projectZh: "",
       jobNumber: cell(first, "job number"),
-      date: cell(first, "date"),
+      date: parseHKDate(cell(first, "date")),
       unitCode: cell(first, "lift no."),
       packageCount: pkgs ? String(pkgs) : "",
       weightKg: kg ? String(Math.round(kg * 100) / 100) : "",
@@ -6684,7 +6688,29 @@ function getPrintArea(wb, sheetIndex) {
 function firstDayOfSpan(raw) {
   return String(raw == null ? "" : raw)
     .replace(/\s+/g, "")
-    .replace(/^(\d{1,2})\s*-\s*(\d{0,2})(?=[\/\.\-])/, "$1");
+    // The span must be followed by a slash or a dot, which is how these sheets write them:
+    // "10-13/5/2026", "1-3.6.2026". Allowing a hyphen there swallowed ordinary dates -
+    // "3-2-26" is the 3rd of February, not a span - and left them to be misread.
+    .replace(/^(\d{1,2})\s*-\s*(\d{0,2})(?=[\/\.])/, "$1");
+}
+// Every date this software reads off a file is a Hong Kong date. Where the value is a real
+// date - a Date object out of a spreadsheet cell - it is taken as it stands, because there
+// is nothing to interpret. Where it is text, it is read day-month-year: "07/01/2026" is the
+// 7th of January. Letting the browser decide instead means American order, which is wrong
+// here and wrong silently, since it only differs on the twelve days a month where both
+// readings are possible.
+function parseHKDate(value) {
+  if (value instanceof Date && !isNaN(value)) return dateToLocalISO(value);
+  const text = String(value == null ? "" : value).trim();
+  if (!text) return "";
+  // Already year-first and unambiguous.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const dayFirst = parseSheetDayFirstDate(text);
+  if (dayFirst) return dayFirst;
+  // Something else entirely - a month name, say - where there is no day/month order to get
+  // wrong.
+  const d = new Date(text);
+  return isNaN(d) ? "" : dateToLocalISO(d);
 }
 function parseSheetDayFirstDate(raw) {
   const s = firstDayOfSpan(raw).replace(/[\/\.\-]+/g, "/");
@@ -7298,10 +7324,17 @@ function parseJobSheetBlocks(rows) {
   }
   return { blocks, orphanFigureRows, ownDmRef };
 }
-function guessFieldsFromWorkbook(wb) {
+function guessFieldsFromWorkbook(wb, opts) {
   const sheetIndex = 0;
   const sheet = wb.Sheets[wb.SheetNames[sheetIndex]];
   let rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false });
+  // The same grid unformatted. A cell holding a real date comes back as a Date here, while
+  // the formatted grid above renders it through the cell's own format - which on these
+  // sheets is often month-first, "6/13/26". A date somebody typed as text stays text in
+  // both. That difference is the only dependable way to tell "07/01/2026" meaning the 7th
+  // of January from a formatted cell meaning the 1st of July, and getting it wrong is
+  // invisible for the twelve days a month where both readings work.
+  let rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: true, cellDates: true });
   const printArea = getPrintArea(wb, sheetIndex);
   if (printArea) {
     if (printArea.lastRow) rows = rows.slice(0, printArea.lastRow);
@@ -7309,7 +7342,17 @@ function guessFieldsFromWorkbook(wb) {
   }
   const flatText = rows.map((r) => r.join(" ")).join("\n");
 
-  const siteBlock = findAddressLines(rows, JOBSHEET_LABEL_ALIASES.to);
+  // The site is normally where the job sheet is going TO. A Return runs the other way: the
+  // goods come from the site back to the yard, so the sheet's TO is the depot - "石崗(一)倉" -
+  // and reading it as the project files the whole job under the storage yard. The site of a
+  // Return is its FROM. Which end to read is decided by the sheet itself rather than by the
+  // filename, since a document that arrives without one still has to land in the right place.
+  // Nothing on the page says "return" - these sheets are all headed 工單 / JOB SHEET - so
+  // the caller has to say which kind it is. It knows, from the filename.
+  const goingBack = String((opts && opts.docType) || "").toLowerCase() === "return"
+    || /\bRETURN\b|\u9000\u56de|\u9000\u5009/i.test(rows.slice(0, 24).map((r) => r.join(" ")).join(" "));
+  const siteBlock = findAddressLines(rows, goingBack ? JOBSHEET_LABEL_ALIASES.from : JOBSHEET_LABEL_ALIASES.to);
+
   const out = {
     client: findLabelValue(rows, JOBSHEET_LABEL_ALIASES.account),
     jobNumber: findLabelValue(rows, JOBSHEET_LABEL_ALIASES.jobNo),
@@ -7329,6 +7372,10 @@ function guessFieldsFromWorkbook(wb) {
   };
 
   const rawDate = findLabelValue(rows, JOBSHEET_LABEL_ALIASES.date);
+  // The same cell unformatted. When Excel holds it as a real date this is a Date object and
+  // there is nothing to interpret; when it is text, this is the text and the day-first
+  // reading applies.
+  const rawDateCell = findLabelValue(rawRows, JOBSHEET_LABEL_ALIASES.date);
   if (rawDate) {
     // A DATE cell Excel holds as a real date arrives here already formatted month-first
     // ("6/5/26"), so Date() reads it correctly. A hand-typed one is text, written day-first
@@ -7342,8 +7389,14 @@ function guessFieldsFromWorkbook(wb) {
     // into something plausible-looking and wrong.
     const handTyped = /[\-\/.]\s*[\-\/.]/.test(String(rawDate))
       || /^\s*\d{1,2}\s*-\s*\d{0,2}\s*[\/\.\-]/.test(String(rawDate));
-    const d = handTyped ? NaN : new Date(rawDate);
-    out.date = !isNaN(d) ? dateToLocalISO(d) : parseSheetDayFirstDate(rawDate);
+    // Anything written as d/m/y is read day-first, always. These sheets are Hong Kong
+    // sheets and 07/01/2026 is the 7th of January, but Date() reads it American-style as
+    // the 1st of July - silently, and only for the twelve days of each month where both
+    // readings are possible, which is exactly when nobody notices. Return 1 came through
+    // six months late that way. A real date cell is unambiguous and still goes to Date().
+    // The unformatted cell first, since a real date there settles it outright; otherwise the
+    // formatted text, read day-first.
+    out.date = parseHKDate(rawDateCell instanceof Date ? rawDateCell : rawDate);
   }
 
   const referMatches = [...flatText.matchAll(/ref(?:er)?\.?\s*(?:to\s+)?job\s*no\.?\s*([A-Za-z0-9\-]+)\s*(?:on\s*([\d\/\.\- ]+\d))?/gi)];
@@ -8458,6 +8511,16 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
       .map((r) => ({ refJobNumber: r, lots: [] }));
     return [...fromSheet.filter((b) => typed.some((r) => jobNosMatch(b.refJobNumber, r))), ...extra];
   })();
+  // What this sheet can pick from. A Delivery takes cases that are at the depot; a Return
+  // brings back cases that are out at site, so it has to offer the delivered ones instead.
+  // Offering it the depot's stock is why it found none of its cases and reported them all
+  // as missing - they were missing precisely because they had been delivered, which is the
+  // whole reason a Return exists.
+  function selectablePackages(it) {
+    if (row.docType !== "Return") return deliverablePackages(it);
+    const out = new Set(deliveredCodes(it).map((c) => String(c).trim()));
+    return (it.packages || []).filter((p) => out.has(String(p.code).trim()));
+  }
   const deliveryMatch = (() => {
     if (!matchesInventory || !row.client) return { list: [], unmatched: [] };
     // A Delivery can only take what is still at the depot. A Return is putting cases back,
@@ -8542,7 +8605,7 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
   function sheetSelectionFor(it) {
     const coded = sheetCodesFor(it);
     if (coded && (coded.codes || []).length) {
-      const deliverable = deliverablePackages(it);
+      const deliverable = selectablePackages(it);
       // fall through to the shared shape below
       // Matched with the brackets off, so a sheet's "(10-1/10B-1)" finds the case the
       // packing list holds as "10-1/10B-1".
@@ -8563,7 +8626,7 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
       const m = String(code).match(/\/(\d+)\s*$/);
       return !m || Number(m[1]) === mark.lotCases;
     };
-    const deliverable = deliverablePackages(it).filter((p) => sameLot(p.code));
+    const deliverable = selectablePackages(it).filter((p) => sameLot(p.code));
     const wanted = new Set(mark.numbers);
     const codes = deliverable.filter((p) => wanted.has(codeLeadingNumber(p.code))).map((p) => p.code);
     const present = new Set(deliverable.map((p) => codeLeadingNumber(p.code)));
@@ -9153,7 +9216,7 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
       {matchedItems.length > 0 && (
         <div className="rounded p-3" style={{ background: colors.greenSoft, border: `1px solid ${colors.green}` }}>
           <div className="text-sm font-semibold mb-2" style={{ color: colors.green }}>
-            {t.legacyMatchedItemsCount(matchedItems.length)}
+            {row.docType === "Return" ? t.legacyMatchedItemsReturn(matchedItems.length) : t.legacyMatchedItemsCount(matchedItems.length)}
           </div>
           {(() => {
             const grand = matchedItems.reduce((acc, it) => {
@@ -9181,7 +9244,7 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
           )}
           <div className="flex flex-col gap-4">
             {matchedItems.map((it) => {
-              const remainingPkgs = deliverablePackages(it);
+              const remainingPkgs = selectablePackages(it);
               const sheetSel = sheetSelectionFor(it);
               const selectedCodes = selectedByItem[it.id] || [];
               const derivedTotals = selectedItemTotals(it, selectedCodes);
@@ -9193,7 +9256,7 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
                 <div key={it.id} style={{ borderTop: `1px solid ${colors.green}`, paddingTop: 10 }}>
                   <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
                     <div className="text-xs font-semibold" style={{ color: colors.green, fontFamily: FONT_DISPLAY }}>
-                      {t.legacyMatchedItem(it.id)}{it.unitCode ? ` \u00b7 ${it.unitCode}` : ""}{it.jobNumber ? ` \u00b7 ${t.fJobNumber}: ${it.jobNumber}` : ""}
+                      {row.docType === "Return" ? t.legacyMatchedItemReturn(it.id) : t.legacyMatchedItem(it.id)}{it.unitCode ? ` \u00b7 ${it.unitCode}` : ""}{it.jobNumber ? ` \u00b7 ${t.fJobNumber}: ${it.jobNumber}` : ""}
                     </div>
                     <div className="flex items-center gap-2">
                       <input
@@ -10500,7 +10563,7 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
             newRows.push(...fromSpreadsheet);
             continue;
           }
-          const guessed = guessFieldsFromWorkbook(wb);
+          const guessed = guessFieldsFromWorkbook(wb, { docType: base.docType });
           const clientMatch = resolveClientGuess(guessed.client);
           Object.assign(base, {
             client: clientMatch || base.client,
