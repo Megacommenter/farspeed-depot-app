@@ -1230,7 +1230,12 @@ function storageLedger(items, directory) {
     activeDeliveries(it).forEach((d) => g.moves.push({
       arrivalId: "", deliveryId: d.id || "",
       date: d.date || "", dir: "OUT", jobNumber: d.jobNumber || "", ref, lot: it.unitCode || "",
-      pkgs: (d.codes || []).length, type: "Delivery", entryId: it.id,
+      pkgs: (d.codes || []).length,
+      // A delivery whose cases all came back still shows, carrying nothing. The trip
+      // happened and is charged at the minimum, so dropping the row would hide a movement
+      // that has to be invoiced.
+      type: d.allReturned ? "Delivery (all returned)" : "Delivery",
+      entryId: it.id,
     }));
   });
   return Object.values(sites).map((g) => {
@@ -2139,6 +2144,7 @@ const TEXT = {
     navLedger: "Storage ledger",
     ledgerTitle: "Storage ledger",
     ledgerDesc: "Every arrival and delivery the depot has recorded, a site at a time, in date order with a running balance \u2014 the same shape as a client's own store list, so the two can be read side by side. Charges and free days are not shown here; those follow the billing rules rather than the movements.",
+    legacyReturnedNote: (job) => `cases returned on job ${job}`,
     ledgerNoDate: "NO DATE",
     ledgerAddDateHint: "Set the date this movement happened \u2014 it will then count in the balance",
     ledgerNotCounted: "not counted",
@@ -2960,6 +2966,7 @@ const TEXT = {
     navLedger: "存倉紀錄",
     ledgerTitle: "存倉紀錄",
     ledgerDesc: "依地盤列出所有到倉及送貨記錄，按日期排列並附累計餘數 \u2014 格式與客戶存倉清單一致，便於對照。此處不列載費用及免費期，該等項目依據收費規則而非出入記錄。",
+    legacyReturnedNote: (job) => `貨箱於工單 ${job} 退回`,
     ledgerNoDate: "未填日期",
     ledgerAddDateHint: "輸入此筆出入倉之實際日期 \u2014 完成後即會計入餘數",
     ledgerNotCounted: "不計入",
@@ -8178,7 +8185,13 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
   const inputStyle = inputStyleFor(colors);
   const set = (k) => (e) => onChange({ ...row, [k]: e.target.value });
   const itemized = JOB_SHEET_ITEMIZED.includes(row.docType);
+  // A Devan or a CFS brings goods in off a packing list, so it is matched against Incoming.
+  // A Return brings back cases that already went out, so what it has to find is the entry
+  // they were delivered from - the same lookup a Delivery does, against inventory. Filing it
+  // with the arrivals sent it hunting through packing lists it will never appear on, which
+  // is why it showed none of its referral blocks.
   const canMatchIncoming = row.docType === "Devan" || row.docType === "CFS";
+  const matchesInventory = row.docType === "Delivery" || row.docType === "Return";
   const matchedIncomings = canMatchIncoming && row.client && (row.projectEn || row.projectZh)
     ? (incoming || []).filter((inc) => {
         if (inc.client !== row.client) return false;
@@ -8446,9 +8459,13 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
     return [...fromSheet.filter((b) => typed.some((r) => jobNosMatch(b.refJobNumber, r))), ...extra];
   })();
   const deliveryMatch = (() => {
-    if (row.docType !== "Delivery" || !row.client) return { list: [], unmatched: [] };
-    const base = (items || []).filter((it) =>
-      it.client === row.client && (it.packages || []).length > 0 && deliverablePackages(it).length > 0);
+    if (!matchesInventory || !row.client) return { list: [], unmatched: [] };
+    // A Delivery can only take what is still at the depot. A Return is putting cases back,
+    // so the entries it needs are the ones that have been delivered from - filtering to what
+    // is still deliverable would hide exactly the entries it is looking for.
+    const base = (items || []).filter((it) => it.client === row.client
+      && (it.packages || []).length > 0
+      && (row.docType === "Return" || deliverablePackages(it).length > 0));
     const siteOk = (it) => !!(row.projectEn || row.projectZh)
       && sitesLooselyMatch(row.projectEn, row.projectZh, it.project, it.constructionSite);
     if (!deliveryRefBlocks.length) return { list: base.filter(siteOk), unmatched: [] };
@@ -8855,7 +8872,7 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
                 </div>
               </>
             )}
-            {row.docType === "Delivery" && (
+            {matchesInventory && (
               <>
                 <Field label={t.legacyReferJobNoLabel} hint={t.legacyReferJobNoHint} colors={colors}>
                   <input className={inputClass} style={inputStyle} value={row.referJobNumber} onChange={set("referJobNumber")} />
@@ -9370,7 +9387,7 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
           {t.legacyRowMissingHint(legacyRowMissing(row).map((k) => t.legacyFieldNames[k]).join(", "))}
         </div>
       )}
-      {row.docType === "Delivery" && matchedItems.length === 0 && (
+      {matchesInventory && matchedItems.length === 0 && (
         <div className="px-2 py-1.5 rounded text-xs" style={{ background: colors.redSoft, color: colors.red }}>
           {row.referJobNumber
             ? (arrivalComingInThisBatch(row.referJobNumber)
@@ -9379,7 +9396,7 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
             : t.legacyNoReferralHint}
         </div>
       )}
-      {row.docType === "Delivery" && matchedItems.length > 0 && unmatchedRefs.length > 0 && (
+      {matchesInventory && matchedItems.length > 0 && unmatchedRefs.length > 0 && (
         <div className="px-2 py-1.5 rounded text-xs" style={{ background: colors.redSoft, color: colors.red }}>
           {t.legacySomeArrivalsUnmatched(unmatchedRefs.join(", "))}
         </div>
@@ -10716,12 +10733,25 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
     // the case-selection UI) deliver those exact codes; rows with no match fall back to
     // the old referJobNumber + flat package count behaviour.
     const existingDeliveryEntries = [];
+    const returnEntries = [];
     let sameBatchDeliveryCount = 0;
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      if (row.docType !== "Delivery") continue;
+      // A Return runs the same matching and the same case selection as a Delivery, but the
+      // cases are coming back rather than going out. Handled below by cancelling the
+      // delivery records that took them out, which is what physically happened: the goods
+      // returned, so they were never really delivered.
+      if (row.docType !== "Delivery" && row.docType !== "Return") continue;
       const archiveEntry = archiveEntries[i];
       const selectedByItem = row.selectedByItem || {};
+      if (row.docType === "Return") {
+        for (const [itemId, codes] of Object.entries(selectedByItem)) {
+          if (!codes || codes.length === 0) continue;
+          const returned = new Set(codes);
+          returnEntries.push({ itemId, codes: [...returned], row, archiveEntry });
+        }
+        continue;
+      }
       const hasItemSelections = Object.values(selectedByItem).some((codes) => (codes || []).length > 0);
 
       if (hasItemSelections) {
@@ -10811,6 +10841,40 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
         if (!entry.linkedItemIds.includes(r.itemId)) entry.linkedItemIds.push(r.itemId);
         entry.linkedItemId = entry.linkedItemIds.join(", ");
       });
+    }
+
+    // Returns, applied last so they act on entries the deliveries in this same batch have
+    // already touched. A returned case is taken back off whichever delivery took it out -
+    // the goods came back, so that case was not delivered after all - and the entry holds it
+    // again. A delivery left with no cases at all is cancelled rather than kept as an empty
+    // record.
+    if (returnEntries.length > 0 && onLegacyEnrich) {
+      const patches = [];
+      for (const r of returnEntries) {
+        const it = (items || []).find((x) => x.id === r.itemId);
+        if (!it) continue;
+        const back = new Set(r.codes.map((c) => String(c).trim()));
+        let touched = 0;
+        const deliveries = (it.deliveries || []).map((d) => {
+          const keep = (d.codes || []).filter((c) => !back.has(String(c).trim()));
+          if (keep.length === (d.codes || []).length) return d;
+          touched += (d.codes || []).length - keep.length;
+          // The record stays either way, even when every case came back. The truck still went
+          // to site and back, and that trip is charged at the minimum whatever returned with
+          // it - cancelling the delivery would erase a movement that really happened and a
+          // charge that is really owed. What changes is the cases it carried.
+          return {
+            ...d, codes: keep,
+            allReturned: keep.length === 0,
+            notes: [d.notes, t.legacyReturnedNote(r.row.jobNumber)].filter(Boolean).join(" \u00b7 "),
+          };
+        });
+        if (!touched) continue;
+        patches.push({ itemId: r.itemId, patch: { deliveries } });
+        if (!r.archiveEntry.linkedItemIds.includes(r.itemId)) r.archiveEntry.linkedItemIds.push(r.itemId);
+        r.archiveEntry.linkedItemId = r.archiveEntry.linkedItemIds.join(", ");
+      }
+      if (patches.length) onLegacyEnrich(patches);
     }
 
     setLegacyArchive((prev) => [...archiveEntries, ...prev]);
