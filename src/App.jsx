@@ -2135,6 +2135,9 @@ const TEXT = {
     navPlReader: "Packing list reader",
     plrTitle: "Packing list reader",
     plrDesc: "Read a stack of packing lists at once \u2014 Excel straight off the sheet, PDF through the same scanner the single-file screen uses. The result downloads as one spreadsheet, which Packing List Import reads back in a single upload. Check the last column before you use it: it flags any lot whose case list does not match the package count it declares.",
+    plrDupCase: (code, files) => `case ${code} is on more than one file (${files})`,
+    plrRefClientClash: (list) => `this reference is given two different clients: ${list}`,
+    plrRefSiteClash: (list) => `this reference is given two different sites: ${list}`,
     plrChooseBtn: "Choose packing lists\u2026",
     plrReading: (name) => `Reading ${name}\u2026`,
     plrExportBtn: "Download spreadsheet",
@@ -2973,6 +2976,9 @@ const TEXT = {
     navPlReader: "裝箱單讀取",
     plrTitle: "裝箱單讀取",
     plrDesc: "一次讀取多份裝箱單 \u2014 Excel 直接讀取，PDF 則交由與單檔畫面相同之掃描器處理。結果可匯出為一份表格，再由「裝箱單匯入」一次載入。使用前請先核對最後一欄：凡件數與件號不符者均會標示。",
+    plrDupCase: (code, files) => `件號 ${code} 同時出現於多份檔案（${files}）`,
+    plrRefClientClash: (list) => `此參考編號對應兩個不同客戶：${list}`,
+    plrRefSiteClash: (list) => `此參考編號對應兩個不同地盤：${list}`,
     plrChooseBtn: "選擇裝箱單…",
     plrReading: (name) => `正在讀取 ${name}…`,
     plrExportBtn: "匯出表格",
@@ -14137,11 +14143,49 @@ export default function FarspeedInventory() {
       }
     }
     setPlrBusy("");
-    setPlrRows((prev) => [...prev, ...rows]);
+    setPlrRows((prev) => withConflicts([...prev, ...rows]));
     setPlrNotes((prev) => [...prev, ...notes]);
   }
+  // The same DM arriving on several files is normal - a consignment is routinely split
+  // across two packing lists, and the machine bases or the car tops come on their own. What
+  // is not normal is the same case appearing twice, or one DM being given two different
+  // clients or sites. Those are marked so they can be sorted out in the spreadsheet before
+  // any of it reaches the depot.
+  function withConflicts(rows) {
+    const seenCase = new Map();
+    const byRef = new Map();
+    rows.forEach((r, i) => {
+      String(r.Cases || "").split(",").map((c) => c.trim()).filter(Boolean).forEach((c) => {
+        const k = c.toUpperCase();
+        seenCase.set(k, [...(seenCase.get(k) || []), i]);
+      });
+      const ref = String(r["DM or SHK or other Client Reference"] || "").trim().toUpperCase();
+      if (ref) byRef.set(ref, [...(byRef.get(ref) || []), i]);
+    });
+    const notes = rows.map(() => []);
+    seenCase.forEach((idxs, code) => {
+      if (idxs.length < 2) return;
+      idxs.forEach((i) => notes[i].push(t.plrDupCase(code, [...new Set(idxs.map((j) => rows[j]["File Name"]))].join(", "))));
+    });
+    byRef.forEach((idxs) => {
+      if (idxs.length < 2) return;
+      const clients = [...new Set(idxs.map((i) => rows[i].Client).filter(Boolean))];
+      const sites = [...new Set(idxs.map((i) => rows[i].Project).filter(Boolean))];
+      if (clients.length > 1) idxs.forEach((i) => notes[i].push(t.plrRefClientClash(clients.join(" / "))));
+      if (sites.length > 1) idxs.forEach((i) => notes[i].push(t.plrRefSiteClash(sites.join(" / "))));
+    });
+    return rows.map((r, i) => {
+      const all = [...new Set([r.Check, ...notes[i]].filter(Boolean))];
+      return { ...r, Check: all.join(" \u00b7 "), __conflict: notes[i].length > 0 };
+    });
+  }
   function exportPackingListSummary() {
-    const data = plrRows.map((r) => PL_SUMMARY_COLUMNS.map((c) => (r[c] === undefined ? "" : r[c])));
+    // Conflicting rows are put at the top rather than coloured. The spreadsheet writer in
+    // this app cannot set a font colour - it writes no styles at all - so red would simply
+    // not survive the download. Sorting them to the front, with the reason spelled out in
+    // Check, puts them where they cannot be scrolled past instead.
+    const ordered = [...plrRows].sort((a, b) => (b.__conflict ? 1 : 0) - (a.__conflict ? 1 : 0));
+    const data = ordered.map((r) => PL_SUMMARY_COLUMNS.map((c) => (r[c] === undefined ? "" : r[c])));
     const ws = XLSX.utils.aoa_to_sheet([PL_SUMMARY_COLUMNS, ...data]);
     ws["!cols"] = PL_SUMMARY_COLUMNS.map((c) => ({ wch: c === "Cases" ? 70 : c === "File Name" || c === "Project" ? 28 : 16 }));
     const wb = XLSX.utils.book_new();
@@ -15172,8 +15216,10 @@ export default function FarspeedInventory() {
                           <td key={c} className="px-3 py-1.5"
                             style={{
                               fontFamily: ["PKGS", "KGS", "CBM"].includes(c) ? FONT_MONO : undefined,
-                              color: c === "Check" && r.Check ? colors.red : undefined,
-                              fontWeight: c === "Check" && r.Check ? 600 : undefined,
+                              // Every cell on a conflicting row reads red, not just the note,
+                              // so the row is obvious while scrolling a hundred of them.
+                              color: r.__conflict ? colors.red : (c === "Check" && r.Check ? colors.red : undefined),
+                              fontWeight: (r.__conflict || (c === "Check" && r.Check)) ? 600 : undefined,
                               maxWidth: c === "Cases" ? 360 : undefined,
                               overflow: c === "Cases" ? "hidden" : undefined,
                               textOverflow: c === "Cases" ? "ellipsis" : undefined,
