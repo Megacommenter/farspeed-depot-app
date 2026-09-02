@@ -2136,6 +2136,16 @@ const TEXT = {
     navLedger: "Storage ledger",
     ledgerTitle: "Storage ledger",
     ledgerDesc: "Every arrival and delivery the depot has recorded, a site at a time, in date order with a running balance \u2014 the same shape as a client's own store list, so the two can be read side by side. Charges and free days are not shown here; those follow the billing rules rather than the movements.",
+    ledgerNoDate: "NO DATE",
+    ledgerNotCounted: "not counted",
+    ledgerUndatedTotal: (n) => `${n} movement${n === 1 ? "" : "s"} with no date \u2014 shown in red on the sites below, and left out of every balance until dated.`,
+    ledgerAsOfLabel: "As of",
+    ledgerAsOfToday: "Today",
+    ledgerTotalOnHand: (d) => `packages on hand${d ? ` as at ${d}` : ""}, across every site`,
+    ledgerSetAside: (later, undated) => [
+      later ? `${later} movement${later === 1 ? "" : "s"} dated after this day` : "",
+      undated ? `${undated} with no date` : "",
+    ].filter(Boolean).join(" \u00b7 ") + " set aside, and not counted in the balance.",
     ledgerExportBtn: "Export ledger",
     ledgerSiteLine: (i, o, b) => `${i} in \u00b7 ${o} out \u00b7 ${b} on hand`,
     ledgerColDate: "Date",
@@ -2946,6 +2956,16 @@ const TEXT = {
     navLedger: "存倉紀錄",
     ledgerTitle: "存倉紀錄",
     ledgerDesc: "依地盤列出所有到倉及送貨記錄，按日期排列並附累計餘數 \u2014 格式與客戶存倉清單一致，便於對照。此處不列載費用及免費期，該等項目依據收費規則而非出入記錄。",
+    ledgerNoDate: "未填日期",
+    ledgerNotCounted: "不計入",
+    ledgerUndatedTotal: (n) => `共 ${n} 筆未填日期 \u2014 已於下方地盤以紅色標示，在補上日期前不計入任何餘數。`,
+    ledgerAsOfLabel: "截至日期",
+    ledgerAsOfToday: "今日",
+    ledgerTotalOnHand: (d) => `件存倉（${d ? `截至 ${d}` : ""}），全部地盤合計`,
+    ledgerSetAside: (later, undated) => [
+      later ? `${later} 筆日期晚於此日` : "",
+      undated ? `${undated} 筆未填日期` : "",
+    ].filter(Boolean).join(" \u00b7 ") + "，不計入餘數。",
     ledgerExportBtn: "匯出紀錄",
     ledgerSiteLine: (i, o, b) => `入 ${i} \u00b7 出 ${o} \u00b7 現存 ${b}`,
     ledgerColDate: "日期",
@@ -13861,11 +13881,52 @@ export default function FarspeedInventory() {
     XLSX.utils.book_append_sheet(wb, ws, "Packing Lists");
     XLSX.writeFile(wb, `packing-lists-${todayStr()}.xlsx`);
   }
-  const ledgerSites = useMemo(() => storageLedger(activeItemsList, directory), [activeItemsList, directory]);
+  const ledgerAll = useMemo(() => storageLedger(activeItemsList, directory), [activeItemsList, directory]);
   const [ledgerOpen, setLedgerOpen] = useState({});
+  const [ledgerAsOf, setLedgerAsOf] = useState(todayStr());
+  // The ledger as it stood on a chosen day. Movements dated after it are set aside and the
+  // running balance rebuilt without them, which answers "what was in the warehouse on the
+  // 31st" for a billing month, and - with today's date, which is where it starts - keeps
+  // paperwork entered ahead of time out of the figure. An undated movement has no place on
+  // a dated view, so it is set aside too and counted separately rather than assumed recent.
+  const ledgerSites = useMemo(() => {
+    const cut = String(ledgerAsOf || "").trim();
+    if (!cut) return ledgerAll.map((g) => ({ ...g, undatedMoves: [], later: 0, undated: 0 }));
+    return ledgerAll.map((g) => {
+      const kept = [];
+      const undatedMoves = [];
+      let later = 0;
+      g.moves.forEach((m) => {
+        // Kept, not discarded. A movement with no date cannot be placed on a dated view, but
+        // hiding it is how it stays undated: it has to be visible, and obviously wrong, for
+        // anyone to go and fix it.
+        if (!m.date) { undatedMoves.push({ ...m }); return; }
+        if (String(m.date) > cut) { later += 1; return; }
+        kept.push({ ...m });
+      });
+      const undated = undatedMoves.length;
+      let bal = 0;
+      kept.forEach((m) => { bal += m.dir === "IN" ? m.pkgs : -m.pkgs; m.balance = bal; });
+      return {
+        ...g, moves: kept, undatedMoves, balance: bal, later, undated,
+        inTotal: kept.filter((m) => m.dir === "IN").reduce((n, m) => n + m.pkgs, 0),
+        outTotal: kept.filter((m) => m.dir === "OUT").reduce((n, m) => n + m.pkgs, 0),
+      };
+    }).filter((g) => g.moves.length || g.later || g.undated)
+      .sort((a, b) => b.balance - a.balance);
+  }, [ledgerAll, ledgerAsOf]);
+  const ledgerTotal = useMemo(() => ledgerSites.reduce((n, g) => n + g.balance, 0), [ledgerSites]);
+  const ledgerUndatedTotal = useMemo(() => ledgerSites.reduce((n, g) => n + (g.undated || 0), 0), [ledgerSites]);
   function exportLedger() {
+    // Exports what is on screen, which is the ledger as at the chosen day - not everything
+    // on file. A month-end figure that quietly included next month's paperwork would be
+    // worse than useless.
     const head = ["Site", "Client", "FC Job No.", "In / Out", "Type", "Date", "Reference (DM / SHK)", "Lift", "Pkgs In", "Pkgs Out", "Balance"];
     const rows = [head];
+    ledgerSites.forEach((g) => (g.undatedMoves || []).forEach((m) => rows.push([
+      g.label, g.client, m.jobNumber, m.dir, m.type, "NO DATE", m.ref, m.lot,
+      m.dir === "IN" ? m.pkgs : "", m.dir === "OUT" ? m.pkgs : "", "not counted",
+    ])));
     ledgerSites.forEach((g) => g.moves.forEach((m) => rows.push([
       g.label, g.client, m.jobNumber, m.dir, m.type, m.date, m.ref, m.lot,
       m.dir === "IN" ? m.pkgs : "", m.dir === "OUT" ? m.pkgs : "", m.balance,
@@ -13874,7 +13935,7 @@ export default function FarspeedInventory() {
     ws["!cols"] = head.map((h) => ({ wch: h === "Site" ? 34 : h === "Reference (DM / SHK)" ? 24 : 13 }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Storage Ledger");
-    XLSX.writeFile(wb, `farspeed-storage-ledger-${todayStr()}.xlsx`);
+    XLSX.writeFile(wb, `farspeed-storage-ledger-as-at-${ledgerAsOf || todayStr()}.xlsx`);
   }
   const [storeMoves, setStoreMoves] = useState(null);
   const [storeName, setStoreName] = useState("");
@@ -14817,7 +14878,24 @@ export default function FarspeedInventory() {
             <div className="rounded-lg p-4 flex flex-wrap items-start gap-3" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
               <div style={{ flex: "1 1 380px" }}>
                 <h3 className="text-sm font-bold uppercase tracking-wider mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.ledgerTitle}</h3>
-                <p className="text-sm" style={{ color: colors.inkFaint }}>{t.ledgerDesc}</p>
+                <p className="text-sm mb-2" style={{ color: colors.inkFaint }}>{t.ledgerDesc}</p>
+                <div className="flex flex-wrap items-end gap-3">
+                  <Field label={t.ledgerAsOfLabel} colors={colors}>
+                    <input type="date" className={inputClass} style={inputStyleFor(colors)}
+                      value={ledgerAsOf} onChange={(e) => setLedgerAsOf(e.target.value)} />
+                  </Field>
+                  <button className="text-xs font-semibold pb-2" style={{ color: colors.amberText }}
+                    onClick={() => setLedgerAsOf(todayStr())}>{t.ledgerAsOfToday}</button>
+                  <div className="text-sm pb-1.5" style={{ color: colors.ink }}>
+                    <span className="font-bold" style={{ fontFamily: FONT_DISPLAY, fontSize: 18 }}>{ledgerTotal}</span>
+                    <span className="ml-2" style={{ color: colors.inkFaint }}>{t.ledgerTotalOnHand(ledgerAsOf ? fmt(ledgerAsOf) : "")}</span>
+                  </div>
+                  {ledgerUndatedTotal > 0 && (
+                    <div className="text-sm pb-1.5 px-2 py-1 rounded" style={{ background: colors.redSoft, color: colors.red }}>
+                      {t.ledgerUndatedTotal(ledgerUndatedTotal)}
+                    </div>
+                  )}
+                </div>
               </div>
               <button className="px-3 py-1.5 rounded text-sm font-semibold"
                 style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}
@@ -14835,6 +14913,11 @@ export default function FarspeedInventory() {
                     <span className="text-xs" style={{ color: colors.inkFaint }}>{g.client}</span>
                     <span className="text-xs ml-auto" style={{ color: colors.ink }}>{t.ledgerSiteLine(g.inTotal, g.outTotal, g.balance)}</span>
                   </div>
+                  {(g.later > 0 || g.undated > 0) && (
+                    <div className="px-4 py-1.5 text-xs" style={{ background: colors.amberSoft, color: colors.amberText }}>
+                      {t.ledgerSetAside(g.later, g.undated)}
+                    </div>
+                  )}
                   {open && (
                     <table className="w-full text-sm" style={{ background: colors.surface }}>
                       <thead><tr style={{ background: colors.surfaceDim }}>
@@ -14843,6 +14926,19 @@ export default function FarspeedInventory() {
                         ))}
                       </tr></thead>
                       <tbody>
+                        {(g.undatedMoves || []).map((m, mi) => (
+                          <tr key={`u${mi}`} style={{ borderTop: `1px solid ${colors.surfaceDim}`, background: colors.redSoft, color: colors.red }}>
+                            <td className="px-3 py-1.5 font-semibold whitespace-nowrap">{t.ledgerNoDate}</td>
+                            <td className="px-3 py-1.5" style={{ fontFamily: FONT_MONO }}>{m.jobNumber || "\u2014"}</td>
+                            <td className="px-3 py-1.5 font-semibold">{m.dir}</td>
+                            <td className="px-3 py-1.5 text-xs">{m.type || "\u2014"}</td>
+                            <td className="px-3 py-1.5 text-xs">{m.ref || "\u2014"}</td>
+                            <td className="px-3 py-1.5 text-xs">{m.lot || "\u2014"}</td>
+                            <td className="px-3 py-1.5 text-right" style={{ fontFamily: FONT_MONO }}>{m.dir === "IN" ? m.pkgs : ""}</td>
+                            <td className="px-3 py-1.5 text-right" style={{ fontFamily: FONT_MONO }}>{m.dir === "OUT" ? m.pkgs : ""}</td>
+                            <td className="px-3 py-1.5 text-right text-xs">{t.ledgerNotCounted}</td>
+                          </tr>
+                        ))}
                         {g.moves.map((m, mi) => (
                           <tr key={mi} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
                             <td className="px-3 py-1.5 whitespace-nowrap">{m.date ? fmt(m.date) : "\u2014"}</td>
