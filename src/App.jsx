@@ -254,7 +254,10 @@ function depotDisplay(value, lang) {
   if (lang === "zh" && DEPOT_LABELS_ZH[value]) return DEPOT_LABELS_ZH[value];
   return value.replace("Farspeed ", "");
 }
-const ARRIVING_TYPES = ["Devan", "CFS"];
+// What brings cases into the depot. A Return is goods coming back from site, which is
+// an arrival in every way that matters here: it is checked in, it takes up space, and
+// storage is charged on it from the day it lands.
+const ARRIVING_TYPES = ["Devan", "CFS", "Return"];
 const DEFAULT_ROLES = ["Account Officer", "CEO / Business Manager", "Warehouse Depot Head", "Admin"];
 const DEFAULT_EMPLOYEES = [
   { id: "E1", name: "Irene Lee", role: "Account Officer" },
@@ -1129,6 +1132,116 @@ function splitGroupByCases(group) {
 // filed against it hold more than that, the same consignment has been checked in twice:
 // once as a whole lot and once split per lift. It is invisible on the inventory screen,
 // which shows the entries but never adds them back up against the paper.
+// A client's storage ledger - "Mitsubishi Inventory Store List" and its equivalents for the
+// other makers - is one sheet per site, with a row for every movement in or out and monthly
+// billing rows in between that simply repeat the running balance. Only the movement rows
+// carry a job number in the first column, which is what tells the two apart; counting the
+// billing rows as movements would multiply everything by the number of months it has sat.
+//
+// The job number is also the only reliable key. An IN row's DM number is the arrival's, but
+// an OUT row's is the delivery's own DM - "2512137-OUT | 13-DM-25-0616" - so matching lots
+// by DM across the two directions would pair a delivery with whatever lot happened to share
+// its number. The FC job number means the same thing on both sides.
+function parseClientStoreList(wb) {
+  const moves = [];
+  for (const name of wb.SheetNames) {
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: "", raw: false });
+    for (const r of rows) {
+      const first = String((r || [])[0] || "").trim();
+      const m = first.match(/^(\d{6,8})\s*-\s*(IN|OUT)\s*$/i);
+      if (!m) continue;
+      const pkgs = Number(String((r || [])[3] || "").replace(/,/g, ""));
+      if (!isFinite(pkgs) || pkgs === 0) continue;
+      moves.push({
+        site: name,
+        jobNumber: m[1],
+        direction: m[2].toUpperCase(),
+        dm: String((r || [])[1] || "").replace(/\s+/g, " ").trim(),
+        pkgs: Math.abs(pkgs),
+        when: String((r || [])[2] || "").trim(),
+      });
+    }
+  }
+  return moves;
+}
+// Each movement set against what the depot recorded for that same job number. An IN is
+// compared with the cases checked in under it, an OUT with the cases delivered under it.
+function reconcileStoreList(moves, items) {
+  const arrived = {};
+  const delivered = {};
+  (items || []).forEach((it) => {
+    if (it.cancelled) return;
+    const j = String(it.jobNumber || "").trim();
+    if (j) arrived[j] = (arrived[j] || 0) + totalUnits(it);
+    activeDeliveries(it).forEach((d) => {
+      const dj = String(d.jobNumber || "").trim();
+      if (!dj) return;
+      delivered[dj] = (delivered[dj] || 0) + ((d.codes || []).length || 0);
+    });
+  });
+  const bySite = {};
+  moves.forEach((mv) => {
+    const g = (bySite[mv.site] = bySite[mv.site] || { site: mv.site, rows: [], inSheet: 0, outSheet: 0, inApp: 0, outApp: 0 });
+    const app = mv.direction === "IN" ? (arrived[mv.jobNumber] || 0) : (delivered[mv.jobNumber] || 0);
+    g.rows.push({ ...mv, app, diff: app - mv.pkgs });
+    if (mv.direction === "IN") { g.inSheet += mv.pkgs; g.inApp += app; }
+    else { g.outSheet += mv.pkgs; g.outApp += app; }
+  });
+  return Object.values(bySite)
+    .map((g) => ({ ...g, leftSheet: g.inSheet - g.outSheet, leftApp: g.inApp - g.outApp,
+      rows: g.rows.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff) || String(a.jobNumber).localeCompare(String(b.jobNumber))) }))
+    .sort((a, b) => Math.abs(b.leftApp - b.leftSheet) - Math.abs(a.leftApp - a.leftSheet));
+}
+// The depot's own movements laid out the way a client's storage ledger lays them out: one
+// site at a time, every arrival and every delivery in date order, with a running balance
+// down the page. The client's file is the same thing kept by hand, so putting the two side
+// by side stops being an act of translation.
+//
+// Free days and charges are deliberately not here. Those belong to the billing rules and to
+// each client's agreement, and a ledger that guessed at them would be worse than one that
+// shows only what actually moved.
+function storageLedger(items, directory) {
+  const sites = {};
+  (items || []).forEach((it) => {
+    if (it.cancelled) return;
+    const key = it.directoryId || sigPart(it.project) || "unspecified";
+    const entry = (directory || []).find((d) => d.id === it.directoryId);
+    const g = (sites[key] = sites[key] || {
+      key, label: (entry && entry.name) || it.project || "\u2014",
+      labelZh: (entry && entry.nameZh) || "", client: it.client || "", moves: [],
+    });
+    const ref = String(it.invoiceNumber || "").trim() || String(it.unitCode || "").trim();
+    const arrivals = activeArrivals(it);
+    if (arrivals.length) {
+      arrivals.forEach((a) => g.moves.push({
+        date: a.date || it.depotArrivalDate || "", dir: "IN",
+        jobNumber: it.jobNumber || "", ref, lot: it.unitCode || "",
+        pkgs: (a.codes || []).length || totalUnits(it),
+        type: a.type || it.arrivingType || "", entryId: it.id,
+      }));
+    } else {
+      g.moves.push({
+        date: it.depotArrivalDate || "", dir: "IN", jobNumber: it.jobNumber || "", ref,
+        lot: it.unitCode || "", pkgs: totalUnits(it), type: it.arrivingType || "", entryId: it.id,
+      });
+    }
+    activeDeliveries(it).forEach((d) => g.moves.push({
+      date: d.date || "", dir: "OUT", jobNumber: d.jobNumber || "", ref, lot: it.unitCode || "",
+      pkgs: (d.codes || []).length, type: "Delivery", entryId: it.id,
+    }));
+  });
+  return Object.values(sites).map((g) => {
+    // Undated movements sort to the end rather than to 1970, where they would drag the
+    // running balance negative from the first line.
+    const moves = g.moves.slice().sort((a, b) => (a.date ? 0 : 1) - (b.date ? 0 : 1)
+      || String(a.date).localeCompare(String(b.date))
+      || String(a.jobNumber).localeCompare(String(b.jobNumber)));
+    let bal = 0;
+    moves.forEach((m) => { bal += m.dir === "IN" ? m.pkgs : -m.pkgs; m.balance = bal; });
+    return { ...g, moves, balance: bal, inTotal: moves.filter((m) => m.dir === "IN").reduce((n, m) => n + m.pkgs, 0),
+      outTotal: moves.filter((m) => m.dir === "OUT").reduce((n, m) => n + m.pkgs, 0) };
+  }).filter((g) => g.moves.length).sort((a, b) => b.balance - a.balance);
+}
 function checkInAudit(items) {
   const groups = new Map();
   (items || []).forEach((it) => {
@@ -1677,6 +1790,7 @@ const TEXT = {
     packingListTitle: "Import a Client Packing List",
     packingListDesc: "Upload a client's packing list as-is (TK Elevator, Schindler, OTIS, etc. all use different layouts \u2014 this reads the columns automatically). Each distinct lift/lot found becomes its own manifest entry with its cases itemized.",
     choosePackingListBtn: "Choose Packing List File",
+    packingListCaseCountWarn: (list) => `Read, but check these before you add them: ${list}. The packages column and the case list disagree, so the depot would take in a different number of cases than the paperwork declares.`,
     packingListNoStructure: "Couldn't recognize a packing-list table in that file. It may use a layout this hasn't seen before \u2014 try Excel Upload instead, or add entries manually.",
     packingListDetectedTitle: (n) => `Found ${n} lift/lot(s) in this file`,
     packingListCommonFieldsTitle: "Apply to all of these",
@@ -1793,6 +1907,7 @@ const TEXT = {
     siteRefsColCases: "Case numbers still at the depot",
     siteTotalsColLastCfs: "Last CFS",
     siteTotalsColLastDevan: "Last Devan",
+    siteTotalsColLastReturn: "Last return",
     siteTotalsColLastDelivery: "Last delivery",
     siteTotalsColSite: "Construction Site",
     siteTotalsColClient: "Client",
@@ -2006,6 +2121,43 @@ const TEXT = {
     navDuplicatesShort: "Duplicates",
     navCheckIns: "Check-ins",
     navCheckInsCount: (n) => `Check-ins (${n} over)`,
+    fAwaitingCollection: "No arrival date yet \u2014 these goods are still awaiting collection",
+    legacyFieldNames: { client: "client", site: "site", date: "date" },
+    legacyRowMissingHint: (list) => `This file needs its ${list} filled in before it can be processed. The date decides where it sits in the storage ledger and when storage starts being charged, so it cannot be left blank.`,
+    navPlReader: "Packing list reader",
+    plrTitle: "Packing list reader",
+    plrDesc: "Read a stack of packing lists at once \u2014 Excel straight off the sheet, PDF through the same scanner the single-file screen uses. The result downloads as one spreadsheet, which Packing List Import reads back in a single upload. Check the last column before you use it: it flags any lot whose case list does not match the package count it declares.",
+    plrChooseBtn: "Choose packing lists\u2026",
+    plrReading: (name) => `Reading ${name}\u2026`,
+    plrExportBtn: "Download spreadsheet",
+    plrClearBtn: "Start over",
+    plrTooBig: (kb) => `too big to scan at ${kb} KB \u2014 split it, or use the Excel version if there is one`,
+    plrCount: (rows, files, off) => `${rows} lot${rows === 1 ? "" : "s"} from ${files} file${files === 1 ? "" : "s"}${off ? ` \u00b7 ${off} where the packages and the cases disagree` : ""}`,
+    navLedger: "Storage ledger",
+    ledgerTitle: "Storage ledger",
+    ledgerDesc: "Every arrival and delivery the depot has recorded, a site at a time, in date order with a running balance \u2014 the same shape as a client's own store list, so the two can be read side by side. Charges and free days are not shown here; those follow the billing rules rather than the movements.",
+    ledgerExportBtn: "Export ledger",
+    ledgerSiteLine: (i, o, b) => `${i} in \u00b7 ${o} out \u00b7 ${b} on hand`,
+    ledgerColDate: "Date",
+    ledgerColJob: "FC job no.",
+    ledgerColDir: "In / out",
+    ledgerColType: "Type",
+    ledgerColIn: "Pkgs in",
+    ledgerColOut: "Pkgs out",
+    ledgerColBalance: "Balance",
+    storeListTitle: "Against the client's storage ledger",
+    storeListDesc: "Load a client's inventory store list \u2014 the one with a sheet per site and a row for every movement in and out. Each job number in it is set against what the depot recorded under the same number, and only the rows that disagree are shown. A ledger that stops before this month will show this month's jobs as missing; that is expected, not an error.",
+    storeListChooseBtn: "Choose store list\u2026",
+    storeListLoaded: (name, n, sites) => `${name} \u2014 ${n} movements across ${sites} site${sites === 1 ? "" : "s"}`,
+    storeListUnreadable: (err) => `That file could not be read: ${err}`,
+    storeListSiteLine: (i, o, l, ai, ao, al) => `ledger ${i} in, ${o} out, ${l} left \u00b7 depot ${ai} in, ${ao} out, ${al} left`,
+    storeListSiteAgrees: (n) => `All ${n} movements agree with the depot's records.`,
+    storeListColJob: "FC job no.",
+    storeListColDir: "In / out",
+    storeListColDm: "DM on the ledger",
+    storeListColSheet: "Ledger",
+    storeListColApp: "Depot",
+    storeListColDiff: "Difference",
     checkInsTitle: "Check-ins against the paperwork",
     checkInsDesc: "Every check-in the depot has taken, grouped by the reference it came in under. A reference states its own package count, so where the entries under it add up to more, the same consignment has been checked in twice \u2014 usually once as a whole lot and once split per lift.",
     checkInsOverBanner: (n) => `${n} package${n === 1 ? " is" : "s are"} counted more than once. Reversing a check-in puts its cases back to Incoming, where they can be checked in again properly.`,
@@ -2448,6 +2600,7 @@ const TEXT = {
     packingListTitle: "匯入客戶裝箱單",
     packingListDesc: "直接上載客戶原本的裝箱單（TK Elevator、Schindler、OTIS 等各自格式不同 — 系統會自動辨識欄位）。文件內每部升降機/每個批次將自動分成獨立記錄，並列出其貨物件號。",
     choosePackingListBtn: "選擇裝箱單檔案",
+    packingListCaseCountWarn: (list) => `\u5df2\u8b80\u53d6\uff0c\u4f46\u8acb\u5148\u6838\u5c0d\uff1a${list}\u3002\u4ef6\u6578\u8207\u4ef6\u865f\u6578\u76ee\u4e0d\u7b26\uff0c\u5426\u5247\u5165\u5009\u4ef6\u6578\u5c07\u8207\u55ae\u64da\u4e0d\u4e00\u81f4\u3002`,
     packingListNoStructure: "未能在此檔案中識別裝箱單表格結構，可能是未見過的格式 — 請改用「上載Excel」，或手動新增記錄。",
     packingListDetectedTitle: (n) => `在此檔案中找到 ${n} 個升降機/批次`,
     packingListCommonFieldsTitle: "套用至以下全部項目",
@@ -2564,6 +2717,7 @@ const TEXT = {
     siteRefsColCases: "尚存倉之件號",
     siteTotalsColLastCfs: "最近CFS",
     siteTotalsColLastDevan: "最近拆櫃",
+    siteTotalsColLastReturn: "最近退倉",
     siteTotalsColLastDelivery: "最近送貨",
     siteTotalsColSite: "地盤",
     siteTotalsColClient: "客戶",
@@ -2777,6 +2931,43 @@ const TEXT = {
     navDuplicatesShort: "重複記錄",
     navCheckIns: "到倉核對",
     navCheckInsCount: (n) => `到倉核對（多 ${n}）`,
+    fAwaitingCollection: "尚無到倉日期 \u2014 貨物仍待提貨",
+    legacyFieldNames: { client: "客戶", site: "地盤", date: "日期" },
+    legacyRowMissingHint: (list) => `此檔案需填寫${list}方可處理。日期決定其於存倉紀錄中之排序及起算收費時間，不可留空。`,
+    navPlReader: "裝箱單讀取",
+    plrTitle: "裝箱單讀取",
+    plrDesc: "一次讀取多份裝箱單 \u2014 Excel 直接讀取，PDF 則交由與單檔畫面相同之掃描器處理。結果可匯出為一份表格，再由「裝箱單匯入」一次載入。使用前請先核對最後一欄：凡件數與件號不符者均會標示。",
+    plrChooseBtn: "選擇裝箱單…",
+    plrReading: (name) => `正在讀取 ${name}…`,
+    plrExportBtn: "匯出表格",
+    plrClearBtn: "重新開始",
+    plrTooBig: (kb) => `檔案過大（${kb} KB），無法掃描 \u2014 請分割或改用 Excel 版本`,
+    plrCount: (rows, files, off) => `${files} 份檔案共 ${rows} 個批次${off ? ` \u00b7 其中 ${off} 個件數與件號不符` : ""}`,
+    navLedger: "存倉紀錄",
+    ledgerTitle: "存倉紀錄",
+    ledgerDesc: "依地盤列出所有到倉及送貨記錄，按日期排列並附累計餘數 \u2014 格式與客戶存倉清單一致，便於對照。此處不列載費用及免費期，該等項目依據收費規則而非出入記錄。",
+    ledgerExportBtn: "匯出紀錄",
+    ledgerSiteLine: (i, o, b) => `入 ${i} \u00b7 出 ${o} \u00b7 現存 ${b}`,
+    ledgerColDate: "日期",
+    ledgerColJob: "FC 工單號",
+    ledgerColDir: "出 / 入",
+    ledgerColType: "類型",
+    ledgerColIn: "入倉件數",
+    ledgerColOut: "出倉件數",
+    ledgerColBalance: "累計餘數",
+    storeListTitle: "與客戶存倉紀錄核對",
+    storeListDesc: "載入客戶之存倉清單（每個地盤一頁，每筆出入倉一行）。系統會以 FC 工單號逐筆核對，僅列出不符之項目。若紀錄未包含本月資料，本月工單將顯示為差異，屬正常情況。",
+    storeListChooseBtn: "選擇存倉清單…",
+    storeListLoaded: (name, n, sites) => `${name} \u2014 ${n} 筆出入記錄，共 ${sites} 個地盤`,
+    storeListUnreadable: (err) => `無法讀取此檔案：${err}`,
+    storeListSiteLine: (i, o, l, ai, ao, al) => `紀錄：入 ${i}、出 ${o}、餘 ${l} \u00b7 倉庫：入 ${ai}、出 ${ao}、餘 ${al}`,
+    storeListSiteAgrees: (n) => `全部 ${n} 筆記錄均與倉庫相符。`,
+    storeListColJob: "FC 工單號",
+    storeListColDir: "出 / 入",
+    storeListColDm: "紀錄之 DM",
+    storeListColSheet: "紀錄",
+    storeListColApp: "倉庫",
+    storeListColDiff: "差異",
     checkInsTitle: "到倉記錄與單據核對",
     checkInsDesc: "列出所有到倉記錄，以其參考編號分組。參考編號本身已註明件數，若其下各筆合計超出該數，即同一批貨被重複到倉 \u2014 通常是整批一次、再按電梯分批一次。",
     checkInsOverBanner: (n) => `共有 ${n} 件被重複計算。還原到倉記錄會將貨箱退回「待到倉」，可重新妥善辦理。`,
@@ -3190,6 +3381,12 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, onMoveCases, dir
   if (!form.project) saveBlockers.push(t.fProject);
   if (!form.description && !(form.packages || []).length) saveBlockers.push(t.fDescription);
   if (form.depotArrivalDate && !form.recordedBy) saveBlockers.push(t.fRecordedBy);
+  // The arrival date is required, because the storage ledger orders by it and storage is
+  // charged from it. A blank one is not always a mistake though - an entry booked in before
+  // the goods reach the depot legitimately has none, and that is what "pending collection"
+  // means. So it may be left empty, but only by saying so, which turns a silent omission
+  // into a deliberate state.
+  if (!form.depotArrivalDate && !form.awaitingCollection) saveBlockers.push(t.fDepotArrival);
   const siteSuggestions = useMemo(() => {
     const fromDirectory = (directory || []).map((s) => s.siteEn).filter(Boolean);
     const fromItems = (items || []).map((i) => i.project).filter(Boolean);
@@ -3368,7 +3565,9 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, onMoveCases, dir
         </Field>
 
         <Field label={t.fDepotArrival} hint={t.fDepotArrivalHint} colors={colors}>
-          <input type="date" className={inputClass} style={inputStyle} value={form.depotArrivalDate} onChange={set("depotArrivalDate")} />
+          <input type="date" className={inputClass}
+            style={{ ...inputStyle, ...(form.depotArrivalDate || form.awaitingCollection ? {} : { borderColor: colors.red, background: colors.redSoft }) }}
+            value={form.depotArrivalDate} onChange={set("depotArrivalDate")} />
         </Field>
         <Field label={t.fPlannedDelivery} hint={t.fPlannedDeliveryHint} colors={colors}>
           <input type="date" className={inputClass} style={inputStyle} value={form.plannedDeliveryDate} onChange={set("plannedDeliveryDate")} />
@@ -3447,6 +3646,13 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, onMoveCases, dir
         )}
       </div>
 
+      {!form.depotArrivalDate && (
+        <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: colors.amberText }}>
+          <input type="checkbox" checked={!!form.awaitingCollection}
+            onChange={(e) => setForm((f) => ({ ...f, awaitingCollection: e.target.checked }))} />
+          {t.fAwaitingCollection}
+        </label>
+      )}
       {form.depotArrivalDate && !form.recordedBy && (
         <div className="mt-3 px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>
           {t.recordedByRequiredMsg}
@@ -4230,8 +4436,10 @@ function DeliveryForm({ deliveryItems, onAddDelivery, onAddCombinedDelivery, onD
   );
 }
 
-const JOB_SHEET_TEMPLATES = ["Devan", "CFS", "Delivery", "Shifting", "Hoisting", "Day Work", "Dismantle", "Dis & Removal of Lifting Tools", "Job Cancel", "Pick-up", "Position", "Re-position", "Retain of Safety Ropes"];
-const JOB_SHEET_ITEMIZED = ["Devan", "CFS", "Delivery"];
+const JOB_SHEET_TEMPLATES = ["Devan", "CFS", "Delivery", "Return", "Shifting", "Hoisting", "Day Work", "Dismantle", "Dis & Removal of Lifting Tools", "Job Cancel", "Pick-up", "Position", "Re-position", "Retain of Safety Ropes"];
+// A Return brings cases back from site, so it is itemised and it adds to storage the
+// same way an arrival does.
+const JOB_SHEET_ITEMIZED = ["Devan", "CFS", "Delivery", "Return"];
 const CFS_FROM_PRESETS = [
   { key: "金田物流", text: "金田物流有限公司\n油麻地海輝道38號新油麻地貨物公眾貨物\n裝卸區7號 3-4口水位高鴻躉船\n(車入閘后轉右直行約350米)\nTEL: 27850666 (亞昌/ 珍珍)" },
   { key: "悅昇物流", text: "悅昇物流有限公司\n香港新界葵涌昂船洲479號\nTEL: 24974884" },
@@ -6062,7 +6270,7 @@ const LEGACY_DOC_TYPES = JOB_SHEET_TEMPLATES;
 function guessDocTypeFromName(name) {
   const n = (name || "").toLowerCase();
   const map = [
-    ["devan", "Devan"], ["cfs", "CFS"], ["delivery", "Delivery"],
+    ["devan", "Devan"], ["cfs", "CFS"], ["delivery", "Delivery"], ["return", "Return"],
     ["shifting", "Shifting"], ["hoisting", "Hoisting"], ["day_work", "Day Work"], ["day work", "Day Work"],
     ["dismantle", "Dismantle"], ["dis_n_removal", "Dis & Removal of Lifting Tools"], ["removal", "Dis & Removal of Lifting Tools"],
     ["job_cancel", "Job Cancel"], ["cancel", "Job Cancel"], ["pick-up", "Pick-up"], ["pickup", "Pick-up"],
@@ -6242,6 +6450,18 @@ function sheetHasPastedContentImage(wb) {
     }
   }
   return false;
+}
+// What a row has to carry before it can be processed. A date is on the list because
+// everything downstream is ordered by it: the storage ledger's running balance, the free
+// period, which arrival a delivery draws from, and the last-CFS column on the site summary.
+// A record without one sorts to the end of the ledger and bills from nothing, and it is far
+// harder to find and fix afterwards than it is to type now.
+function legacyRowMissing(row) {
+  const miss = [];
+  if (!row.client) miss.push("client");
+  if (!row.projectEn && !row.projectZh) miss.push("site");
+  if (!String(row.date || "").trim()) miss.push("date");
+  return miss.length ? miss : null;
 }
 function guessJobNumberFromName(name) {
   const m = (name || "").match(/\b(\d{6,8})\b/);
@@ -6424,8 +6644,18 @@ function getPrintArea(wb, sheetIndex) {
 // 5/6 into the wrong day without complaining. Separators are inconsistent too ("29- /5/
 // 2026" is a real line from this file), so they are normalised before the parts are read
 // off directly.
+// A day written as a span rather than a single date - "10-13/5/2026" for work running over
+// several days, or "7-/5/2026" where the writer meant "the 7th onwards" and never came back
+// to finish it. The job happened on the first of those days: that is when the goods moved,
+// when storage starts, and where the movement belongs in the ledger. So the earlier number
+// is taken and the rest of the span dropped.
+function firstDayOfSpan(raw) {
+  return String(raw == null ? "" : raw)
+    .replace(/\s+/g, "")
+    .replace(/^(\d{1,2})\s*-\s*(\d{0,2})(?=[\/\.\-])/, "$1");
+}
 function parseSheetDayFirstDate(raw) {
-  const s = String(raw == null ? "" : raw).replace(/\s+/g, "").replace(/[\/\.\-]+/g, "/");
+  const s = firstDayOfSpan(raw).replace(/[\/\.\-]+/g, "/");
   if (!s) return "";
   const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
   if (!m) return "";
@@ -7076,7 +7306,10 @@ function guessFieldsFromWorkbook(wb) {
     // "29-/5/2026" - a separator struck twice where the writer corrected themselves. Those
     // are written day-first, and Date() reads "11- /1/2025" as the 1st of November without
     // complaining, so they must not reach it.
-    const handTyped = /[\-\/.]\s*[\-\/.]/.test(String(rawDate));
+    // A span reads as hand-typed too, so Date() never gets a chance to make "10-13/5/2026"
+    // into something plausible-looking and wrong.
+    const handTyped = /[\-\/.]\s*[\-\/.]/.test(String(rawDate))
+      || /^\s*\d{1,2}\s*-\s*\d{0,2}\s*[\/\.\-]/.test(String(rawDate));
     const d = handTyped ? NaN : new Date(rawDate);
     out.date = !isNaN(d) ? dateToLocalISO(d) : parseSheetDayFirstDate(rawDate);
   }
@@ -8555,7 +8788,12 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
           <input className={inputClass} style={inputStyle} value={row.jobNumber} onChange={set("jobNumber")} />
         </Field>
         <Field label={t.colDate} colors={colors}>
-          <input type="date" className={inputClass} style={inputStyle} value={row.date} onChange={set("date")} />
+          {/* Ringed while empty. Everything downstream is ordered by this date, so a blank
+              one is not a small omission - it is a record that sorts to the end of the
+              ledger and bills from nothing. */}
+          <input type="date" className={inputClass}
+            style={{ ...inputStyle, ...(String(row.date || "").trim() ? {} : { borderColor: colors.red, background: colors.redSoft }) }}
+            value={row.date} onChange={set("date")} />
         </Field>
         {itemized && (
           <>
@@ -9100,6 +9338,11 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
       {row.hasPastedContentImage && (
         <div className="px-2 py-1.5 rounded text-xs" style={{ background: colors.amberSoft, color: colors.amberText }}>
           {t.legacyCasesArePicture}
+        </div>
+      )}
+      {legacyRowMissing(row) && (
+        <div className="px-2 py-1.5 rounded text-xs" style={{ background: colors.redSoft, color: colors.red }}>
+          {t.legacyRowMissingHint(legacyRowMissing(row).map((k) => t.legacyFieldNames[k]).join(", "))}
         </div>
       )}
       {row.docType === "Delivery" && matchedItems.length === 0 && (
@@ -9763,6 +10006,53 @@ async function readPdfScanStream(response) {
     throw new Error(stopReason === "max_tokens" ? "reply-too-long" : "truncated-or-invalid-json");
   }
 }
+// The words the scanner is given. Lifted out of the one screen that used to own it so
+// the packing list reader asks for exactly the same reading.
+const PDF_SCAN_PROMPT = `This is a packing list, delivery memo, shipping list, or similar logistics document for elevator/escalator materials, possibly in English, Traditional or Simplified Chinese, or mixed.
+
+Follow these extraction rules exactly - they keep the output compact even for long, dense documents:
+
+1. Each row/block of the table is ONE case/package. For each case extract exactly these 5 things:
+   - "code": the case/box number exactly as printed, letters and dashes included - "01A2101", "02C3102-3-1", "16D5416C", "C01". Never renumber or simplify them.
+   - "description" on the group: a short generic name for what the order holds, e.g. "ELEVATOR MATERIALS" or the commodity named on an accompanying delivery order ("Guide Rail"). Used for any case whose own line gives no description.
+   - "lot": for a Mitsubishi document, the Delivery Memo number - "13-DM-26-0500", printed as "DM No." - which is what these lots are filed under; fall back to the shipping mark (S/M) if the DM number is blank. Otherwise the lift/unit number. This is very often printed right next to the case number in parentheses, like "(#.01)" or "(#.23)" - extract just the number (e.g. "01", "23"). Different cases sharing the same case-number prefix (e.g. multiple "C21" cases) but different lift numbers are DIFFERENT packages in DIFFERENT lots. If there's no such lift marker anywhere, use the shop order number or another batch identifier as the lot instead.
+   - "description": ONLY the general category/heading text for that case (e.g. "Guide Rail", "Rail Bracket", "Traction Machine", "Installation Material"). Do NOT list the individual part numbers or sub-components underneath it even if the document itemizes many - this is the single most important rule for keeping output size manageable on long documents.
+   - "weightKg": use the GROSS weight (毛重 / GROSS column), not net weight - gross is what matters here.
+   - "cbm": ONLY if a CBM/volume/m3 figure is printed directly for that case. If the document does not give one, use '' - do NOT try to work it out yourself.
+   - "length", "width", "height": that case's dimensions exactly as printed, as plain numbers. These are very often three separate columns headed "Length cm", "Width cm", "Height cm" (or L/W/H, 長/闊/高), but may instead be one combined cell like "500*20*20" or "500x20x20" - read either form. Use '' for any you cannot find. Do not convert or round them.
+   - "dimUnit": the unit those dimensions are printed in - "cm" or "mm". Take it from the column heading or a nearby note. If nothing says, use "" rather than guessing.
+2. Group all cases by their lot/lift number into the "groups" array - one entry per distinct lot.
+2b. Also look for shipping/bill-of-lading details anywhere on the document: vessel/ship name (often after "ex ss." or 船名), voyage number (航次), container numbers (貨櫃號), and bill-of-lading number (提單編號 / BL NO.). Combine them into one line for "ssDoNo" in roughly this style: ex ss."SHIP NAME" V.VOYAGE; CONTAINERS NO. XXXX/40GP. If none present, use ''. Also return them separately in "shipping".
+2b-ii. IMPORTANT - a factory packing list often has a "package"/"Packages"/件數 column that gives the NUMBER of packages on that line, not a case number. One line reading "29 | APK00171P001 | T89/B" is twenty-nine packages, not one. Never count table rows as packages. For a document like that, return each line of the order in "lines" and leave "packages" empty:
+   - "packages": how many packages that line covers, as a number. A dash or blank means zero - loose hardware travelling inside another line's cases.
+   - "description": the short material description on that line.
+   - "netWeightKg" and "grossWeightKg": both if both columns exist, else whichever is given. Do NOT pick between them; the app takes the heavier.
+   - "cbm": only if that line states one.
+   Group the lines by the order the document groups them under - "Order No.CED-1831" and the reference beside it - and put that whole heading in "lot", e.g. "CED-1831 (EL-1926)".
+2b-iii. IMPORTANT - a single order is often subdivided further by a "Group" column carrying A, B, C, D against runs of lines, with a handwritten or printed annotation in the left margin beside each group naming what it is for: an INS reference like "0/24/576", a project number like "EL-1924" or "EL-1876", and the lifts like "#L2-L4", "#L-C01, L-C02, #L-C03, L-C04, #L-C05" or "#L-C06". Those groups go to different lifts and must NOT be merged.
+   Return ONE entry in "groups" per group letter, each holding only that group's lines, and build its "lot" from the order, the group letter and the annotation, e.g. "CED-1833/B (EL-1876 #L-C01 to L-C05)". Put the group letter in "group" and the INS reference in "insRef". Read the margin annotations even when handwritten; where a group has none, use just the order and letter.
+2b-iv. IMPORTANT - a Fujitec packing list has two levels of row and only the outer one is a package. An outer row carries a C/NO. (the case number), a PK NO. like "ZDZ1703+K-05A", N.W(KGS), G.W(KGS), Volume(M3) and a TYPE such as WOODEN CASE. Underneath it sit indented ITEM NO. rows listing that case's contents - PART NAME, PART NO., Job No., QTY PCS. Those inner rows are contents, NOT packages: never count them, and never take their weights.
+   The lot is the job number at the FRONT of the PK NO., before the "+": "ZDZ1703+K-05A" and "ZDZ1703+Z-12HA" are both lot ZDZ1703. Use exactly that, e.g. "ZDZ1703".
+   CRITICAL - do NOT use the inner rows' "Job No." column to decide which lot a case belongs to. One case can hold parts for several jobs: a case whose PK NO. begins "ZDZ1703" may list contents against both ZDZ1703 and ZDZ1708, but the case is ZDZ1703's. The PK NO. decides, always.
+   Set "code" to the C/NO. exactly as printed ("01", "06", "32"), the weight from G.W(KGS), and the volume from Volume(M3).
+   CRITICAL - each job is numbered separately and both usually start at 02, so the two jobs share most of their case numbers and differ only in their last few: one job may end 34-35 while the other ends 32-33. Read every C/NO. from the left-hand column of that case's own row and never carry a number over from the other job's section, never continue a job's numbering past what is printed, and never assume the two jobs end on the same numbers.
+2b-v. A Shipping Marks block at the end of a packing list states, per job, which case numbers belong to it - "FUJITEC / ZDZ1703 / PO NO.HE-6717 / C/NO. 02-05, 09-10, 13-30, 34-35". Return every such block in "shippingMarks", copying the C/NO. line verbatim, ranges and all, with the job/order number from the mark as its "lot". Use it to check your grouping; where it disagrees with what you read off the rows, follow the Shipping Marks.
+2c. IMPORTANT - many documents are NOT per-case tables at all. A Delivery Memo (DM), an arrival/release notice (到貨通知提貨單), or a shipping order states only the OVERALL totals - "29 Package(s)", "14.088 CBM", "12,909 Kgs", "29 件" - and then lists the case markings separately under a heading like "C/S NO." or "SHIPPING MARK", one marking per line, sometimes several comma-separated per line (e.g. "01C01,01C02,01C03"). For a document like that:
+   - put the stated totals in "statedPackages", "statedWeightKg" and "statedCbm" on the group;
+   - put every case marking, expanded from any comma-separated lines into individual entries, into "caseNumbers" on the group, exactly as printed;
+   - leave "packages" as an empty array. Do NOT invent per-case weights or volumes for these - the totals are all the document states.
+2c-ii. The list of markings is often on a separate attached page laid out in several columns across the page, each row holding the marking split into parts - a lift number, a component code and a case suffix, e.g. "09  B11  09" or "19  D41  21-2-2". Read each column from top to bottom, then move to the next column to its right. Every row is ONE package. Join that row's parts, in the order printed and with no spaces, to form the marking - "09B1109", "19D4121-2-2" - following the style the memo's own face uses where it prints a few of them.
+2c-iii. CRITICAL - return exactly the markings that are printed, and no others. If they come to fewer than the stated package count, return the ones you can see: do NOT invent, pad, repeat or renumber markings to reach the stated total, and do NOT drop any to match a smaller one. The document disagreeing with itself is something the reader needs told, and it is reported from the two figures.
+2c-iv. Where a totals-only document's markings fall into more than one group, its face totals cover the whole document, so put them in "documentTotals" and NOT in "statedPackages"/"statedWeightKg"/"statedCbm" on any single group. Where everything is one group, put them on that group. Either way, state them once and never divide them yourself.
+2c-v. A packing list is often sent with a delivery order or arrival notice covering the same shipment. Where the total CBM or weight appears only on that companion page and not per order, put it in "documentTotals" - do NOT divide it between the orders yourself, and do NOT copy it onto one of them.
+2d. Look for terminal/storage dates: the arrival/ETA date (到港日期 / ETA) as "terminalArrivalDate" and the last free storage day (免費倉期 ... 至) as "lastFreeDay", both as YYYY-MM-DD. Use '' if absent.
+3. Keep everything as compact as possible: short descriptions, no commentary, no repeated sub-item lists.
+
+Respond with ONLY a raw JSON object in EXACTLY this shape and nothing else (no markdown fences, no commentary, no explanation before or after):
+{"client": "best-guess client name or ''", "project": "site/building/project name found in the document, or ''", "ssDoNo": "vessel + voyage + container line or ''", "shipping": {"vessel": "", "voyage": "", "blNo": "", "containerNo": ""}, "terminalArrivalDate": "YYYY-MM-DD or ''", "lastFreeDay": "YYYY-MM-DD or ''", "documentTotals": {"packages": number_or_empty_string, "weightKg": number_or_empty_string, "cbm": number_or_empty_string}, "shippingMarks": [{"lot": "job/order number in the mark", "cases": "that mark's C/NO. line exactly as printed, ranges and all"}], "groups": [{"lot": "lift/lot/shop-order number identifying this batch", "containers": ["container numbers if any, else empty array"], "statedPackages": number_or_empty_string, "statedWeightKg": number_or_empty_string, "statedCbm": number_or_empty_string, "caseNumbers": ["case markings, one per entry, only for totals-only documents"], "group": "group letter if the document has one, else ''", "insRef": "INS/works reference beside the group, e.g. 0/24/576, else ''", "lines": [{"packages": number, "description": "", "netWeightKg": number_or_empty_string, "grossWeightKg": number_or_empty_string, "cbm": number_or_empty_string}], "packages": [{"code": "case/package number", "description": "short category name, a few words only", "weightKg": number_or_empty_string, "cbm": number_or_empty_string, "length": number_or_empty_string, "width": number_or_empty_string, "height": number_or_empty_string, "dimUnit": "cm_or_mm_or_empty"}]}]}
+If the document only has one overall lot/shipment with no explicit lift/case breakdown, put everything under a single group with a sensible lot name.
+
+SIZE MATTERS - a long document has to be answered before the request times out, so keep the reply as short as it can be while staying complete. OMIT any key you would set to '' or to an empty array: write {"code":"01","weightKg":17,"cbm":0.08} rather than repeating every field with empty values. Never abbreviate or omit a case itself - every package must appear - but say nothing about its contents, and use no whitespace beyond what JSON requires.`;
 async function postPdfScan(body, attempt = 0) {
   let response;
   try {
@@ -10592,7 +10882,7 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
       {rows.length > 0 && (
         <div className="flex flex-col gap-3">
           {rows.map((row, idx) => (
-            <LegacyUploadRow key={idx} onReplaceIncomingCases={onReplaceIncomingCases} directory={directory} setDirectory={setDirectory} employees={employees} row={row} siblingRows={rows} onChange={(next) => updateRow(idx, next)} onRemove={() => removeRow(idx)} incoming={incoming} items={items} onLegacyEnrich={onLegacyEnrich} onAddIncoming={onAddIncoming} onProcessAll={processAll} processing={processing} processDisabled={processing || rows.some((r) => !r.projectEn && !r.projectZh) || rows.some((r) => !r.client)} colors={colors} t={t} lang={lang} />
+            <LegacyUploadRow key={idx} onReplaceIncomingCases={onReplaceIncomingCases} directory={directory} setDirectory={setDirectory} employees={employees} row={row} siblingRows={rows} onChange={(next) => updateRow(idx, next)} onRemove={() => removeRow(idx)} incoming={incoming} items={items} onLegacyEnrich={onLegacyEnrich} onAddIncoming={onAddIncoming} onProcessAll={processAll} processing={processing} processDisabled={processing || rows.some(legacyRowMissing)} colors={colors} t={t} lang={lang} />
           ))}
           {rows.some((r) => !r.client) && (
             <div className="px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>
@@ -11661,51 +11951,7 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
         r.onerror = () => reject(new Error("read failed"));
         r.readAsDataURL(file);
       });
-      const prompt = `This is a packing list, delivery memo, shipping list, or similar logistics document for elevator/escalator materials, possibly in English, Traditional or Simplified Chinese, or mixed.
-
-Follow these extraction rules exactly - they keep the output compact even for long, dense documents:
-
-1. Each row/block of the table is ONE case/package. For each case extract exactly these 5 things:
-   - "code": the case/box number exactly as printed, letters and dashes included - "01A2101", "02C3102-3-1", "16D5416C", "C01". Never renumber or simplify them.
-   - "description" on the group: a short generic name for what the order holds, e.g. "ELEVATOR MATERIALS" or the commodity named on an accompanying delivery order ("Guide Rail"). Used for any case whose own line gives no description.
-   - "lot": for a Mitsubishi document, the Delivery Memo number - "13-DM-26-0500", printed as "DM No." - which is what these lots are filed under; fall back to the shipping mark (S/M) if the DM number is blank. Otherwise the lift/unit number. This is very often printed right next to the case number in parentheses, like "(#.01)" or "(#.23)" - extract just the number (e.g. "01", "23"). Different cases sharing the same case-number prefix (e.g. multiple "C21" cases) but different lift numbers are DIFFERENT packages in DIFFERENT lots. If there's no such lift marker anywhere, use the shop order number or another batch identifier as the lot instead.
-   - "description": ONLY the general category/heading text for that case (e.g. "Guide Rail", "Rail Bracket", "Traction Machine", "Installation Material"). Do NOT list the individual part numbers or sub-components underneath it even if the document itemizes many - this is the single most important rule for keeping output size manageable on long documents.
-   - "weightKg": use the GROSS weight (毛重 / GROSS column), not net weight - gross is what matters here.
-   - "cbm": ONLY if a CBM/volume/m3 figure is printed directly for that case. If the document does not give one, use '' - do NOT try to work it out yourself.
-   - "length", "width", "height": that case's dimensions exactly as printed, as plain numbers. These are very often three separate columns headed "Length cm", "Width cm", "Height cm" (or L/W/H, 長/闊/高), but may instead be one combined cell like "500*20*20" or "500x20x20" - read either form. Use '' for any you cannot find. Do not convert or round them.
-   - "dimUnit": the unit those dimensions are printed in - "cm" or "mm". Take it from the column heading or a nearby note. If nothing says, use "" rather than guessing.
-2. Group all cases by their lot/lift number into the "groups" array - one entry per distinct lot.
-2b. Also look for shipping/bill-of-lading details anywhere on the document: vessel/ship name (often after "ex ss." or 船名), voyage number (航次), container numbers (貨櫃號), and bill-of-lading number (提單編號 / BL NO.). Combine them into one line for "ssDoNo" in roughly this style: ex ss."SHIP NAME" V.VOYAGE; CONTAINERS NO. XXXX/40GP. If none present, use ''. Also return them separately in "shipping".
-2b-ii. IMPORTANT - a factory packing list often has a "package"/"Packages"/件數 column that gives the NUMBER of packages on that line, not a case number. One line reading "29 | APK00171P001 | T89/B" is twenty-nine packages, not one. Never count table rows as packages. For a document like that, return each line of the order in "lines" and leave "packages" empty:
-   - "packages": how many packages that line covers, as a number. A dash or blank means zero - loose hardware travelling inside another line's cases.
-   - "description": the short material description on that line.
-   - "netWeightKg" and "grossWeightKg": both if both columns exist, else whichever is given. Do NOT pick between them; the app takes the heavier.
-   - "cbm": only if that line states one.
-   Group the lines by the order the document groups them under - "Order No.CED-1831" and the reference beside it - and put that whole heading in "lot", e.g. "CED-1831 (EL-1926)".
-2b-iii. IMPORTANT - a single order is often subdivided further by a "Group" column carrying A, B, C, D against runs of lines, with a handwritten or printed annotation in the left margin beside each group naming what it is for: an INS reference like "0/24/576", a project number like "EL-1924" or "EL-1876", and the lifts like "#L2-L4", "#L-C01, L-C02, #L-C03, L-C04, #L-C05" or "#L-C06". Those groups go to different lifts and must NOT be merged.
-   Return ONE entry in "groups" per group letter, each holding only that group's lines, and build its "lot" from the order, the group letter and the annotation, e.g. "CED-1833/B (EL-1876 #L-C01 to L-C05)". Put the group letter in "group" and the INS reference in "insRef". Read the margin annotations even when handwritten; where a group has none, use just the order and letter.
-2b-iv. IMPORTANT - a Fujitec packing list has two levels of row and only the outer one is a package. An outer row carries a C/NO. (the case number), a PK NO. like "ZDZ1703+K-05A", N.W(KGS), G.W(KGS), Volume(M3) and a TYPE such as WOODEN CASE. Underneath it sit indented ITEM NO. rows listing that case's contents - PART NAME, PART NO., Job No., QTY PCS. Those inner rows are contents, NOT packages: never count them, and never take their weights.
-   The lot is the job number at the FRONT of the PK NO., before the "+": "ZDZ1703+K-05A" and "ZDZ1703+Z-12HA" are both lot ZDZ1703. Use exactly that, e.g. "ZDZ1703".
-   CRITICAL - do NOT use the inner rows' "Job No." column to decide which lot a case belongs to. One case can hold parts for several jobs: a case whose PK NO. begins "ZDZ1703" may list contents against both ZDZ1703 and ZDZ1708, but the case is ZDZ1703's. The PK NO. decides, always.
-   Set "code" to the C/NO. exactly as printed ("01", "06", "32"), the weight from G.W(KGS), and the volume from Volume(M3).
-   CRITICAL - each job is numbered separately and both usually start at 02, so the two jobs share most of their case numbers and differ only in their last few: one job may end 34-35 while the other ends 32-33. Read every C/NO. from the left-hand column of that case's own row and never carry a number over from the other job's section, never continue a job's numbering past what is printed, and never assume the two jobs end on the same numbers.
-2b-v. A Shipping Marks block at the end of a packing list states, per job, which case numbers belong to it - "FUJITEC / ZDZ1703 / PO NO.HE-6717 / C/NO. 02-05, 09-10, 13-30, 34-35". Return every such block in "shippingMarks", copying the C/NO. line verbatim, ranges and all, with the job/order number from the mark as its "lot". Use it to check your grouping; where it disagrees with what you read off the rows, follow the Shipping Marks.
-2c. IMPORTANT - many documents are NOT per-case tables at all. A Delivery Memo (DM), an arrival/release notice (到貨通知提貨單), or a shipping order states only the OVERALL totals - "29 Package(s)", "14.088 CBM", "12,909 Kgs", "29 件" - and then lists the case markings separately under a heading like "C/S NO." or "SHIPPING MARK", one marking per line, sometimes several comma-separated per line (e.g. "01C01,01C02,01C03"). For a document like that:
-   - put the stated totals in "statedPackages", "statedWeightKg" and "statedCbm" on the group;
-   - put every case marking, expanded from any comma-separated lines into individual entries, into "caseNumbers" on the group, exactly as printed;
-   - leave "packages" as an empty array. Do NOT invent per-case weights or volumes for these - the totals are all the document states.
-2c-ii. The list of markings is often on a separate attached page laid out in several columns across the page, each row holding the marking split into parts - a lift number, a component code and a case suffix, e.g. "09  B11  09" or "19  D41  21-2-2". Read each column from top to bottom, then move to the next column to its right. Every row is ONE package. Join that row's parts, in the order printed and with no spaces, to form the marking - "09B1109", "19D4121-2-2" - following the style the memo's own face uses where it prints a few of them.
-2c-iii. CRITICAL - return exactly the markings that are printed, and no others. If they come to fewer than the stated package count, return the ones you can see: do NOT invent, pad, repeat or renumber markings to reach the stated total, and do NOT drop any to match a smaller one. The document disagreeing with itself is something the reader needs told, and it is reported from the two figures.
-2c-iv. Where a totals-only document's markings fall into more than one group, its face totals cover the whole document, so put them in "documentTotals" and NOT in "statedPackages"/"statedWeightKg"/"statedCbm" on any single group. Where everything is one group, put them on that group. Either way, state them once and never divide them yourself.
-2c-v. A packing list is often sent with a delivery order or arrival notice covering the same shipment. Where the total CBM or weight appears only on that companion page and not per order, put it in "documentTotals" - do NOT divide it between the orders yourself, and do NOT copy it onto one of them.
-2d. Look for terminal/storage dates: the arrival/ETA date (到港日期 / ETA) as "terminalArrivalDate" and the last free storage day (免費倉期 ... 至) as "lastFreeDay", both as YYYY-MM-DD. Use '' if absent.
-3. Keep everything as compact as possible: short descriptions, no commentary, no repeated sub-item lists.
-
-Respond with ONLY a raw JSON object in EXACTLY this shape and nothing else (no markdown fences, no commentary, no explanation before or after):
-{"client": "best-guess client name or ''", "project": "site/building/project name found in the document, or ''", "ssDoNo": "vessel + voyage + container line or ''", "shipping": {"vessel": "", "voyage": "", "blNo": "", "containerNo": ""}, "terminalArrivalDate": "YYYY-MM-DD or ''", "lastFreeDay": "YYYY-MM-DD or ''", "documentTotals": {"packages": number_or_empty_string, "weightKg": number_or_empty_string, "cbm": number_or_empty_string}, "shippingMarks": [{"lot": "job/order number in the mark", "cases": "that mark's C/NO. line exactly as printed, ranges and all"}], "groups": [{"lot": "lift/lot/shop-order number identifying this batch", "containers": ["container numbers if any, else empty array"], "statedPackages": number_or_empty_string, "statedWeightKg": number_or_empty_string, "statedCbm": number_or_empty_string, "caseNumbers": ["case markings, one per entry, only for totals-only documents"], "group": "group letter if the document has one, else ''", "insRef": "INS/works reference beside the group, e.g. 0/24/576, else ''", "lines": [{"packages": number, "description": "", "netWeightKg": number_or_empty_string, "grossWeightKg": number_or_empty_string, "cbm": number_or_empty_string}], "packages": [{"code": "case/package number", "description": "short category name, a few words only", "weightKg": number_or_empty_string, "cbm": number_or_empty_string, "length": number_or_empty_string, "width": number_or_empty_string, "height": number_or_empty_string, "dimUnit": "cm_or_mm_or_empty"}]}]}
-If the document only has one overall lot/shipment with no explicit lift/case breakdown, put everything under a single group with a sensible lot name.
-
-SIZE MATTERS - a long document has to be answered before the request times out, so keep the reply as short as it can be while staying complete. OMIT any key you would set to '' or to an empty array: write {"code":"01","weightKg":17,"cbm":0.08} rather than repeating every field with empty values. Never abbreviate or omit a case itself - every package must appear - but say nothing about its contents, and use no whitespace beyond what JSON requires.`;
+      const prompt = PDF_SCAN_PROMPT;
       const parsed = await postPdfScan({
         model: "claude-sonnet-4-6",
         max_tokens: 16000,
@@ -11997,6 +12243,128 @@ SIZE MATTERS - a long document has to be answered before the request times out, 
     e.target.value = "";
   }
 
+// The columns of the packing list summary sheet: one row per lot, each naming its own
+// client, site and reference. Several packing lists collapse into one file, which is then
+// read back here in a single upload instead of one at a time.
+// One row of the packing list summary, from whichever kind of file it came out of. The
+// reference is what everything downstream keys on - the DM number, the SHK, whatever the
+// maker calls its lot - and the cases are the real content, so the two are checked against
+// each other here and the answer travels with the row.
+// The maker's name as the depot writes it, and as the packing list wrote it. A Mitsubishi
+// list says 三菱电梯香港有限公司 and a TK one says (蒂升); the app knows them as Mitsubishi and
+// TK Elevator. Both are kept, because the English is what everything downstream matches on
+// and the Chinese is what the paperwork in front of you actually says.
+const hasCJK = (v) => /[\u3400-\u9FFF]/.test(String(v || ""));
+function clientNamePair(raw) {
+  const en = resolveClientGuess(raw) || (hasCJK(raw) ? "" : String(raw || "").trim());
+  const zh = hasCJK(raw) ? String(raw).trim()
+    : Object.entries(CHINESE_CLIENT_ALIASES).find(([, name]) => name === en)?.[0] || "";
+  return { en, zh };
+}
+// A site is written one way or the other on a packing list, rarely both. Whichever came off
+// the sheet is kept in its own column, and the directory is asked for the other half - that
+// is what the directory is for, and guessing a translation here would put a name in the file
+// that appears nowhere else.
+function siteNamePair(raw, directory) {
+  const text = String(raw || "").trim();
+  const norm = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9\u3400-\u9FFF]/g, "");
+  const key = norm(text);
+  const hit = key && (directory || []).find((d) => {
+    const a = norm(d.siteEn), b = norm(d.siteZh);
+    return (a && (a === key || a.includes(key) || key.includes(a)))
+      || (b && (b === key || b.includes(key) || key.includes(b)));
+  });
+  if (hit) return { en: hit.siteEn || (hasCJK(text) ? "" : text), zh: hit.siteZh || (hasCJK(text) ? text : "") };
+  return hasCJK(text) ? { en: "", zh: text } : { en: text, zh: "" };
+}
+function packingListSummaryRow(fileName, client, project, ref, packages, kg, cbm, statedPkgs, directory) {
+  const codes = (packages || []).map((p) => String((p && p.code) || "").trim()).filter(Boolean);
+  const pkgs = statedPkgs || codes.length || (packages || []).length;
+  const listed = codes.length;
+  const c = clientNamePair(client);
+  const site = siteNamePair(project, directory);
+  return {
+    "File Name": fileName,
+    "Client": c.en, "Client (\u4e2d\u6587)": c.zh,
+    "Project": site.en, "Project (\u4e2d\u6587)": site.zh,
+    "DM or SHK or other Client Reference": ref || "",
+    "PKGS": pkgs || "", "KGS": kg ? Math.round(kg * 100) / 100 : "",
+    "CBM": cbm ? Math.round(cbm * 1000) / 1000 : "",
+    "Cases": codes.join(", "),
+    // Blank when they agree, so the eye goes straight to the ones that do not.
+    "Check": listed === 0 ? "no case numbers" : (listed === pkgs ? "" : "Pkgs != Case #"),
+    __listed: listed,
+  };
+}
+const PL_SUMMARY_COLUMNS = ["File Name", "Client", "Client (\u4e2d\u6587)", "Project", "Project (\u4e2d\u6587)", "DM or SHK or other Client Reference", "PKGS", "KGS", "CBM", "Cases", "Check"];
+// A sheet only has to name its file, its packages and its cases to be recognised; the
+// client and site columns may be in either language.
+const PL_SUMMARY_REQUIRED = ["file name", "pkgs", "cases"];
+function packingListSummaryColumns(headerRow) {
+  const map = {};
+  (headerRow || []).forEach((cell, i) => {
+    const key = String(cell == null ? "" : cell).trim().toLowerCase();
+    if (!key) return;
+    // "DM or SHK or other Client Reference" is the reference column, however it is worded.
+    // "Client (中文)" and "Project (中文)" are their own columns; the plain ones stay the keys.
+    const name = /\bdm\b|shk|reference/.test(key) ? "reference"
+      : /^client\s*\(/.test(key) ? "clientzh"
+      : /^project\s*\(/.test(key) ? "projectzh"
+      : key;
+    if (map[name] === undefined) map[name] = i;
+  });
+  const named = map.client !== undefined || map.clientzh !== undefined;
+  return PL_SUMMARY_REQUIRED.every((k) => map[k] !== undefined) && map.reference !== undefined && named ? map : null;
+}
+// Turns that sheet back into the lots the packing list importer already knows how to place.
+// Cases are the real thing: where a lot lists them, they become its packages one for one,
+// and the stated package count is only used when there are none to count.
+function groupsFromPackingListSummary(grid) {
+  const headerIdx = (grid || []).findIndex((r) => packingListSummaryColumns(r));
+  if (headerIdx === -1) return null;
+  const col = packingListSummaryColumns(grid[headerIdx]);
+  const cell = (row, name) => {
+    const i = col[name];
+    return i === undefined ? "" : String((row || [])[i] == null ? "" : (row || [])[i]).trim();
+  };
+  const groups = [];
+  let client = "", project = "";
+  for (let i = headerIdx + 1; i < grid.length; i++) {
+    const r = grid[i] || [];
+    if (r.every((c) => String(c == null ? "" : c).trim() === "")) continue;
+    const codes = cell(r, "cases").split(/[,&\u3001]/).map((c) => c.trim()).filter(Boolean);
+    const stated = Number(String(cell(r, "pkgs")).replace(/,/g, "")) || 0;
+    const kg = Number(String(cell(r, "kgs")).replace(/,/g, "")) || 0;
+    const cbm = Number(String(cell(r, "cbm")).replace(/,/g, "")) || 0;
+    const count = codes.length || stated;
+    if (!count) continue;
+    // Either column will do on the way back in; the English one is preferred because that
+    // is what the depot matches on, but a sheet that only filled in the Chinese still works.
+    const rowClient = cell(r, "client") || cell(r, "clientzh");
+    const rowProject = cell(r, "project") || cell(r, "projectzh");
+    client = client || rowClient;
+    project = project || rowProject;
+    // Weight and volume are stated for the lot, so they are spread evenly across its cases.
+    // Nothing in this sheet says what any single case weighs.
+    const packages = (codes.length ? codes : Array.from({ length: stated }, (_, n) => `${n + 1}/${stated}`))
+      .map((code) => ({
+        code,
+        weightKg: kg ? String(Math.round((kg / count) * 100) / 100) : "",
+        cbm: cbm ? String(Math.round((cbm / count) * 1000) / 1000) : "",
+        description: "",
+      }));
+    groups.push({
+      lot: cell(r, "reference") || cell(r, "file name") || `row ${i + 1}`,
+      client: rowClient, project: rowProject,
+      sourceFile: cell(r, "file name"),
+      packages,
+      totalWeight: kg, totalCbm: cbm,
+      statedPkgs: stated, listedCases: codes.length,
+      containers: [],
+    });
+  }
+  return groups.length ? { groups, client, project } : null;
+}
   async function handlePackingListFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -12005,9 +12373,22 @@ SIZE MATTERS - a long document has to be answered before the request times out, 
     try {
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: "array", cellDates: true });
-      const { groups, client, project } = parsePackingListWorkbook(wb);
+      // A summary sheet carrying many packing lists is unpacked first; a single packing
+      // list falls through to the reader that handles one.
+      const grid = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "", raw: false });
+      const summary = groupsFromPackingListSummary(grid);
+      const { groups, client, project } = summary || parsePackingListWorkbook(wb);
       const ok = applyParsedResult({ groups, client, project });
       if (!ok) setPlError(t.packingListNoStructure);
+      // A lot whose case list is shorter or longer than the count it declares is the one
+      // thing this sheet cannot fix for itself, and it is what puts the wrong number of
+      // cases into the depot. Named on the way in, while it can still be corrected.
+      else if (summary) {
+        const off = groups.filter((g) => g.listedCases > 0 && g.statedPkgs > 0 && g.listedCases !== g.statedPkgs);
+        if (off.length) {
+          setPlError(t.packingListCaseCountWarn(off.map((g) => `${g.lot} (${g.statedPkgs} pkgs, ${g.listedCases} cases)`).join("; ")));
+        }
+      }
     } catch (err) {
       setPlError(t.packingListNoStructure);
     }
@@ -13408,6 +13789,112 @@ export default function FarspeedInventory() {
   const pending = activeItemsList.filter((i) => deriveStatus(i) === "pending_collection");
   const billable = openForDelivery.filter((i) => storageInfo(i)?.billable);
   const lfdWarnings = activeItemsList.filter((i) => { const a = lfdAlert(i); return a && (a.level === "soon" || a.level === "overdue"); });
+  // Reads a stack of packing lists in one go - Excel straight off the sheet, PDF through the
+  // same scanner the single-file screen uses - and writes them out as the summary sheet the
+  // packing list importer reads back in. Desktop work: a hundred files at a time is not
+  // something anyone does on a phone.
+  const [plrRows, setPlrRows] = useState([]);
+  const [plrBusy, setPlrBusy] = useState("");
+  const [plrNotes, setPlrNotes] = useState([]);
+  const plrInputRef = useRef(null);
+  async function handlePackingListReaderFiles(e) {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (!files.length) return;
+    const rows = [];
+    const notes = [];
+    for (const file of files) {
+      setPlrBusy(t.plrReading(file.name));
+      try {
+        if (/\.pdf$/i.test(file.name)) {
+          if (file.size > 3.2 * 1024 * 1024) {
+            notes.push(`${file.name}: ${t.plrTooBig(Math.round(file.size / 1024))}`);
+            continue;
+          }
+          const base64 = await new Promise((res, rej) => {
+            const fr = new FileReader();
+            fr.onerror = () => rej(new Error("could not be read"));
+            fr.onload = () => res(String(fr.result).split(",")[1]);
+            fr.readAsDataURL(file);
+          });
+          const parsed = await postPdfScan({
+            model: "claude-sonnet-4-6", max_tokens: 16000,
+            messages: [{ role: "user", content: [
+              { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
+              { type: "text", text: PDF_SCAN_PROMPT },
+            ] }],
+          });
+          const reconciled = reconcileGroupCaseCodes(parsed.groups || [], parsed.shippingMarks);
+          if (reconciled.corrections.length) {
+            notes.push(`${file.name}: ${reconciled.corrections.map((c) => `${c.lot} (${c.changed.join(", ")})`).join("; ")}`);
+          }
+          (reconciled.groups || []).forEach((g) => {
+            const packages = (g.packages || []).length
+              ? g.packages
+              : (g.caseNumbers || []).flatMap((m) => String(m || "").split(",")).map((c) => ({ code: c.trim() })).filter((p) => p.code);
+            rows.push(packingListSummaryRow(file.name, parsed.client, parsed.project, g.lot,
+              packages,
+              Number(g.statedWeightKg) || packages.reduce((n, p) => n + (Number(p.weightKg) || 0), 0),
+              Number(g.statedCbm) || packages.reduce((n, p) => n + (Number(p.cbm) || 0), 0),
+              Number(g.statedPackages) || 0, directory));
+          });
+        } else {
+          const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true, bookFiles: true });
+          const { groups, client, project } = parsePackingListWorkbook(wb) || { groups: [] };
+          if (!groups.length) { notes.push(`${file.name}: ${t.packingListNoStructure}`); continue; }
+          groups.forEach((g) => rows.push(packingListSummaryRow(file.name, g.client || client, g.project || project,
+            g.lot, g.packages, g.totalWeight, g.totalCbm, 0, directory)));
+        }
+      } catch (err) {
+        notes.push(`${file.name}: ${String((err && err.message) || err)}`);
+      }
+    }
+    setPlrBusy("");
+    setPlrRows((prev) => [...prev, ...rows]);
+    setPlrNotes((prev) => [...prev, ...notes]);
+  }
+  function exportPackingListSummary() {
+    const data = plrRows.map((r) => PL_SUMMARY_COLUMNS.map((c) => (r[c] === undefined ? "" : r[c])));
+    const ws = XLSX.utils.aoa_to_sheet([PL_SUMMARY_COLUMNS, ...data]);
+    ws["!cols"] = PL_SUMMARY_COLUMNS.map((c) => ({ wch: c === "Cases" ? 70 : c === "File Name" || c === "Project" ? 28 : 16 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Packing Lists");
+    XLSX.writeFile(wb, `packing-lists-${todayStr()}.xlsx`);
+  }
+  const ledgerSites = useMemo(() => storageLedger(activeItemsList, directory), [activeItemsList, directory]);
+  const [ledgerOpen, setLedgerOpen] = useState({});
+  function exportLedger() {
+    const head = ["Site", "Client", "FC Job No.", "In / Out", "Type", "Date", "Reference (DM / SHK)", "Lift", "Pkgs In", "Pkgs Out", "Balance"];
+    const rows = [head];
+    ledgerSites.forEach((g) => g.moves.forEach((m) => rows.push([
+      g.label, g.client, m.jobNumber, m.dir, m.type, m.date, m.ref, m.lot,
+      m.dir === "IN" ? m.pkgs : "", m.dir === "OUT" ? m.pkgs : "", m.balance,
+    ])));
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws["!cols"] = head.map((h) => ({ wch: h === "Site" ? 34 : h === "Reference (DM / SHK)" ? 24 : 13 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Storage Ledger");
+    XLSX.writeFile(wb, `farspeed-storage-ledger-${todayStr()}.xlsx`);
+  }
+  const [storeMoves, setStoreMoves] = useState(null);
+  const [storeName, setStoreName] = useState("");
+  const storeInputRef = useRef(null);
+  async function handleStoreListFile(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: false });
+      const moves = parseClientStoreList(wb);
+      setStoreMoves(moves);
+      setStoreName(file.name);
+    } catch (err) {
+      alert(t.storeListUnreadable(String((err && err.message) || err)));
+    }
+  }
+  const storeRec = useMemo(
+    () => (storeMoves ? reconcileStoreList(storeMoves, activeItemsList) : []),
+    [storeMoves, activeItemsList]);
   const [checkInSearch, setCheckInSearch] = useState("");
   const [checkInOpen, setCheckInOpen] = useState({});
   const checkInGroups = useMemo(() => checkInAudit(activeItemsList), [activeItemsList]);
@@ -13478,12 +13965,15 @@ export default function FarspeedInventory() {
         if (!cur || String(date) > String(cur.date)) latest[key][kind] = { date, ref: ref || "" };
       };
       activeArrivals(it).forEach((a) => {
-        const kind = String(a.type || it.arrivingType || "").toUpperCase() === "CFS" ? "cfs" : "devan";
+        // Three arrival types now, so a Return is not quietly filed under Devan.
+        const at = String(a.type || it.arrivingType || "").toUpperCase();
+        const kind = at === "CFS" ? "cfs" : at === "RETURN" ? "return" : "devan";
         note(kind, a.date, a.declaredSource || it.jobNumber);
       });
       // An entry carrying no arrival batches still records when and how it came in.
       if (!activeArrivals(it).length) {
-        note(String(it.arrivingType || "").toUpperCase() === "CFS" ? "cfs" : "devan", it.depotArrivalDate, it.jobNumber);
+        const at0 = String(it.arrivingType || "").toUpperCase();
+        note(at0 === "CFS" ? "cfs" : at0 === "RETURN" ? "return" : "devan", it.depotArrivalDate, it.jobNumber);
       }
       activeDeliveries(it).forEach((d) => note("delivery", d.date, d.jobNumber));
     });
@@ -13672,7 +14162,7 @@ export default function FarspeedInventory() {
                 onClick={() => { setSettingsOpen((o) => !o); setNewEntryMenuOpen(false); }}
                 title={t.settingsLabel}
                 className="px-3 py-1.5 rounded text-sm font-semibold"
-                style={{ fontFamily: FONT_DISPLAY, background: ["duplicates", "cancelledjobs", "checkins"].includes(view) ? colors.amber : "transparent", color: ["duplicates", "cancelledjobs", "checkins"].includes(view) ? colors.ink : colors.onDark }}
+                style={{ fontFamily: FONT_DISPLAY, background: ["duplicates", "cancelledjobs", "checkins", "ledger", "plreader"].includes(view) ? colors.amber : "transparent", color: ["duplicates", "cancelledjobs", "checkins", "ledger", "plreader"].includes(view) ? colors.ink : colors.onDark }}
               >
                 ⚙
               </button>
@@ -13680,7 +14170,21 @@ export default function FarspeedInventory() {
                 <div className="absolute right-0 mt-1 rounded-lg overflow-hidden z-20" style={{ background: colors.surface, border: `1px solid ${colors.line}`, minWidth: 200 }}>
                   <button
                     className="block w-full text-left px-3 py-2 text-sm font-semibold"
-                    style={{ color: overCheckedIn > 0 ? colors.red : colors.ink, fontFamily: FONT_DISPLAY }}
+                    style={{ color: colors.ink, fontFamily: FONT_DISPLAY }}
+                    onClick={() => { setView("plreader"); setSettingsOpen(false); }}
+                  >
+                    {t.navPlReader}
+                  </button>
+                  <button
+                    className="block w-full text-left px-3 py-2 text-sm font-semibold"
+                    style={{ color: colors.ink, fontFamily: FONT_DISPLAY, borderTop: `1px solid ${colors.surfaceDim}` }}
+                    onClick={() => { setView("ledger"); setSettingsOpen(false); }}
+                  >
+                    {t.navLedger}
+                  </button>
+                  <button
+                    className="block w-full text-left px-3 py-2 text-sm font-semibold"
+                    style={{ color: overCheckedIn > 0 ? colors.red : colors.ink, fontFamily: FONT_DISPLAY, borderTop: `1px solid ${colors.surfaceDim}` }}
                     onClick={() => { setView("checkins"); setSettingsOpen(false); }}
                   >
                     {overCheckedIn > 0 ? t.navCheckInsCount(overCheckedIn) : t.navCheckIns}
@@ -13741,6 +14245,8 @@ export default function FarspeedInventory() {
             ["billing", t.navBilling],
             ["directory", t.navDirectory],
             ["joblog", t.navJobLog],
+            ["plreader", t.navPlReader],
+            ["ledger", t.navLedger],
             ["checkins", overCheckedIn > 0 ? t.navCheckInsCount(overCheckedIn) : t.navCheckIns],
             ["duplicates", duplicateGroups.length > 0 ? t.navDuplicatesCount(duplicateGroups.length) : t.navDuplicatesShort],
             ["cancelledjobs", cancelledJobs.length > 0 ? `${t.navCancelledJobs} (${cancelledJobs.length})` : t.navCancelledJobs],
@@ -13919,14 +14425,14 @@ export default function FarspeedInventory() {
                   <thead>
                     <tr style={{ background: colors.surfaceDim }}>
                       {[t.siteTotalsColSite, t.siteTotalsColClient, t.siteTotalsColPkgs, t.siteTotalsColCbm, t.siteTotalsColKg,
-                        t.siteTotalsColLastCfs, t.siteTotalsColLastDevan, t.siteTotalsColLastDelivery].map((h) => (
+                        t.siteTotalsColLastCfs, t.siteTotalsColLastDevan, t.siteTotalsColLastReturn, t.siteTotalsColLastDelivery].map((h) => (
                         <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {siteTotals.length === 0 && (
-                      <tr><td colSpan={8} className="px-3 py-4 text-center text-sm" style={{ color: colors.inkFaint }}>{t.siteTotalsNoneMsg}</td></tr>
+                      <tr><td colSpan={9} className="px-3 py-4 text-center text-sm" style={{ color: colors.inkFaint }}>{t.siteTotalsNoneMsg}</td></tr>
                     )}
                     {siteTotals.map((s) => (
                       <React.Fragment key={s.key}>
@@ -13942,7 +14448,7 @@ export default function FarspeedInventory() {
                         <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{s.pkgs}</td>
                         <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{s.cbm}</td>
                         <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{s.kg}</td>
-                        {["cfs", "devan", "delivery"].map((kind) => (
+                        {["cfs", "devan", "return", "delivery"].map((kind) => (
                           <td key={kind} className="px-3 py-2 whitespace-nowrap">
                             {s.latest[kind] ? (
                               <>
@@ -13959,7 +14465,7 @@ export default function FarspeedInventory() {
                       </tr>
                       {openSite[s.key] && s.refs.length > 0 && (
                         <tr style={{ background: colors.surfaceDim }}>
-                          <td colSpan={8} className="px-3 py-2">
+                          <td colSpan={9} className="px-3 py-2">
                             <table className="w-full text-xs">
                               <thead>
                                 <tr>
@@ -14240,6 +14746,125 @@ export default function FarspeedInventory() {
           </div>
         )}
 
+        {view === "plreader" && (
+          <div className="flex flex-col gap-4">
+            <div className="rounded-lg p-4" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+              <h3 className="text-sm font-bold uppercase tracking-wider mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.plrTitle}</h3>
+              <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.plrDesc}</p>
+              <input ref={plrInputRef} type="file" multiple accept=".pdf,.xlsx,.xls,.xlsm" className="hidden" onChange={handlePackingListReaderFiles} />
+              <button className="px-3 py-1.5 rounded text-sm font-semibold mr-2"
+                style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY, opacity: plrBusy ? 0.6 : 1 }}
+                disabled={!!plrBusy}
+                onClick={() => plrInputRef.current && plrInputRef.current.click()}>
+                {plrBusy || t.plrChooseBtn}
+              </button>
+              {plrRows.length > 0 && (
+                <>
+                  <button className="px-3 py-1.5 rounded text-sm font-semibold mr-2"
+                    style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY }}
+                    onClick={exportPackingListSummary}>{t.plrExportBtn}</button>
+                  <button className="text-sm font-semibold" style={{ color: colors.inkFaint }}
+                    onClick={() => { setPlrRows([]); setPlrNotes([]); }}>{t.plrClearBtn}</button>
+                </>
+              )}
+              {plrRows.length > 0 && (
+                <div className="text-xs mt-2" style={{ color: colors.inkFaint }}>
+                  {t.plrCount(plrRows.length, new Set(plrRows.map((r) => r["File Name"])).size,
+                    plrRows.filter((r) => r.Check === "Pkgs != Case #").length)}
+                </div>
+              )}
+            </div>
+            {plrNotes.map((n, i) => (
+              <div key={i} className="rounded px-3 py-2 text-sm" style={{ background: colors.redSoft, color: colors.red }}>{n}</div>
+            ))}
+            {plrRows.length > 0 && (
+              <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}`, background: colors.surface }}>
+                <table className="w-full text-sm">
+                  <thead><tr style={{ background: colors.surfaceDim }}>
+                    {PL_SUMMARY_COLUMNS.map((h) => (
+                      <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider whitespace-nowrap" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {plrRows.map((r, i) => (
+                      <tr key={i} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
+                        {PL_SUMMARY_COLUMNS.map((c) => (
+                          <td key={c} className="px-3 py-1.5"
+                            style={{
+                              fontFamily: ["PKGS", "KGS", "CBM"].includes(c) ? FONT_MONO : undefined,
+                              color: c === "Check" && r.Check ? colors.red : undefined,
+                              fontWeight: c === "Check" && r.Check ? 600 : undefined,
+                              maxWidth: c === "Cases" ? 360 : undefined,
+                              overflow: c === "Cases" ? "hidden" : undefined,
+                              textOverflow: c === "Cases" ? "ellipsis" : undefined,
+                              whiteSpace: c === "Cases" ? "nowrap" : undefined,
+                            }}
+                            title={c === "Cases" ? r[c] : undefined}>
+                            {r[c] === "" || r[c] === undefined ? "\u2014" : String(r[c])}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {view === "ledger" && (
+          <div className="flex flex-col gap-4">
+            <div className="rounded-lg p-4 flex flex-wrap items-start gap-3" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+              <div style={{ flex: "1 1 380px" }}>
+                <h3 className="text-sm font-bold uppercase tracking-wider mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.ledgerTitle}</h3>
+                <p className="text-sm" style={{ color: colors.inkFaint }}>{t.ledgerDesc}</p>
+              </div>
+              <button className="px-3 py-1.5 rounded text-sm font-semibold"
+                style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}
+                onClick={exportLedger}>{t.ledgerExportBtn}</button>
+            </div>
+            {ledgerSites.map((g) => {
+              const open = ledgerOpen[g.key] !== undefined ? ledgerOpen[g.key] : ledgerSites.length <= 3;
+              return (
+                <div key={g.key} className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+                  <div className="px-4 py-2 flex flex-wrap items-baseline gap-x-3 cursor-pointer" style={{ background: colors.surfaceDim }}
+                    onClick={() => setLedgerOpen((o) => ({ ...o, [g.key]: !open }))}>
+                    <span className="text-xs font-semibold" style={{ color: colors.amberText }}>{open ? "\u2212" : "+"}</span>
+                    <span className="text-sm font-bold" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{g.label}</span>
+                    {g.labelZh && <span className="text-xs" style={{ color: colors.inkFaint }}>{g.labelZh}</span>}
+                    <span className="text-xs" style={{ color: colors.inkFaint }}>{g.client}</span>
+                    <span className="text-xs ml-auto" style={{ color: colors.ink }}>{t.ledgerSiteLine(g.inTotal, g.outTotal, g.balance)}</span>
+                  </div>
+                  {open && (
+                    <table className="w-full text-sm" style={{ background: colors.surface }}>
+                      <thead><tr style={{ background: colors.surfaceDim }}>
+                        {[t.ledgerColDate, t.ledgerColJob, t.ledgerColDir, t.ledgerColType, t.siteRefsColRef, t.siteRefsColLots, t.ledgerColIn, t.ledgerColOut, t.ledgerColBalance].map((h, hi) => (
+                          <th key={hi} className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wider ${hi >= 6 ? "text-right" : "text-left"}`} style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
+                        ))}
+                      </tr></thead>
+                      <tbody>
+                        {g.moves.map((m, mi) => (
+                          <tr key={mi} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
+                            <td className="px-3 py-1.5 whitespace-nowrap">{m.date ? fmt(m.date) : "\u2014"}</td>
+                            <td className="px-3 py-1.5" style={{ fontFamily: FONT_MONO }}>{m.jobNumber || "\u2014"}</td>
+                            <td className="px-3 py-1.5 font-semibold" style={{ color: m.dir === "IN" ? colors.green : colors.red }}>{m.dir}</td>
+                            <td className="px-3 py-1.5 text-xs" style={{ color: colors.inkFaint }}>{m.type || "\u2014"}</td>
+                            <td className="px-3 py-1.5 text-xs">{m.ref || "\u2014"}</td>
+                            <td className="px-3 py-1.5 text-xs" style={{ color: colors.inkFaint }}>{m.lot || "\u2014"}</td>
+                            <td className="px-3 py-1.5 text-right" style={{ fontFamily: FONT_MONO }}>{m.dir === "IN" ? m.pkgs : ""}</td>
+                            <td className="px-3 py-1.5 text-right" style={{ fontFamily: FONT_MONO }}>{m.dir === "OUT" ? m.pkgs : ""}</td>
+                            <td className="px-3 py-1.5 text-right font-semibold" style={{ fontFamily: FONT_MONO, color: m.balance < 0 ? colors.red : colors.ink }}>{m.balance}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {view === "checkins" && (
           <div className="flex flex-col gap-4">
             <div className="rounded-lg p-4" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
@@ -14256,6 +14881,53 @@ export default function FarspeedInventory() {
                 </Field>
               </div>
             </div>
+            <div className="rounded-lg p-4" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+              <h3 className="text-sm font-bold uppercase tracking-wider mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.storeListTitle}</h3>
+              <p className="text-sm mb-2" style={{ color: colors.inkFaint }}>{t.storeListDesc}</p>
+              <input ref={storeInputRef} type="file" accept=".xlsx,.xls,.xlsm" className="hidden" onChange={handleStoreListFile} />
+              <button className="px-3 py-1.5 rounded text-sm font-semibold"
+                style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}
+                onClick={() => storeInputRef.current && storeInputRef.current.click()}>
+                {t.storeListChooseBtn}
+              </button>
+              {storeMoves && (
+                <span className="text-xs ml-3" style={{ color: colors.inkFaint }}>
+                  {t.storeListLoaded(storeName, storeMoves.length, new Set(storeMoves.map((m) => m.site)).size)}
+                </span>
+              )}
+            </div>
+            {storeRec.map((g) => (
+              <div key={g.site} className="rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+                <div className="px-4 py-2" style={{ background: colors.surfaceDim }}>
+                  <span className="text-sm font-bold" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{g.site}</span>
+                  <span className="text-xs ml-3" style={{ color: g.leftApp === g.leftSheet ? colors.green : colors.red }}>
+                    {t.storeListSiteLine(g.inSheet, g.outSheet, g.leftSheet, g.inApp, g.outApp, g.leftApp)}
+                  </span>
+                </div>
+                <table className="w-full text-sm" style={{ background: colors.surface }}>
+                  <thead><tr style={{ background: colors.surfaceDim }}>
+                    {[t.storeListColJob, t.storeListColDir, t.storeListColDm, t.storeListColSheet, t.storeListColApp, t.storeListColDiff].map((h, hi) => (
+                      <th key={hi} className="text-left px-3 py-1.5 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {g.rows.filter((r) => r.diff !== 0).map((r, ri) => (
+                      <tr key={ri} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
+                        <td className="px-3 py-1.5" style={{ fontFamily: FONT_MONO }}>{r.jobNumber}</td>
+                        <td className="px-3 py-1.5">{r.direction}</td>
+                        <td className="px-3 py-1.5 text-xs" style={{ color: colors.inkFaint }}>{r.dm || "\u2014"}</td>
+                        <td className="px-3 py-1.5" style={{ fontFamily: FONT_MONO }}>{r.pkgs}</td>
+                        <td className="px-3 py-1.5" style={{ fontFamily: FONT_MONO }}>{r.app}</td>
+                        <td className="px-3 py-1.5 font-semibold" style={{ fontFamily: FONT_MONO, color: colors.red }}>{r.diff > 0 ? `+${r.diff}` : r.diff}</td>
+                      </tr>
+                    ))}
+                    {g.rows.every((r) => r.diff === 0) && (
+                      <tr><td colSpan={6} className="px-3 py-2 text-sm" style={{ color: colors.green }}>{t.storeListSiteAgrees(g.rows.length)}</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            ))}
             {checkInFiltered.length === 0 && (
               <div className="rounded-lg p-6 text-sm text-center" style={{ background: colors.surface, border: `1px solid ${colors.line}`, color: colors.inkFaint }}>
                 {t.noneFoundMsg}
