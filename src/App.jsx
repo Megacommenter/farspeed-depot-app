@@ -13988,6 +13988,15 @@ export default function FarspeedInventory() {
     if (!window.confirm(t.permanentDeleteConfirmMsg)) return;
     persist(items.filter((i) => i.id !== itemId));
   }
+  // Deleting several at once is not the single delete run in a loop. That asks once per
+  // entry - eleven dialogs to dismiss - and worse, every call filters the same unchanged
+  // list and saves it, so the last one written wins and ten of the eleven come back. One
+  // confirmation, asked by the caller, and one save.
+  function handlePermanentlyDeleteItems(itemIds) {
+    const gone = new Set(itemIds || []);
+    if (!gone.size) return;
+    persist(items.filter((i) => !gone.has(i.id)));
+  }
 
   function handleImportRows(rows) {
     let counter = items.reduce((m, i) => Math.max(m, i.numericId || 0), 0);
@@ -14869,7 +14878,7 @@ export default function FarspeedInventory() {
                     <button className="text-sm font-semibold" style={{ color: colors.red }}
                       onClick={() => {
                         if (!window.confirm(t.invBulkDeleteConfirm(chosen.length, pkgs, delivered))) return;
-                        chosen.forEach((i) => handlePermanentlyDeleteItem(i.id));
+                        handlePermanentlyDeleteItems(chosen.map((i) => i.id));
                         setPickedRows({});
                       }}>{t.invBulkDeleteBtn}</button>
                     <button className="text-sm" style={{ color: colors.inkFaint }} onClick={() => setPickedRows({})}>{t.legacyClearSelection}</button>
