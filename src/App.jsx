@@ -2280,6 +2280,9 @@ const TEXT = {
     legacyDeleteStrandedMsg: (labels) => `Nothing of this file's making is still on ${labels}, so those are left alone.`,
     legacyDeleteNothingMsg: "This file created no depot records, so there is nothing to reverse \u2014 only the archive listing will go.",
     legacyDeleteHint: "Site names, SS/D.O. numbers and other details this file filled in on existing entries are not undone. Cases returned to Incoming can be checked in again from the Incoming tab.",
+    invSelectedCount: (n, pkgs) => `${n} selected \u00b7 ${pkgs} package${pkgs === 1 ? "" : "s"}`,
+    invBulkDeleteBtn: "Delete selected",
+    invBulkDeleteConfirm: (n, pkgs, delivered) => `Permanently delete ${n} inventory ${n === 1 ? "entry" : "entries"} and their ${pkgs} package${pkgs === 1 ? "" : "s"}?\n\n${delivered ? `${delivered} of them ${delivered === 1 ? "has" : "have"} deliveries recorded against them, and those go too.\n\n` : ""}Export first if you have not. This cannot be undone.`,
     incomingSelectAll: (n) => `Select all ${n} shown`,
     incomingSelectedCount: (n, cases) => `${n} selected \u00b7 ${cases} case${cases === 1 ? "" : "s"}`,
     incomingBulkDeleteBtn: "Delete selected",
@@ -3115,6 +3118,9 @@ const TEXT = {
     legacyDeleteStrandedMsg: (labels) => `${labels} 已無此檔案所建立之記錄，故不作處理。`,
     legacyDeleteNothingMsg: "此檔案並未建立任何倉存記錄，無需還原 \u2014 只會刪除存檔記錄。",
     legacyDeleteHint: "此檔案為現有批次填入之地盤名稱、提單資料等不會撤銷。回復待辦之貨箱可於「待到倉」重新辦理到倉。",
+    invSelectedCount: (n, pkgs) => `已選 ${n} 筆 \u00b7 ${pkgs} 件`,
+    invBulkDeleteBtn: "刪除已選",
+    invBulkDeleteConfirm: (n, pkgs, delivered) => `確認永久刪除 ${n} 筆倉庫記錄及其 ${pkgs} 件貨物？\n\n${delivered ? `其中 ${delivered} 筆已有送貨記錄，一併刪除。\n\n` : ""}如尚未匯出資料，請先匯出。此操作無法還原。`,
     incomingSelectAll: (n) => `全選目前 ${n} 筆`,
     incomingSelectedCount: (n, cases) => `已選 ${n} 筆 \u00b7 ${cases} 個貨箱`,
     incomingBulkDeleteBtn: "刪除已選",
@@ -13369,6 +13375,10 @@ export default function FarspeedInventory() {
   const [deliveryFilterStatus, setDeliveryFilterStatus] = useState("All");
   const [printJobSheet, setPrintJobSheet] = useState(null);
   const [expandedRowId, setExpandedRowId] = useState(null);
+  // Clearing a site out of inventory is the first step of a rebuild, and one row at a time
+  // is a hundred confirmations. Selection follows the filters, so ticking the header box
+  // takes the rows on screen and never one a filter is hiding.
+  const [pickedRows, setPickedRows] = useState({});
   const [openSite, setOpenSite] = useState({});
   const [siteTotalsOpen, setSiteTotalsOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -14848,7 +14858,25 @@ export default function FarspeedInventory() {
                   {DEPOTS.map((d) => <option key={d} value={d}>{depotLabel(d, lang)}</option>)}
                 </select>
               </Field>
-              <button className="px-3 py-1.5 rounded text-sm font-semibold ml-auto" style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY }} onClick={() => exportToExcel(filtered)}>
+              {(() => {
+                const chosen = filtered.filter((i) => pickedRows[i.id]);
+                if (!chosen.length) return null;
+                const pkgs = chosen.reduce((n, i) => n + totalUnits(i), 0);
+                const delivered = chosen.filter((i) => activeDeliveries(i).length).length;
+                return (
+                  <span className="flex items-center gap-3 ml-auto">
+                    <span className="text-sm font-semibold" style={{ color: colors.ink }}>{t.invSelectedCount(chosen.length, pkgs)}</span>
+                    <button className="text-sm font-semibold" style={{ color: colors.red }}
+                      onClick={() => {
+                        if (!window.confirm(t.invBulkDeleteConfirm(chosen.length, pkgs, delivered))) return;
+                        chosen.forEach((i) => handlePermanentlyDeleteItem(i.id));
+                        setPickedRows({});
+                      }}>{t.invBulkDeleteBtn}</button>
+                    <button className="text-sm" style={{ color: colors.inkFaint }} onClick={() => setPickedRows({})}>{t.legacyClearSelection}</button>
+                  </span>
+                );
+              })()}
+              <button className={`px-3 py-1.5 rounded text-sm font-semibold${Object.values(pickedRows).some(Boolean) ? "" : " ml-auto"}`} style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY }} onClick={() => exportToExcel(filtered)}>
                 {t.exportBtn(filtered.length)}
               </button>
               <button className="px-3 py-1.5 rounded text-sm font-semibold" style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }} onClick={() => { setEditing(null); setView("add"); }}>
@@ -14861,6 +14889,15 @@ export default function FarspeedInventory() {
                 <table className="w-full text-sm" style={{ background: colors.surface }}>
                   <thead>
                     <tr style={{ background: colors.surfaceDim }}>
+                      <th className="px-3 py-2" style={{ width: 34 }}>
+                        <input type="checkbox"
+                          checked={filtered.length > 0 && filtered.every((i) => pickedRows[i.id])}
+                          onChange={(e) => {
+                            const next = { ...pickedRows };
+                            filtered.forEach((i) => { if (e.target.checked) next[i.id] = true; else delete next[i.id]; });
+                            setPickedRows(next);
+                          }} />
+                      </th>
                       {[t.colId, t.colJobNo, t.colClient, t.colProjectSite, t.colUnit, t.colDepot, t.colDepotArrival, t.colStatus, t.colPackages, t.colCbm, t.colKg, ""].map((h) => (
                         <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
                       ))}
@@ -14868,14 +14905,19 @@ export default function FarspeedInventory() {
                   </thead>
                   <tbody>
                     {filtered.length === 0 && (
-                      <tr><td colSpan={12} className="px-3 py-6 text-center text-sm" style={{ color: colors.inkFaint }}>{t.noRecordsMsg}</td></tr>
+                      <tr><td colSpan={13} className="px-3 py-6 text-center text-sm" style={{ color: colors.inkFaint }}>{t.noRecordsMsg}</td></tr>
                     )}
                     {filtered.map((i) => (
                       <React.Fragment key={i.id}>
                       <tr
-                        style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink, cursor: "pointer" }}
+                        style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink, cursor: "pointer", background: pickedRows[i.id] ? colors.amberSoft : undefined }}
                         onClick={() => setExpandedRowId((prev) => (prev === i.id ? null : i.id))}
                       >
+                        <td className="px-3 py-2">
+                          <input type="checkbox" checked={!!pickedRows[i.id]}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => setPickedRows((p) => ({ ...p, [i.id]: e.target.checked }))} />
+                        </td>
                         <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{i.id}</td>
                         <td className="px-3 py-2" style={{ fontFamily: FONT_MONO }}>{i.jobNumber || "—"}</td>
                         <td className="px-3 py-2">{i.client}</td>
