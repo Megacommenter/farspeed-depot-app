@@ -10234,6 +10234,14 @@ Follow these extraction rules exactly - they keep the output compact even for lo
    - put every case marking, expanded from any comma-separated lines into individual entries, into "caseNumbers" on the group, exactly as printed;
    - leave "packages" as an empty array. Do NOT invent per-case weights or volumes for these - the totals are all the document states.
 2c-ii. The list of markings is often on a separate attached page laid out in several columns across the page, each row holding the marking split into parts - a lift number, a component code and a case suffix, e.g. "09  B11  09" or "19  D41  21-2-2". Read each column from top to bottom, then move to the next column to its right. Every row is ONE package. Join that row's parts, in the order printed and with no spaces, to form the marking - "09B1109", "19D4121-2-2" - following the style the memo's own face uses where it prints a few of them.
+2c-ii-b. On a packing list the case number and its lift marker sit on the SAME row, with the marker in parentheses: "B11 01  (#.01)", "E21 23  (#.23)", "B31 02 (#.02)". The lift number goes at the FRONT of the marking, not the back, and the row's own parts follow it in the order printed, with no spaces anywhere:
+    "B11 01   (#.01)"  ->  "01B1101"
+    "B11 02   (#.02)"  ->  "02B1102"
+    "E21 23   (#.23)"  ->  "23E2123"
+    "D11 01-3-1 (#.01)" ->  "01D1101-3-1"
+  Never leave the space in "B11 01", never return the marking without its leading lift number, and never put the lift number on the end. This is the form every delivery memo, job sheet and depot record uses, and a marking built any other way matches nothing.
+  The lift number is READ from the document, never assumed: a job covering lifts 01 and 02 has only 01 and 02 in front, and one covering 23 and 24 has only those. Take it from that row's own "(#.nn)" marker, and where a row has none, from the lift the section it sits under is announced with. Do not carry a number over from an example or from another document.
+2c-ii-c. Where a list of markings is separated by "&" before the last one - "01B81, 01D41, 01Z11 & 92B11" - the "&" is simply the final comma. Return that last marking like any other.
 2c-iii. CRITICAL - return exactly the markings that are printed, and no others. If they come to fewer than the stated package count, return the ones you can see: do NOT invent, pad, repeat or renumber markings to reach the stated total, and do NOT drop any to match a smaller one. The document disagreeing with itself is something the reader needs told, and it is reported from the two figures.
 2c-iv. Where a totals-only document's markings fall into more than one group, its face totals cover the whole document, so put them in "documentTotals" and NOT in "statedPackages"/"statedWeightKg"/"statedCbm" on any single group. Where everything is one group, put them on that group. Either way, state them once and never divide them yourself.
 2c-v. A packing list is often sent with a delivery order or arrival notice covering the same shipment. Where the total CBM or weight appears only on that companion page and not per order, put it in "documentTotals" - do NOT divide it between the orders yourself, and do NOT copy it onto one of them.
@@ -12192,8 +12200,25 @@ function siteNamePair(raw, directory) {
   if (hit) return { en: hit.siteEn || (hasCJK(text) ? "" : text), zh: hit.siteZh || (hasCJK(text) ? text : "") };
   return hasCJK(text) ? { en: "", zh: text } : { en: text, zh: "" };
 }
+// The scan is told to join a packing list's case parts with the lift number in front -
+// "B11 01 (#.01)" is 01B1101 - but a model asked to follow a format will occasionally hand
+// back what it saw. Repairing it here as well costs nothing and means a marking never
+// reaches the depot in a form nothing matches.
+//
+// Only the exact shape is touched: a component code, a suffix, and a lift number in
+// parentheses, all on one marking. Anything already joined, or shaped any other way, is
+// left alone - guessing more widely would corrupt the makers who number their cases plainly.
+function repairLiftFirstMarking(code) {
+  const text = String(code == null ? "" : code).trim();
+  const m = text.match(/^([A-Z]{1,2}\d{2})\s+([\dA-Z][\dA-Z-]*)\s*\(#\.(\d{1,2})\)$/i);
+  if (m) return `${m[3]}${m[1]}${m[2]}`.toUpperCase().replace(/\s+/g, "");
+  // The same thing with the marker already stripped off, leaving "B11 01".
+  const n = text.match(/^([A-Z]{1,2}\d{2})\s+(\d{1,2}[\dA-Z-]*)$/i);
+  if (n) return `${n[2].slice(0, 2)}${n[1]}${n[2]}`.toUpperCase().replace(/\s+/g, "");
+  return text;
+}
 function packingListSummaryRow(fileName, client, project, ref, packages, kg, cbm, statedPkgs, directory) {
-  const codes = (packages || []).map((p) => String((p && p.code) || "").trim()).filter(Boolean);
+  const codes = (packages || []).map((p) => repairLiftFirstMarking((p && p.code) || "")).filter(Boolean);
   const pkgs = statedPkgs || codes.length || (packages || []).length;
   const listed = codes.length;
   const c = clientNamePair(client);
