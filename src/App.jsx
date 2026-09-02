@@ -2280,6 +2280,10 @@ const TEXT = {
     legacyDeleteStrandedMsg: (labels) => `Nothing of this file's making is still on ${labels}, so those are left alone.`,
     legacyDeleteNothingMsg: "This file created no depot records, so there is nothing to reverse \u2014 only the archive listing will go.",
     legacyDeleteHint: "Site names, SS/D.O. numbers and other details this file filled in on existing entries are not undone. Cases returned to Incoming can be checked in again from the Incoming tab.",
+    incomingSelectAll: (n) => `Select all ${n} shown`,
+    incomingSelectedCount: (n, cases) => `${n} selected \u00b7 ${cases} case${cases === 1 ? "" : "s"}`,
+    incomingBulkDeleteBtn: "Delete selected",
+    incomingBulkDeleteConfirm: (n, cases, linked) => `Delete ${n} shipment${n === 1 ? "" : "s"} and their ${cases} case${cases === 1 ? "" : "s"}?\n\n${linked ? `${linked} of them ${linked === 1 ? "has" : "have"} already been checked into an inventory entry \u2014 those entries stay, but will no longer have a packing list behind them.\n\n` : ""}This cannot be undone.`,
     legacySelectAllHint: "Select every file the filters above are showing",
     legacySelectedCount: (n) => `${n} file${n === 1 ? "" : "s"} selected`,
     legacyBulkReverseBtn: "Reverse records and delete",
@@ -3111,6 +3115,10 @@ const TEXT = {
     legacyDeleteStrandedMsg: (labels) => `${labels} 已無此檔案所建立之記錄，故不作處理。`,
     legacyDeleteNothingMsg: "此檔案並未建立任何倉存記錄，無需還原 \u2014 只會刪除存檔記錄。",
     legacyDeleteHint: "此檔案為現有批次填入之地盤名稱、提單資料等不會撤銷。回復待辦之貨箱可於「待到倉」重新辦理到倉。",
+    incomingSelectAll: (n) => `全選目前 ${n} 筆`,
+    incomingSelectedCount: (n, cases) => `已選 ${n} 筆 \u00b7 ${cases} 個貨箱`,
+    incomingBulkDeleteBtn: "刪除已選",
+    incomingBulkDeleteConfirm: (n, cases, linked) => `確認刪除 ${n} 筆待到倉記錄及其 ${cases} 個貨箱？\n\n${linked ? `其中 ${linked} 筆已到倉至倉庫記錄 \u2014 該等記錄會保留，但將無裝箱單依據。\n\n` : ""}此操作無法還原。`,
     legacySelectAllHint: "選取目前篩選結果中所有檔案",
     legacySelectedCount: (n) => `已選 ${n} 份檔案`,
     legacyBulkReverseBtn: "還原記錄並刪除",
@@ -9771,6 +9779,10 @@ function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, 
   const [selectedByShipment, setSelectedByShipment] = useState({});
   const [formByShipment, setFormByShipment] = useState({});
   const [manualOpen, setManualOpen] = useState(false);
+  // Clearing a site's shipments one card at a time is the same hundred clicks the backlog
+  // had. Selection follows the filters, so "select all" is always the cards on screen and
+  // never one a filter is hiding.
+  const [picked, setPicked] = useState({});
   const inputStyle = inputStyleFor(colors);
 
   function remainingPkgs(inc) {
@@ -9782,6 +9794,11 @@ function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, 
   }
 
   const clientOptions = useMemo(() => [...new Set(incoming.map((i) => i.client).filter(Boolean))].sort(), [incoming]);
+  const pickedIncoming = incoming.filter((i) => picked[i.id]);
+  const pickedCases = pickedIncoming.reduce((n, i) => n + (i.packages || []).length, 0);
+  // A shipment already checked into an inventory entry is the one worth warning about:
+  // deleting it leaves that entry with no packing list behind it.
+  const pickedLinked = pickedIncoming.filter((i) => i.linkedItemId).length;
   const filtered = incoming.filter((inc) => {
     if (filterClient !== "All" && inc.client !== filterClient) return false;
     if (!showCompleted && isComplete(inc)) return false;
@@ -9874,6 +9891,35 @@ function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, 
       </div>
 
       <div className="flex flex-col gap-3">
+        {filtered.length > 0 && (
+          <div className="flex flex-wrap items-center gap-3 px-1">
+            <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: colors.inkFaint }}>
+              <input type="checkbox"
+                checked={filtered.every((i) => picked[i.id])}
+                onChange={(e) => {
+                  const next = { ...picked };
+                  filtered.forEach((i) => { if (e.target.checked) next[i.id] = true; else delete next[i.id]; });
+                  setPicked(next);
+                }} />
+              {t.incomingSelectAll(filtered.length)}
+            </label>
+            {pickedIncoming.length > 0 && (
+              <>
+                <span className="text-xs font-semibold" style={{ color: colors.ink }}>{t.incomingSelectedCount(pickedIncoming.length, pickedCases)}</span>
+                <button className="text-xs font-semibold" style={{ color: colors.red }}
+                  onClick={() => {
+                    if (!window.confirm(t.incomingBulkDeleteConfirm(pickedIncoming.length, pickedCases, pickedLinked))) return;
+                    const ids = new Set(pickedIncoming.map((i) => i.id));
+                    setIncoming((prev) => prev.filter((i) => !ids.has(i.id)));
+                    setPicked({});
+                  }}>
+                  {t.incomingBulkDeleteBtn}
+                </button>
+                <button className="text-xs" style={{ color: colors.inkFaint }} onClick={() => setPicked({})}>{t.legacyClearSelection}</button>
+              </>
+            )}
+          </div>
+        )}
         {filtered.length === 0 && (
           <div className="px-3 py-6 text-center text-sm rounded-lg" style={{ background: colors.surface, border: `1px solid ${colors.line}`, color: colors.inkFaint }}>
             {t.incomingNoneMsg}
@@ -9892,7 +9938,11 @@ function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, 
                 style={{ background: colors.surfaceDim }}
                 onClick={() => setExpandedId(isOpen ? null : inc.id)}
               >
-                <div>
+                <div className="flex items-start gap-3">
+                  <input type="checkbox" className="mt-1" checked={!!picked[inc.id]}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => setPicked((p) => ({ ...p, [inc.id]: e.target.checked }))} />
+                  <div>
                   <div className="text-sm font-bold" style={{ color: colors.ink, fontFamily: FONT_DISPLAY }}>
                     {inc.client} · {inc.project || inc.constructionSite}{inc.unitCode ? ` \u00b7 ${inc.unitCode}` : ""}
                   </div>
@@ -9907,6 +9957,7 @@ function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, 
                       inc.linkedItemId ? t.incomingLinkedTo(inc.linkedItemId) : "",
                     ].filter(Boolean).join(" \u00b7 ")}
                   </div>
+                </div>
                 </div>
                 {complete ? (
                   <Badge tone="green" colors={colors}>{t.incomingFullyCheckedIn}</Badge>
