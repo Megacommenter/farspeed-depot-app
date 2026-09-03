@@ -12245,6 +12245,11 @@ function packingListSummaryRow(fileName, client, project, ref, packages, kg, cbm
     "Cases": codes.join(", "),
     // Blank when they agree, so the eye goes straight to the ones that do not.
     "Check": listed === 0 ? "no case numbers" : (listed === pkgs ? "" : "Pkgs != Case #"),
+    // The row's own verdict, kept apart from the cross-file notes. Check is rebuilt from
+    // this every time; building it from the previous Check made each keystroke append
+    // another copy, so typing "Mitsubishi" left one note for "M", another for "Mi", and so
+    // on until the column was taller than the screen.
+    __baseCheck: listed === 0 ? "no case numbers" : (listed === pkgs ? "" : "Pkgs != Case #"),
     __listed: listed,
   };
 }
@@ -14264,7 +14269,9 @@ export default function FarspeedInventory() {
       if (sites.length > 1) idxs.forEach((i) => notes[i].push(t.plrRefSiteClash(sites.join(" / "))));
     });
     return rows.map((r, i) => {
-      const all = [...new Set([r.Check, ...notes[i]].filter(Boolean))];
+      // Rebuilt, never appended to.
+      const base = r.__baseCheck !== undefined ? r.__baseCheck : "";
+      const all = [...new Set([base, ...notes[i]].filter(Boolean))];
       return { ...r, Check: all.join(" \u00b7 "), __conflict: notes[i].length > 0 };
     });
   }
@@ -14777,7 +14784,11 @@ export default function FarspeedInventory() {
         </div>
       )}
 
-      <div className="p-3 md:p-6 max-w-6xl mx-auto">
+      {/* The reader and the ledger are wide tables - eleven columns of case markings - and a
+          six-column page frame squeezed them into a ribbon down the middle of a monitor.
+          Those two get the full width; everything else keeps the narrower measure, which is
+          easier to read for forms and lists. */}
+      <div className={`p-3 md:p-6 mx-auto${["plreader", "ledger", "checkins"].includes(view) ? " w-full" : " max-w-6xl"}`}>
         {error && <div className="mb-4 px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>{error}</div>}
         {conflictKey && (
           <div className="mb-4 px-3 py-3 rounded text-sm" style={{ background: colors.amberSoft, color: colors.ink, borderLeft: `3px solid ${colors.amber}` }}>
@@ -15321,8 +15332,14 @@ export default function FarspeedInventory() {
                           if (readOnly) {
                             return (
                               <td key={c} className="px-3 py-1.5"
-                                style={{ color: tone, fontWeight: (r.__conflict || (c === "Check" && r.Check)) ? 600 : undefined, maxWidth: 260 }}>
-                                {r[c] === "" || r[c] === undefined ? "\u2014" : String(r[c])}
+                                style={{ color: tone, fontWeight: (r.__conflict || (c === "Check" && r.Check)) ? 600 : undefined, maxWidth: c === "Check" ? 300 : 220 }}>
+                                {/* Clamped to three lines. A row whose note runs long used to
+                                    grow the row past the height of the screen, which made the
+                                    table impossible to scroll; the whole note is on hover. */}
+                                <div title={String(r[c] || "")}
+                                  style={c === "Check" ? { display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden", lineHeight: 1.35 } : undefined}>
+                                  {r[c] === "" || r[c] === undefined ? "\u2014" : String(r[c])}
+                                </div>
                               </td>
                             );
                           }
