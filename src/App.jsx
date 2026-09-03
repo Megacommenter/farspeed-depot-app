@@ -10240,6 +10240,7 @@ Follow these extraction rules exactly - they keep the output compact even for lo
     "E21 23   (#.23)"  ->  "23E2123"
     "D11 01-3-1 (#.01)" ->  "01D1101-3-1"
   Never leave the space in "B11 01", never return the marking without its leading lift number, and never put the lift number on the end. This is the form every delivery memo, job sheet and depot record uses, and a marking built any other way matches nothing.
+  Moving the lift number to the front of a marking does NOT make it the lot. The lot stays whatever rule 2c gives - the DM number for a Mitsubishi document, or the shipping mark or shop order where there is no DM - and the lift number belongs in front of each case marking and nowhere else. Returning "23" as the lot because the cases are lift 23 loses the reference every other document keys on.
   The lift number is READ from the document, never assumed: a job covering lifts 01 and 02 has only 01 and 02 in front, and one covering 23 and 24 has only those. Take it from that row's own "(#.nn)" marker, and where a row has none, from the lift the section it sits under is announced with. Do not carry a number over from an example or from another document.
 2c-ii-c. Where a list of markings is separated by "&" before the last one - "01B81, 01D41, 01Z11 & 92B11" - the "&" is simply the final comma. Return that last marking like any other.
 2c-iii. CRITICAL - return exactly the markings that are printed, and no others. If they come to fewer than the stated package count, return the ones you can see: do NOT invent, pad, repeat or renumber markings to reach the stated total, and do NOT drop any to match a smaller one. The document disagreeing with itself is something the reader needs told, and it is reported from the two figures.
@@ -12208,17 +12209,28 @@ function siteNamePair(raw, directory) {
 // Only the exact shape is touched: a component code, a suffix, and a lift number in
 // parentheses, all on one marking. Anything already joined, or shaped any other way, is
 // left alone - guessing more widely would corrupt the makers who number their cases plainly.
-function repairLiftFirstMarking(code) {
+function repairLiftFirstMarking(code, lift) {
   const text = String(code == null ? "" : code).trim();
   const m = text.match(/^([A-Z]{1,2}\d{2})\s+([\dA-Z][\dA-Z-]*)\s*\(#\.(\d{1,2})\)$/i);
   if (m) return `${m[3]}${m[1]}${m[2]}`.toUpperCase().replace(/\s+/g, "");
   // The same thing with the marker already stripped off, leaving "B11 01".
   const n = text.match(/^([A-Z]{1,2}\d{2})\s+(\d{1,2}[\dA-Z-]*)$/i);
   if (n) return `${n[2].slice(0, 2)}${n[1]}${n[2]}`.toUpperCase().replace(/\s+/g, "");
-  return text;
+  // Joined, but with the lift left off the front: "E21 23" came back as "E2123" rather than
+  // "23E2123". The lift is known from the lot the case sits in, so it is put where it
+  // belongs - but only when the marking does not already start with it, or a correct
+  // "23B1123" would be given a second 23.
+  const l = String(lift == null ? "" : lift).trim();
+  if (/^\d{1,2}$/.test(l) && /^[A-Z]{1,2}\d/i.test(text) && !text.startsWith(l)) {
+    return `${l}${text}`.toUpperCase().replace(/\s+/g, "");
+  }
+  return text.toUpperCase() === text ? text : text;
 }
 function packingListSummaryRow(fileName, client, project, ref, packages, kg, cbm, statedPkgs, directory) {
-  const codes = (packages || []).map((p) => repairLiftFirstMarking((p && p.code) || "")).filter(Boolean);
+  // The lot doubles as the lift number on these packing lists - "23", "24" - which is what
+  // a marking that came back without its prefix needs.
+  const liftHint = /^\d{1,2}$/.test(String(ref || "").trim()) ? String(ref).trim() : "";
+  const codes = (packages || []).map((p) => repairLiftFirstMarking((p && p.code) || "", liftHint)).filter(Boolean);
   const pkgs = statedPkgs || codes.length || (packages || []).length;
   const listed = codes.length;
   const c = clientNamePair(client);
@@ -14217,7 +14229,9 @@ export default function FarspeedInventory() {
     // in, or typed by hand gets the same treatment as a fresh one. Without this, rows read
     // by an older build keep "B11 23" for ever, because nothing re-reads them.
     const rows = (input || []).map((r) => {
-      const fixed = String(r.Cases || "").split(",").map((c) => repairLiftFirstMarking(c)).filter(Boolean).join(", ");
+      const hint = /^\d{1,2}$/.test(String(r["DM or SHK or other Client Reference"] || "").trim())
+        ? String(r["DM or SHK or other Client Reference"]).trim() : "";
+      const fixed = String(r.Cases || "").split(",").map((c) => repairLiftFirstMarking(c, hint)).filter(Boolean).join(", ");
       return fixed === r.Cases ? r : { ...r, Cases: fixed };
     });
     const seenCase = new Map();
