@@ -12213,11 +12213,20 @@ function siteNamePair(raw, directory) {
 // left alone - guessing more widely would corrupt the makers who number their cases plainly.
 function repairLiftFirstMarking(code, lift) {
   const text = String(code == null ? "" : code).trim();
-  const m = text.match(/^([A-Z]{1,2}\d{2})\s+([\dA-Z][\dA-Z-]*)\s*\(#\.(\d{1,2})\)$/i);
+  // The component code is one to three letters and may carry no digits at all: a machine
+  // room list writes "B11 01", a guide-rail list writes "C 01", and both become
+  // lift-first - 01B1101 and 19C01. Requiring digits after the letters matched the first
+  // case on every row and left every other one spaced.
+  const m = text.match(/^([A-Z]{1,3}\d{0,2})\s+([\dA-Z][\dA-Z-]*)\s*\(#\.(\d{1,2})\)$/i);
   if (m) return `${m[3]}${m[1]}${m[2]}`.toUpperCase().replace(/\s+/g, "");
-  // The same thing with the marker already stripped off, leaving "B11 01".
-  const n = text.match(/^([A-Z]{1,2}\d{2})\s+(\d{1,2}[\dA-Z-]*)$/i);
-  if (n) return `${n[2].slice(0, 2)}${n[1]}${n[2]}`.toUpperCase().replace(/\s+/g, "");
+  // The same thing with the marker already stripped off, leaving "B11 01" or "C 01". Here
+  // the lift has to come from the suffix or from the lot, since the row no longer says it.
+  const n = text.match(/^([A-Z]{1,3}\d{0,2})\s+(\d{1,2}[\dA-Z-]*)$/i);
+  if (n) {
+    const l = String(lift == null ? "" : lift).trim();
+    const lead = /^\d{1,2}$/.test(l) ? l : n[2].slice(0, 2);
+    return `${lead}${n[1]}${n[2]}`.toUpperCase().replace(/\s+/g, "");
+  }
   // Joined, but with the lift left off the front: "E21 23" came back as "E2123" rather than
   // "23E2123". The lift is known from the lot the case sits in, so it is put where it
   // belongs - but only when the marking does not already start with it, or a correct
