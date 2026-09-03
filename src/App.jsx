@@ -14326,8 +14326,16 @@ export default function FarspeedInventory() {
       }
     }
     setJsrBusy("");
-    setJsrRows((prev) => [...prev, ...rows]);
-    setJsrNotes((prev) => [...prev, ...notes]);
+    // Adding a sheet again replaces what it produced before rather than stacking a second
+    // copy beside it. Correcting one file out of fifty otherwise meant starting over, and a
+    // reader that silently keeps the superseded version is worse than one that refuses.
+    const replaced = new Set(rows.map((r) => r.File));
+    const replacedFiles = new Set(files.map((f) => f.name));
+    setJsrRows((prev) => [...prev.filter((r) => !replaced.has(r.File)), ...rows]);
+    setJsrNotes((prev) => [
+      ...prev.filter((n) => ![...replacedFiles].some((f) => String(n).startsWith(`${f}:`))),
+      ...notes,
+    ]);
   }
   function exportJobSheetRows() {
     const data = jsrRows.map((r) => JOBSHEET_EXPORT_COLUMNS.map((c) => (r[c] === undefined ? "" : r[c])));
@@ -15534,6 +15542,7 @@ export default function FarspeedInventory() {
                     {[...JOBSHEET_EXPORT_COLUMNS, t.jsrColTally].map((h) => (
                       <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider whitespace-nowrap" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
                     ))}
+                    <th className="px-3 py-2" style={{ width: 40 }} />
                   </tr></thead>
                   <tbody>
                     {jsrRows.map((r, i) => {
@@ -15556,6 +15565,12 @@ export default function FarspeedInventory() {
                           <td className="px-3 py-1.5 whitespace-nowrap font-semibold"
                             style={{ fontFamily: FONT_MONO, color: agree ? colors.green : colors.red }}>
                             {declared ? `${listed} / ${declared}` : (listed ? `${listed}` : "\u2014")}
+                          </td>
+                          <td className="px-2 py-1 text-center">
+                            <button title={t.plrRemoveRow} style={{ color: colors.red, fontSize: 16, lineHeight: 1, padding: "2px 6px" }}
+                              onClick={() => setJsrRows((prev) => prev.filter((_, n) => n !== i))}>
+                              {"\u00d7"}
+                            </button>
                           </td>
                         </tr>
                       );
