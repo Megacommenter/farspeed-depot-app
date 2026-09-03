@@ -2140,6 +2140,7 @@ const TEXT = {
     plrRefSiteClash: (list) => `this reference is given two different sites: ${list}`,
     plrChooseBtn: "Choose packing lists\u2026",
     plrReading: (name) => `Reading ${name}\u2026`,
+    plrRemoveRow: "Remove this row",
     plrSaveBtn: "Save table",
     plrSavedNote: (n) => `${n} row${n === 1 ? "" : "s"} saved`,
     plrSaveFailed: (err) => `could not be saved: ${err}`,
@@ -2986,6 +2987,7 @@ const TEXT = {
     plrRefSiteClash: (list) => `此參考編號對應兩個不同地盤：${list}`,
     plrChooseBtn: "選擇裝箱單…",
     plrReading: (name) => `正在讀取 ${name}…`,
+    plrRemoveRow: "刪除此行",
     plrSaveBtn: "儲存表格",
     plrSavedNote: (n) => `已儲存 ${n} 行`,
     plrSaveFailed: (err) => `無法儲存：${err}`,
@@ -15316,6 +15318,7 @@ export default function FarspeedInventory() {
                     {PL_SUMMARY_COLUMNS.map((h) => (
                       <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider whitespace-nowrap" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
                     ))}
+                    <th className="px-3 py-2" style={{ width: 40 }} />
                   </tr></thead>
                   <tbody>
                     {plrRows.map((r, i) => (
@@ -15364,6 +15367,18 @@ export default function FarspeedInventory() {
                             </td>
                           );
                         })}
+                        {/* One file can cover the same cases as two others - a combined list
+                            alongside the per-lift ones - and only someone reading the
+                            paperwork can say which to keep. */}
+                        <td className="px-2 py-1 text-center">
+                          <button
+                            title={t.plrRemoveRow}
+                            style={{ color: colors.red, fontSize: 16, lineHeight: 1, padding: "2px 6px" }}
+                            onClick={() => setPlrRows((prev) => withConflicts(prev.filter((_, n) => n !== i)))}
+                          >
+                            {"\u00d7"}
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
