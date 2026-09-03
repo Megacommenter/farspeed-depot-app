@@ -14383,7 +14383,19 @@ export default function FarspeedInventory() {
   // checked is exactly what was on screen - and the checking, the case selection and the
   // processing are the ones that already exist.
   function submitJobSheetRows() {
-    const grid = [JOBSHEET_EXPORT_COLUMNS, ...jsrRows.map((r) => JOBSHEET_EXPORT_COLUMNS.map((c) => (r[c] === undefined ? "" : r[c])))];
+    // The reconciliation's columns carry no client or site - it is one site's workbook, so
+    // it does not need them - but the depot does: without them a row lands on the review
+    // screen with "select client" empty and nothing to match a packing list against. They
+    // are read off each sheet already, so they ride along as two extra columns, which the
+    // importer picks up by name.
+    const cols = [...JOBSHEET_EXPORT_COLUMNS, "Client", "Project", "Refer to Job Number", "Lift No."];
+    const grid = [cols, ...jsrRows.map((r) => cols.map((c) => {
+      if (c === "Client") return r.__client || "";
+      if (c === "Project") return r.__project || "";
+      if (c === "Refer to Job Number") return r.__ref || "";
+      if (c === "Lift No.") return r.__lift || "";
+      return r[c] === undefined ? "" : r[c];
+    }))];
     const built = rowsFromJobSheetSpreadsheet(grid, { name: t.jsrSubmitSource(todayStr()) }, resolveClientGuess);
     if (!built || !built.length) { alert(t.jsrSubmitNothing); return; }
     if (!window.confirm(t.jsrSubmitConfirm(built.length, jsrRows.length))) return;
