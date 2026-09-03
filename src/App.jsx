@@ -2132,6 +2132,12 @@ const TEXT = {
     fAwaitingCollection: "No arrival date yet \u2014 these goods are still awaiting collection",
     legacyFieldNames: { client: "client", site: "site", date: "date" },
     legacyRowMissingHint: (list) => `This file needs its ${list} filled in before it can be processed. The date decides where it sits in the storage ledger and when storage starts being charged, so it cannot be left blank.`,
+    navJsReader: "Job sheet reader",
+    jsrTitle: "Job sheet reader",
+    jsrDesc: "Read a stack of old Devan, CFS, Delivery and Return job sheets at once and write them out as one spreadsheet, a row per lot, with the case numbers separated by commas. Upload that spreadsheet through Legacy Upload and the app checks every case against the packing lists it already holds. Check the tally on each row first: it counts the cases found against the package count the sheet declares.",
+    jsrChooseBtn: "Choose job sheets\u2026",
+    jsrCount: (rows, files) => `${rows} lot${rows === 1 ? "" : "s"} from ${files} job sheet${files === 1 ? "" : "s"}`,
+    jsrColTally: "Cases read",
     navPlReader: "Packing list reader",
     plrTitle: "Packing list reader",
     plrDesc: "Read a stack of packing lists at once \u2014 Excel straight off the sheet, PDF through the same scanner the single-file screen uses. The result downloads as one spreadsheet, which Packing List Import reads back in a single upload. Check the last column before you use it: it flags any lot whose case list does not match the package count it declares.",
@@ -2979,6 +2985,12 @@ const TEXT = {
     fAwaitingCollection: "尚無到倉日期 \u2014 貨物仍待提貨",
     legacyFieldNames: { client: "客戶", site: "地盤", date: "日期" },
     legacyRowMissingHint: (list) => `此檔案需填寫${list}方可處理。日期決定其於存倉紀錄中之排序及起算收費時間，不可留空。`,
+    navJsReader: "工單讀取",
+    jsrTitle: "工單讀取",
+    jsrDesc: "一次讀取多份舊工單（拆櫃、CFS、送貨、退倉），匯出為一份表格，每個批次一行，件號以逗號分隔。再經「舊資料上載」匯入，系統會與已有裝箱單逐件核對。請先核對每行之件數。",
+    jsrChooseBtn: "選擇工單…",
+    jsrCount: (rows, files) => `${files} 份工單共 ${rows} 個批次`,
+    jsrColTally: "讀取件數",
     navPlReader: "裝箱單讀取",
     plrTitle: "裝箱單讀取",
     plrDesc: "一次讀取多份裝箱單 \u2014 Excel 直接讀取，PDF 則交由與單檔畫面相同之掃描器處理。結果可匯出為一份表格，再由「裝箱單匯入」一次載入。使用前請先核對最後一欄：凡件數與件號不符者均會標示。",
@@ -12292,6 +12304,67 @@ function resolveDimUnit(packages, statedCbm) {
   // millimetres rather than silently multiplied by a thousand.
   return Math.max(...withDims.map((p) => Math.max(Number(p.length), Number(p.width), Number(p.height)))) >= 100 ? "mm" : "cm";
 }
+// The job sheet importer, brought in from the standalone page so there is one copy of the
+// parser rather than two drifting apart. Columns are the reconciliation's own, in its order.
+const JOBSHEET_EXPORT_COLUMNS = ["File", "Date", "Job Number", "Type", "DM No.", "PKGS", "KGS", "CBM", "Cases"];
+// "CFS 25_2608174_金田.xlsx" is CFS 25; "Delivery 4_2607208.xlsx" is Delivery 4. A name that
+// does not follow that shape keeps its own, which is better than a tidy label meaning nothing.
+function shortJobSheetLabel(name, type) {
+  const stem = String(name || "").replace(/\.[^.]+$/, "");
+  const m = stem.match(/^\s*(CFS|Devan|Delivery|Return|Shifting|Hoisting)\s*[_\-\s]?\s*(\d+)/i);
+  return m ? `${type || m[1]} ${m[2]}` : stem;
+}
+// One row per lot, which is how the depot holds them: a sheet covering two lifts under one
+// job number becomes two rows, each with its own figures and cases.
+function jobSheetExportRows(fileName, parsed) {
+  const type = guessDocTypeFromName(fileName);
+  const base = {
+    "File": shortJobSheetLabel(fileName, type), "Date": parsed.date || "",
+    "Job Number": parsed.jobNumber || "", "Type": type,
+  };
+  const rows = [];
+  const problems = [];
+  for (const block of parsed.refBlocks || []) {
+    if (!(block.lots || []).length) {
+      if (!block.refJobNumber) continue;
+      rows.push({ ...base, "DM No.": "", "PKGS": "", "KGS": "", "CBM": "", "Cases": "", __ref: block.refJobNumber });
+      problems.push(`refers to job ${block.refJobNumber} but the sheet gives it no lot, figures or cases`);
+      continue;
+    }
+    for (const lot of block.lots) {
+      const cases = (lot.caseCodes || []).length ? lot.caseCodes : (lot.caseNumbers || []).map(String);
+      const declared = Number(lot.pkgs) || 0;
+      if (declared > 0 && cases.length && declared !== cases.length) {
+        problems.push(`${lot.lotRef || lot.unitCode || "lot"}: sheet says ${declared} pkgs, lists ${cases.length} cases`);
+      }
+      if (declared > 0 && !cases.length) {
+        problems.push(parsed.hasPastedContentImage
+          ? `${lot.lotRef || lot.unitCode || "lot"}: ${declared} pkgs, and the case list on this sheet is a pasted picture rather than typed cells`
+          : `${lot.lotRef || lot.unitCode || "lot"}: ${declared} pkgs but no case numbers on the sheet`);
+      }
+      rows.push({
+        ...base,
+        "DM No.": lot.lotRef || lot.unitCode || "",
+        "PKGS": lot.pkgs === "" ? "" : Number(lot.pkgs),
+        "KGS": lot.kg === "" ? "" : Number(lot.kg),
+        "CBM": lot.cbm === "" ? "" : Number(lot.cbm),
+        "Cases": cases.join(", "),
+        __ref: block.refJobNumber || "", __lift: lot.unitCode || "",
+        __client: parsed.client || "", __project: parsed.projectEn || parsed.projectZh || "",
+      });
+    }
+  }
+  if (!rows.length) {
+    rows.push({ ...base, "DM No.": parsed.shkNumber || "",
+      "PKGS": parsed.packageCount === "" ? "" : Number(parsed.packageCount),
+      "KGS": parsed.weightKg === "" ? "" : Number(parsed.weightKg),
+      "CBM": parsed.volumeCbm === "" ? "" : Number(parsed.volumeCbm),
+      "Cases": "", __ref: parsed.referJobNumber || "", __lift: parsed.unitCode || "",
+      __client: parsed.client || "", __project: parsed.projectEn || parsed.projectZh || "" });
+    problems.push("no lot found on this sheet \u2014 only the job details and totals were read");
+  }
+  return { rows, problems };
+}
 function packingListSummaryRow(fileName, client, project, ref, packages, kg, cbm, statedPkgs, directory) {
   // One unit for the whole lot, checked against the volume the lot itself states.
   const dimUnit = resolveDimUnit(packages, cbm);
@@ -14230,6 +14303,40 @@ export default function FarspeedInventory() {
   // same scanner the single-file screen uses - and writes them out as the summary sheet the
   // packing list importer reads back in. Desktop work: a hundred files at a time is not
   // something anyone does on a phone.
+  const [jsrRows, setJsrRows] = useState([]);
+  const [jsrNotes, setJsrNotes] = useState([]);
+  const [jsrBusy, setJsrBusy] = useState("");
+  const jsrInputRef = useRef(null);
+  async function handleJobSheetReaderFiles(e) {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (!files.length) return;
+    const rows = [];
+    const notes = [];
+    for (const file of files) {
+      setJsrBusy(t.plrReading(file.name));
+      try {
+        const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true, bookFiles: true });
+        const parsed = guessFieldsFromWorkbook(wb, { docType: guessDocTypeFromName(file.name) });
+        const built = jobSheetExportRows(file.name, parsed);
+        rows.push(...built.rows);
+        built.problems.forEach((pr) => notes.push(`${file.name}: ${pr}`));
+      } catch (err) {
+        notes.push(`${file.name}: ${String((err && err.message) || err)}`);
+      }
+    }
+    setJsrBusy("");
+    setJsrRows((prev) => [...prev, ...rows]);
+    setJsrNotes((prev) => [...prev, ...notes]);
+  }
+  function exportJobSheetRows() {
+    const data = jsrRows.map((r) => JOBSHEET_EXPORT_COLUMNS.map((c) => (r[c] === undefined ? "" : r[c])));
+    const ws = XLSX.utils.aoa_to_sheet([JOBSHEET_EXPORT_COLUMNS, ...data]);
+    ws["!cols"] = JOBSHEET_EXPORT_COLUMNS.map((c) => ({ wch: c === "Cases" ? 70 : c === "DM No." ? 20 : 14 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Job Sheets");
+    XLSX.writeFile(wb, `job-sheets-${todayStr()}.xlsx`);
+  }
   const [plrRows, setPlrRows] = useState([]);
   const [plrSaved, setPlrSaved] = useState("");
   // Reading a stack of PDFs takes minutes and the corrections take longer, so the table is
@@ -14764,7 +14871,7 @@ export default function FarspeedInventory() {
                 onClick={() => { setSettingsOpen((o) => !o); setNewEntryMenuOpen(false); }}
                 title={t.settingsLabel}
                 className="px-3 py-1.5 rounded text-sm font-semibold"
-                style={{ fontFamily: FONT_DISPLAY, background: ["duplicates", "cancelledjobs", "checkins", "ledger", "plreader"].includes(view) ? colors.amber : "transparent", color: ["duplicates", "cancelledjobs", "checkins", "ledger", "plreader"].includes(view) ? colors.ink : colors.onDark }}
+                style={{ fontFamily: FONT_DISPLAY, background: ["duplicates", "cancelledjobs", "checkins", "ledger", "plreader", "jsreader"].includes(view) ? colors.amber : "transparent", color: ["duplicates", "cancelledjobs", "checkins", "ledger", "plreader", "jsreader"].includes(view) ? colors.ink : colors.onDark }}
               >
                 ⚙
               </button>
@@ -14776,6 +14883,13 @@ export default function FarspeedInventory() {
                     onClick={() => { setView("plreader"); setSettingsOpen(false); }}
                   >
                     {t.navPlReader}
+                  </button>
+                  <button
+                    className="block w-full text-left px-3 py-2 text-sm font-semibold"
+                    style={{ color: colors.ink, fontFamily: FONT_DISPLAY, borderTop: `1px solid ${colors.surfaceDim}` }}
+                    onClick={() => { setView("jsreader"); setSettingsOpen(false); }}
+                  >
+                    {t.navJsReader}
                   </button>
                   <button
                     className="block w-full text-left px-3 py-2 text-sm font-semibold"
@@ -14848,6 +14962,7 @@ export default function FarspeedInventory() {
             ["directory", t.navDirectory],
             ["joblog", t.navJobLog],
             ["plreader", t.navPlReader],
+            ["jsreader", t.navJsReader],
             ["ledger", t.navLedger],
             ["checkins", overCheckedIn > 0 ? t.navCheckInsCount(overCheckedIn) : t.navCheckIns],
             ["duplicates", duplicateGroups.length > 0 ? t.navDuplicatesCount(duplicateGroups.length) : t.navDuplicatesShort],
@@ -14902,7 +15017,7 @@ export default function FarspeedInventory() {
           six-column page frame squeezed them into a ribbon down the middle of a monitor.
           Those two get the full width; everything else keeps the narrower measure, which is
           easier to read for forms and lists. */}
-      <div className={`p-3 md:p-6 mx-auto${["plreader", "ledger", "checkins"].includes(view) ? " w-full" : " max-w-6xl"}`}>
+      <div className={`p-3 md:p-6 mx-auto${["plreader", "jsreader", "ledger", "checkins"].includes(view) ? " w-full" : " max-w-6xl"}`}>
         {error && <div className="mb-4 px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>{error}</div>}
         {conflictKey && (
           <div className="mb-4 px-3 py-3 rounded text-sm" style={{ background: colors.amberSoft, color: colors.ink, borderLeft: `3px solid ${colors.amber}` }}>
@@ -15379,6 +15494,74 @@ export default function FarspeedInventory() {
                     </tbody>
                   </table>
                 </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {view === "jsreader" && (
+          <div className="flex flex-col gap-4">
+            <div className="rounded-lg p-4" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+              <h3 className="text-sm font-bold uppercase tracking-wider mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.jsrTitle}</h3>
+              <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.jsrDesc}</p>
+              <input ref={jsrInputRef} type="file" multiple accept=".xlsx,.xls,.xlsm,.csv" className="hidden" onChange={handleJobSheetReaderFiles} />
+              <button className="px-3 py-1.5 rounded text-sm font-semibold mr-2"
+                style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY, opacity: jsrBusy ? 0.6 : 1 }}
+                disabled={!!jsrBusy}
+                onClick={() => jsrInputRef.current && jsrInputRef.current.click()}>
+                {jsrBusy || t.jsrChooseBtn}
+              </button>
+              {jsrRows.length > 0 && (
+                <>
+                  <button className="px-3 py-1.5 rounded text-sm font-semibold mr-2"
+                    style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY }}
+                    onClick={exportJobSheetRows}>{t.plrExportBtn}</button>
+                  <button className="text-sm font-semibold" style={{ color: colors.inkFaint }}
+                    onClick={() => { setJsrRows([]); setJsrNotes([]); }}>{t.plrClearBtn}</button>
+                  <div className="text-xs mt-2" style={{ color: colors.inkFaint }}>
+                    {t.jsrCount(jsrRows.length, new Set(jsrRows.map((r) => r.File)).size)}
+                  </div>
+                </>
+              )}
+            </div>
+            {jsrNotes.map((n, i) => (
+              <div key={i} className="rounded px-3 py-2 text-sm" style={{ background: colors.redSoft, color: colors.red }}>{n}</div>
+            ))}
+            {jsrRows.length > 0 && (
+              <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}`, background: colors.surface }}>
+                <table className="w-full text-sm">
+                  <thead><tr style={{ background: colors.surfaceDim }}>
+                    {[...JOBSHEET_EXPORT_COLUMNS, t.jsrColTally].map((h) => (
+                      <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider whitespace-nowrap" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {jsrRows.map((r, i) => {
+                      const listed = r.Cases ? r.Cases.split(",").filter((c) => c.trim()).length : 0;
+                      const declared = Number(r.PKGS) || 0;
+                      const agree = !declared || listed === declared;
+                      return (
+                        <tr key={i} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
+                          {JOBSHEET_EXPORT_COLUMNS.map((c) => (
+                            <td key={c} className="px-3 py-1.5"
+                              style={{
+                                fontFamily: ["PKGS", "KGS", "CBM"].includes(c) ? FONT_MONO : undefined,
+                                maxWidth: c === "Cases" ? 420 : 200, overflow: "hidden",
+                                textOverflow: "ellipsis", whiteSpace: c === "Cases" ? "nowrap" : undefined,
+                              }}
+                              title={c === "Cases" ? String(r[c] || "") : undefined}>
+                              {r[c] === "" || r[c] === undefined ? "\u2014" : String(r[c])}
+                            </td>
+                          ))}
+                          <td className="px-3 py-1.5 whitespace-nowrap font-semibold"
+                            style={{ fontFamily: FONT_MONO, color: agree ? colors.green : colors.red }}>
+                            {declared ? `${listed} / ${declared}` : (listed ? `${listed}` : "\u2014")}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>
