@@ -12237,7 +12237,64 @@ function repairLiftFirstMarking(code, lift) {
   }
   return text.toUpperCase() === text ? text : text;
 }
+// A packing list that gives a case's length, width and height but no volume. The single-file
+// scan screen has always worked it out; the reader did not, so those cases arrived with no
+// CBM and fell back to an even share of the lot total.
+//
+// A centimetre cube is a millionth of a cubic metre and a millimetre cube a billionth. Where
+// the document doesn't name its unit, the size of the numbers decides: a case measured in
+// millimetres runs to hundreds or thousands, so a largest dimension under 400 is centimetres.
+function cbmFromDimensions(p, forcedUnit) {
+  const l = Number(p && p.length), w = Number(p && p.width), h = Number(p && p.height);
+  if (!(l > 0 && w > 0 && h > 0)) return 0;
+  const unit = String(forcedUnit || (p && p.dimUnit) || "").toLowerCase();
+  const divisor = unit === "cm" ? 1e6 : unit === "mm" ? 1e9 : (Math.max(l, w, h) < 400 ? 1e6 : 1e9);
+  return Math.round((l * w * h / divisor) * 10000) / 10000;
+}
+// Which unit a packing list measures in, decided once for the whole lot rather than case by
+// case. A list uses one unit throughout, and guessing per case can put two cases from the
+// same page a thousandfold apart.
+//
+// These come from mainland factories in both units, and the difference is never small: read
+// 2000 x 1200 x 1300 as centimetres instead of millimetres and a 3.12 CBM case becomes 3120.
+// So where the lot states its own volume, that decides it - whichever reading lands closer
+// is the right one. Only with nothing to check against does the size of the numbers get a
+// say, and then a whole case has to be plausible: crated elevator parts run from a few
+// hundredths of a cubic metre to about thirty, and a reading that puts the lot outside that
+// is the wrong reading whatever the digits look like.
+function resolveDimUnit(packages, statedCbm) {
+  const withDims = (packages || []).filter((p) => Number(p.length) > 0 && Number(p.width) > 0 && Number(p.height) > 0);
+  if (!withDims.length) return "";
+  const named = withDims.map((p) => String(p.dimUnit || "").toLowerCase()).filter((u) => u === "cm" || u === "mm");
+  if (named.length) return named[0];
+  const totalIn = (u) => withDims.reduce((n, p) => n + cbmFromDimensions(p, u), 0);
+  const cm = totalIn("cm"), mm = totalIn("mm");
+  const stated = Number(statedCbm) || 0;
+  if (stated > 0) return Math.abs(cm - stated) <= Math.abs(mm - stated) ? "cm" : "mm";
+  // No stated volume. The weight decides next, because density is not a matter of opinion:
+  // crated elevator parts run from roughly thirty kilos a cubic metre for light sheet work
+  // to fifteen hundred for a machine on its bed. A reading that makes a case lighter than
+  // packaging foam or denser than solid steel is the wrong reading.
+  const weight = withDims.reduce((n, p) => n + (Number(p.weightKg) || 0), 0);
+  if (weight > 0 && cm > 0 && mm > 0) {
+    const sane = (v) => { const d = weight / v; return d >= 30 && d <= 1500; };
+    if (sane(cm) && !sane(mm)) return "cm";
+    if (sane(mm) && !sane(cm)) return "mm";
+  }
+  // Nothing left but the size of the case itself. A crate is somewhere between a few
+  // hundredths of a cubic metre and about thirty.
+  const plausible = (total) => total > 0.002 * withDims.length && total < 30 * withDims.length;
+  if (plausible(cm) && !plausible(mm)) return "cm";
+  if (plausible(mm) && !plausible(cm)) return "mm";
+  // Genuinely ambiguous - both readings could be a real crate and the document says nothing.
+  // These lists come from mainland factories, which measure in millimetres far more often
+  // than not, so a set of numbers that would be a large crate in centimetres is read as
+  // millimetres rather than silently multiplied by a thousand.
+  return Math.max(...withDims.map((p) => Math.max(Number(p.length), Number(p.width), Number(p.height)))) >= 100 ? "mm" : "cm";
+}
 function packingListSummaryRow(fileName, client, project, ref, packages, kg, cbm, statedPkgs, directory) {
+  // One unit for the whole lot, checked against the volume the lot itself states.
+  const dimUnit = resolveDimUnit(packages, cbm);
   // The lot doubles as the lift number on these packing lists - "23", "24" - which is what
   // a marking that came back without its prefix needs.
   const liftHint = /^\d{1,2}$/.test(String(ref || "").trim()) ? String(ref).trim() : "";
@@ -12254,6 +12311,16 @@ function packingListSummaryRow(fileName, client, project, ref, packages, kg, cbm
     "PKGS": pkgs || "", "KGS": kg ? Math.round(kg * 100) / 100 : "",
     "CBM": cbm ? Math.round(cbm * 1000) / 1000 : "",
     "Cases": codes.join(", "),
+    // The weight and volume of each case, in the same order as Cases, so the three lists
+    // read down together. The packing lists state these per row; dividing the lot total
+    // evenly across its cases - which is what happened before - gives every case the same
+    // weight, and a lift's machine weighs nothing like its guide rails.
+    "Case KGS": (packages || []).map((p) => (p && p.weightKg) || "").join(", "),
+    "Case CBM": (packages || []).map((p) => {
+      if (p && p.cbm) return p.cbm;
+      const fromDims = cbmFromDimensions(p, dimUnit);
+      return fromDims ? String(fromDims) : "";
+    }).join(", "),
     // Blank when they agree, so the eye goes straight to the ones that do not.
     "Check": listed === 0 ? "no case numbers" : (listed === pkgs ? "" : "Pkgs != Case #"),
     // The row's own verdict, kept apart from the cross-file notes. Check is rebuilt from
@@ -12264,7 +12331,7 @@ function packingListSummaryRow(fileName, client, project, ref, packages, kg, cbm
     __listed: listed,
   };
 }
-const PL_SUMMARY_COLUMNS = ["File Name", "Client", "Client (\u4e2d\u6587)", "Project", "Project (\u4e2d\u6587)", "DM or SHK or other Client Reference", "PKGS", "KGS", "CBM", "Cases", "Check"];
+const PL_SUMMARY_COLUMNS = ["File Name", "Client", "Client (\u4e2d\u6587)", "Project", "Project (\u4e2d\u6587)", "DM or SHK or other Client Reference", "PKGS", "KGS", "CBM", "Cases", "Case KGS", "Case CBM", "Check"];
 // A sheet only has to name its file, its packages and its cases to be recognised; the
 // client and site columns may be in either language.
 const PL_SUMMARY_REQUIRED = ["file name", "pkgs", "cases"];
@@ -12312,13 +12379,18 @@ function groupsFromPackingListSummary(grid) {
     const rowProject = cell(r, "project") || cell(r, "projectzh");
     client = client || rowClient;
     project = project || rowProject;
-    // Weight and volume are stated for the lot, so they are spread evenly across its cases.
-    // Nothing in this sheet says what any single case weighs.
+    // Per-case weight and volume where the sheet gives them, in the same order as the cases.
+    // Only where it does not are the lot totals spread evenly, which is a guess and is
+    // treated as one - a lift's machine weighs nothing like its guide rails.
+    const caseKg = cell(r, "case kgs").split(",").map((v) => v.trim());
+    const caseCbm = cell(r, "case cbm").split(",").map((v) => v.trim());
+    const evenKg = kg && count ? String(Math.round((kg / count) * 100) / 100) : "";
+    const evenCbm = cbm && count ? String(Math.round((cbm / count) * 1000) / 1000) : "";
     const packages = (codes.length ? codes : Array.from({ length: stated }, (_, n) => `${n + 1}/${stated}`))
-      .map((code) => ({
+      .map((code, n) => ({
         code,
-        weightKg: kg ? String(Math.round((kg / count) * 100) / 100) : "",
-        cbm: cbm ? String(Math.round((cbm / count) * 1000) / 1000) : "",
+        weightKg: caseKg[n] || evenKg,
+        cbm: caseCbm[n] || evenCbm,
         description: "",
       }));
     groups.push({
@@ -12718,8 +12790,17 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
       const wb = XLSX.read(buf, { type: "array", cellDates: true });
       // A summary sheet carrying many packing lists is unpacked first; a single packing
       // list falls through to the reader that handles one.
-      const grid = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "", raw: false });
-      const summary = groupsFromPackingListSummary(grid);
+      // Every sheet is tried, not just the first. A workbook that has been worked on tends to
+      // grow a pivot or a summary in front of the data - "Sheet1", then "Packing Lists",
+      // then a couple of duplicate reports - and reading only sheet one found a pivot table
+      // and gave up.
+      let summary = null;
+      let grid = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "", raw: false });
+      for (const name of wb.SheetNames) {
+        const g = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: "", raw: false });
+        const found = groupsFromPackingListSummary(g);
+        if (found) { summary = found; grid = g; break; }
+      }
       const { groups, client, project } = summary || parsePackingListWorkbook(wb);
       const ok = applyParsedResult({ groups, client, project });
       if (!ok) setPlError(t.packingListNoStructure);
@@ -14211,9 +14292,28 @@ export default function FarspeedInventory() {
             notes.push(`${file.name}: ${reconciled.corrections.map((c) => `${c.lot} (${c.changed.join(", ")})`).join("; ")}`);
           }
           (reconciled.groups || []).forEach((g) => {
-            const packages = (g.packages || []).length
-              ? g.packages
+            // The scan returns a weight and a volume for each case where the document gives
+            // them per case. Where it instead groups cases onto lines - "29 | T89/B |
+            // 18,461.80" is twenty-nine cases sharing that line's weight - the figure is
+            // shared out here rather than lost, and the heavier of net and gross is taken,
+            // since that is what the depot stores and bills on.
+            let packages = (g.packages || []).length
+              ? g.packages.map((p) => ({ ...p }))
               : (g.caseNumbers || []).flatMap((m) => String(m || "").split(",")).map((c) => ({ code: c.trim() })).filter((p) => p.code);
+            const lines = (g.lines || []).filter((ln) => Number(ln.packages) > 0);
+            const anyPerCase = packages.some((p) => Number(p.weightKg) > 0 || Number(p.cbm) > 0 || cbmFromDimensions(p) > 0);
+            if (!anyPerCase && lines.length) {
+              let at = 0;
+              lines.forEach((ln) => {
+                const n = Number(ln.packages) || 0;
+                const w = Math.max(Number(ln.grossWeightKg) || 0, Number(ln.netWeightKg) || 0);
+                const v = Number(ln.cbm) || 0;
+                for (let k = 0; k < n && at < packages.length; k += 1, at += 1) {
+                  if (w) packages[at].weightKg = String(Math.round((w / n) * 100) / 100);
+                  if (v) packages[at].cbm = String(Math.round((v / n) * 10000) / 10000);
+                }
+              });
+            }
             rows.push(packingListSummaryRow(file.name, parsed.client, parsed.project, g.lot,
               packages,
               Number(g.statedWeightKg) || packages.reduce((n, p) => n + (Number(p.weightKg) || 0), 0),
@@ -14294,7 +14394,10 @@ export default function FarspeedInventory() {
     const ordered = [...plrRows].sort((a, b) => (b.__conflict ? 1 : 0) - (a.__conflict ? 1 : 0));
     const data = ordered.map((r) => PL_SUMMARY_COLUMNS.map((c) => (r[c] === undefined ? "" : r[c])));
     const ws = XLSX.utils.aoa_to_sheet([PL_SUMMARY_COLUMNS, ...data]);
-    ws["!cols"] = PL_SUMMARY_COLUMNS.map((c) => ({ wch: c === "Cases" ? 70 : c === "File Name" || c === "Project" ? 28 : 16 }));
+    ws["!cols"] = PL_SUMMARY_COLUMNS.map((c) => ({
+      wch: c === "Cases" ? 70 : (c === "Case KGS" || c === "Case CBM") ? 40
+        : c === "File Name" || c === "Project" ? 28 : 16,
+    }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Packing Lists");
     XLSX.writeFile(wb, `packing-lists-${todayStr()}.xlsx`);
@@ -15364,7 +15467,7 @@ export default function FarspeedInventory() {
                                   padding: "3px 6px", fontSize: 13, color: tone,
                                   fontFamily: num ? FONT_MONO : undefined,
                                   textAlign: num ? "right" : "left",
-                                  minWidth: c === "Cases" ? 320 : num ? 70 : 130,
+                                  minWidth: c === "Cases" ? 320 : (c === "Case KGS" || c === "Case CBM") ? 200 : num ? 70 : 130,
                                 }}
                                 value={r[c] === undefined ? "" : String(r[c])}
                                 title={c === "Cases" ? String(r[c] || "") : undefined}
