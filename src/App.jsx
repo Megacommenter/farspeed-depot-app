@@ -2135,7 +2135,7 @@ const TEXT = {
     navPlReader: "Packing list reader",
     plrTitle: "Packing list reader",
     plrDesc: "Read a stack of packing lists at once \u2014 Excel straight off the sheet, PDF through the same scanner the single-file screen uses. The result downloads as one spreadsheet, which Packing List Import reads back in a single upload. Check the last column before you use it: it flags any lot whose case list does not match the package count it declares.",
-    plrDupCase: (code, files) => `case ${code} is on more than one file (${files})`,
+    plrDupCase: (code, files) => `case ${code} appears twice under this same reference (${files})`,
     plrRefClientClash: (list) => `this reference is given two different clients: ${list}`,
     plrRefSiteClash: (list) => `this reference is given two different sites: ${list}`,
     plrChooseBtn: "Choose packing lists\u2026",
@@ -2981,7 +2981,7 @@ const TEXT = {
     navPlReader: "裝箱單讀取",
     plrTitle: "裝箱單讀取",
     plrDesc: "一次讀取多份裝箱單 \u2014 Excel 直接讀取，PDF 則交由與單檔畫面相同之掃描器處理。結果可匯出為一份表格，再由「裝箱單匯入」一次載入。使用前請先核對最後一欄：凡件數與件號不符者均會標示。",
-    plrDupCase: (code, files) => `件號 ${code} 同時出現於多份檔案（${files}）`,
+    plrDupCase: (code, files) => `件號 ${code} 在同一參考編號下重複出現（${files}）`,
     plrRefClientClash: (list) => `此參考編號對應兩個不同客戶：${list}`,
     plrRefSiteClash: (list) => `此參考編號對應兩個不同地盤：${list}`,
     plrChooseBtn: "選擇裝箱單…",
@@ -14237,17 +14237,24 @@ export default function FarspeedInventory() {
     const seenCase = new Map();
     const byRef = new Map();
     rows.forEach((r, i) => {
+      const ref = String(r["DM or SHK or other Client Reference"] || "").trim().toUpperCase();
+      // A case number repeated under a DIFFERENT reference is not a duplicate. Makers reuse
+      // markings between consignments - 23D5423 belongs to both 13-DM-25-0625 and
+      // 13-DM-26-0060 - and flagging those buried the real duplicates in noise. Only the
+      // same case twice under the same reference is a problem.
       String(r.Cases || "").split(",").map((c) => c.trim()).filter(Boolean).forEach((c) => {
-        const k = c.toUpperCase();
+        const k = `${ref}\u0000${c.toUpperCase()}`;
         seenCase.set(k, [...(seenCase.get(k) || []), i]);
       });
-      const ref = String(r["DM or SHK or other Client Reference"] || "").trim().toUpperCase();
       if (ref) byRef.set(ref, [...(byRef.get(ref) || []), i]);
     });
     const notes = rows.map(() => []);
-    seenCase.forEach((idxs, code) => {
+    seenCase.forEach((idxs, key) => {
       if (idxs.length < 2) return;
-      idxs.forEach((i) => notes[i].push(t.plrDupCase(code, [...new Set(idxs.map((j) => rows[j]["File Name"]))].join(", "))));
+      const code = key.split("\u0000")[1];
+      const files = [...new Set(idxs.map((j) => rows[j]["File Name"]))];
+      // Twice on the one file is worth saying differently from twice across two.
+      idxs.forEach((i) => notes[i].push(t.plrDupCase(code, files.join(", "))));
     });
     byRef.forEach((idxs) => {
       if (idxs.length < 2) return;
