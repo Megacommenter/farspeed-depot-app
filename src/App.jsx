@@ -14133,7 +14133,7 @@ export default function FarspeedInventory() {
       try {
         const parsed = JSON.parse(v);
         if (Array.isArray(parsed.rows) && parsed.rows.length) {
-          setPlrRows(parsed.rows);
+          setPlrRows(withConflicts(parsed.rows));
           setPlrSaved(t.plrRestored(parsed.rows.length, parsed.at || ""));
         }
       } catch (err) { /* nothing usable stored */ }
@@ -14212,7 +14212,14 @@ export default function FarspeedInventory() {
   // is not normal is the same case appearing twice, or one DM being given two different
   // clients or sites. Those are marked so they can be sorted out in the spreadsheet before
   // any of it reaches the depot.
-  function withConflicts(rows) {
+  function withConflicts(input) {
+    // Repaired here as well as at scan time, so a row restored from a saved table, pasted
+    // in, or typed by hand gets the same treatment as a fresh one. Without this, rows read
+    // by an older build keep "B11 23" for ever, because nothing re-reads them.
+    const rows = (input || []).map((r) => {
+      const fixed = String(r.Cases || "").split(",").map((c) => repairLiftFirstMarking(c)).filter(Boolean).join(", ");
+      return fixed === r.Cases ? r : { ...r, Cases: fixed };
+    });
     const seenCase = new Map();
     const byRef = new Map();
     rows.forEach((r, i) => {
