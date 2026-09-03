@@ -12376,10 +12376,16 @@ function jobSheetExportRows(fileName, parsed) {
           ? `${lot.lotRef || lot.unitCode || "lot"}: ${declared} pkgs, and the case list on this sheet is a pasted picture rather than typed cells`
           : `${lot.lotRef || lot.unitCode || "lot"}: ${declared} pkgs but no case numbers on the sheet`);
       }
+      // A lot that lists its cases but states no count: the count is the number of cases.
+      // Leaving PKGS blank made the row look unreadable when it was only unstated, and a
+      // blank carries no meaning into the ledger or the reconciliation.
+      const statedPkgs = lot.pkgs === "" || lot.pkgs === undefined || lot.pkgs === null
+        ? (cases.length || "")
+        : Number(lot.pkgs);
       rows.push({
         ...base,
         "DM No.": lot.lotRef || lot.unitCode || "",
-        "PKGS": lot.pkgs === "" ? "" : Number(lot.pkgs),
+        "PKGS": statedPkgs,
         "KGS": lot.kg === "" ? "" : Number(lot.kg),
         "CBM": lot.cbm === "" ? "" : Number(lot.cbm),
         "Cases": cases.join(", "),
