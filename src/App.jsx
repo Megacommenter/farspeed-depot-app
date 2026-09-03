@@ -12394,6 +12394,32 @@ function jobSheetExportRows(fileName, parsed) {
       });
     }
   }
+  // A sheet that states its weight and volume once for the whole job rather than per lot
+  // leaves some rows blank. What the other lots already account for is taken off the
+  // sheet's own total and the remainder shared across the blank ones by package count -
+  // which is the only division the sheet supports. A blank carries no meaning into the
+  // ledger or an invoice, and an even share is at least the right total.
+  // Each measure on its own: a lot can state its volume and not its weight, and waiting for
+  // both to be blank left those half-filled.
+  const shareOut = (col, total) => {
+    const blanks = rows.filter((r) => r[col] === "" && Number(r.PKGS) > 0);
+    if (!blanks.length) return 0;
+    const claimed = rows.reduce((n, r) => n + (Number(r[col]) || 0), 0);
+    const rest = Math.max(0, (Number(total) || 0) - claimed);
+    const pkgs = blanks.reduce((n, r) => n + Number(r.PKGS), 0);
+    if (!(pkgs > 0 && rest > 0)) return 0;
+    const dp = col === "KGS" ? 100 : 1000;
+    blanks.forEach((r) => {
+      r[col] = Math.round(rest * (Number(r.PKGS) / pkgs) * dp) / dp;
+      r.__sharedFigures = true;
+    });
+    return blanks.length;
+  };
+  const sharedKg = shareOut("KGS", parsed.weightKg);
+  const sharedCbm = shareOut("CBM", parsed.volumeCbm);
+  if (sharedKg || sharedCbm) {
+    problems.push(`${Math.max(sharedKg, sharedCbm)} lot${Math.max(sharedKg, sharedCbm) === 1 ? "" : "s"} state no weight or volume of their own \u2014 the remainder of the sheet's own total is shared across them by package count`);
+  }
   if (!rows.length) {
     rows.push({ ...base, "DM No.": parsed.shkNumber || "",
       "PKGS": parsed.packageCount === "" ? "" : Number(parsed.packageCount),
@@ -14344,6 +14370,30 @@ export default function FarspeedInventory() {
   // packing list importer reads back in. Desktop work: a hundred files at a time is not
   // something anyone does on a phone.
   const [jsrRows, setJsrRows] = useState([]);
+  const [jsrSaved, setJsrSaved] = useState("");
+  // Reading fifty sheets and correcting them takes longer than a browser tab tends to live.
+  useEffect(() => {
+    let live = true;
+    storageGet("jobSheetReaderRows").then((v) => {
+      if (!live || !v) return;
+      try {
+        const parsed = JSON.parse(v);
+        if (Array.isArray(parsed.rows) && parsed.rows.length) {
+          setJsrRows(parsed.rows);
+          setJsrSaved(t.plrRestored(parsed.rows.length, parsed.at || ""));
+        }
+      } catch (err) { /* nothing usable stored */ }
+    }).catch(() => {});
+    return () => { live = false; };
+  }, []);
+  async function saveJobSheetRows() {
+    try {
+      await storageSet("jobSheetReaderRows", JSON.stringify({ rows: jsrRows, at: todayStr() }));
+      setJsrSaved(t.plrSavedNote(jsrRows.length));
+    } catch (err) {
+      setJsrSaved(t.plrSaveFailed(String((err && err.message) || err)));
+    }
+  }
   const [jsrNotes, setJsrNotes] = useState([]);
   const [jsrBusy, setJsrBusy] = useState("");
   const jsrInputRef = useRef(null);
@@ -14402,6 +14452,7 @@ export default function FarspeedInventory() {
     setLegacySeed(built);
     setJsrRows([]);
     setJsrNotes([]);
+    storageSet("jobSheetReaderRows", "").catch(() => {});
     setView("upload");
   }
   function exportJobSheetRows() {
@@ -15592,12 +15643,20 @@ export default function FarspeedInventory() {
                     style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY }}
                     onClick={exportJobSheetRows}>{t.plrExportBtn}</button>
                   <button className="px-3 py-1.5 rounded text-sm font-semibold mr-2"
+                    style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY }}
+                    onClick={saveJobSheetRows}>{t.plrSaveBtn}</button>
+                  <button className="px-3 py-1.5 rounded text-sm font-semibold mr-2"
                     style={{ background: colors.green, color: "#fff", fontFamily: FONT_DISPLAY }}
                     onClick={submitJobSheetRows}>{t.jsrSubmitBtn}</button>
                   <button className="text-sm font-semibold" style={{ color: colors.inkFaint }}
-                    onClick={() => { setJsrRows([]); setJsrNotes([]); }}>{t.plrClearBtn}</button>
+                    onClick={() => {
+                      if (jsrRows.length && !window.confirm(t.plrClearConfirm(jsrRows.length))) return;
+                      setJsrRows([]); setJsrNotes([]); setJsrSaved("");
+                      storageSet("jobSheetReaderRows", "").catch(() => {});
+                    }}>{t.plrClearBtn}</button>
                   <div className="text-xs mt-2" style={{ color: colors.inkFaint }}>
                     {t.jsrCount(jsrRows.length, new Set(jsrRows.map((r) => r.File)).size)}
+                    {jsrSaved ? ` \u00b7 ${jsrSaved}` : ""}
                   </div>
                 </>
               )}
@@ -15621,17 +15680,36 @@ export default function FarspeedInventory() {
                       const agree = !declared || listed === declared;
                       return (
                         <tr key={i} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
-                          {JOBSHEET_EXPORT_COLUMNS.map((c) => (
-                            <td key={c} className="px-3 py-1.5"
-                              style={{
-                                fontFamily: ["PKGS", "KGS", "CBM"].includes(c) ? FONT_MONO : undefined,
-                                maxWidth: c === "Cases" ? 420 : 200, overflow: "hidden",
-                                textOverflow: "ellipsis", whiteSpace: c === "Cases" ? "nowrap" : undefined,
-                              }}
-                              title={c === "Cases" ? String(r[c] || "") : undefined}>
-                              {r[c] === "" || r[c] === undefined ? "\u2014" : String(r[c])}
-                            </td>
-                          ))}
+                          {JOBSHEET_EXPORT_COLUMNS.map((c) => {
+                            // Everything is editable. A job sheet that states a figure once
+                            // for the whole job, or leaves a cell blank because the clerk
+                            // knew what it meant, is better corrected here - once, before it
+                            // reaches the depot - than argued with afterwards. The tally
+                            // beside it re-counts as you type.
+                            const num = ["PKGS", "KGS", "CBM"].includes(c);
+                            return (
+                              <td key={c} className="px-1 py-1">
+                                <input
+                                  className="w-full rounded"
+                                  style={{
+                                    border: `1px solid ${colors.line}`, background: colors.surface,
+                                    padding: "3px 6px", fontSize: 13, color: colors.ink,
+                                    fontFamily: num ? FONT_MONO : undefined,
+                                    textAlign: num ? "right" : "left",
+                                    minWidth: c === "Cases" ? 380 : num ? 74 : c === "DM No." ? 150 : 110,
+                                  }}
+                                  value={r[c] === undefined ? "" : String(r[c])}
+                                  title={c === "Cases" ? String(r[c] || "") : undefined}
+                                  onChange={(e) => {
+                                    const v = num
+                                      ? (e.target.value === "" ? "" : (Number(e.target.value) || e.target.value))
+                                      : e.target.value;
+                                    setJsrRows((prev) => prev.map((row, n) => (n === i ? { ...row, [c]: v } : row)));
+                                  }}
+                                />
+                              </td>
+                            );
+                          })}
                           <td className="px-3 py-1.5 whitespace-nowrap font-semibold"
                             style={{ fontFamily: FONT_MONO, color: (agree || r.__wholeLot) ? colors.green : colors.red }}>
                             {declared ? (r.__wholeLot && listed === 0 ? t.jsrWholeLotTally(declared) : `${listed} / ${declared}`) : (listed ? `${listed}` : "\u2014")}
