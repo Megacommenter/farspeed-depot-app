@@ -2135,6 +2135,13 @@ const TEXT = {
     navJsReader: "Job sheet reader",
     jsrTitle: "Job sheet reader",
     jsrDesc: "Read a stack of old Devan, CFS, Delivery and Return job sheets at once and write them out as one spreadsheet, a row per lot, with the case numbers separated by commas. Upload that spreadsheet through Legacy Upload and the app checks every case against the packing lists it already holds. Check the tally on each row first: it counts the cases found against the package count the sheet declares.",
+    jsrWholeLot: "whole lot",
+    jsrWholeLotTally: (n) => `all ${n}`,
+    jsrWholeLotHint: "The case numbers for this lot are on its packing list, not on this sheet. Ticking this takes every case the packing list holds for the lot.",
+    jsrSubmitBtn: "Submit to Legacy Upload",
+    jsrSubmitSource: (d) => `Job sheet reader ${d}`,
+    jsrSubmitNothing: "There is nothing here to submit yet.",
+    jsrSubmitConfirm: (sheets, lots) => `Send ${lots} lot${lots === 1 ? "" : "s"} across ${sheets} job sheet${sheets === 1 ? "" : "s"} to Legacy Upload?\n\nNothing is written to the depot yet \u2014 they open there for checking against the packing lists, and you press Process when you are satisfied.\n\nThe reader is cleared, so download the spreadsheet first if you want a copy.`,
     jsrChooseBtn: "Choose job sheets\u2026",
     jsrCount: (rows, files) => `${rows} lot${rows === 1 ? "" : "s"} from ${files} job sheet${files === 1 ? "" : "s"}`,
     jsrColTally: "Cases read",
@@ -2988,6 +2995,13 @@ const TEXT = {
     navJsReader: "工單讀取",
     jsrTitle: "工單讀取",
     jsrDesc: "一次讀取多份舊工單（拆櫃、CFS、送貨、退倉），匯出為一份表格，每個批次一行，件號以逗號分隔。再經「舊資料上載」匯入，系統會與已有裝箱單逐件核對。請先核對每行之件數。",
+    jsrWholeLot: "整批",
+    jsrWholeLotTally: (n) => `全部 ${n}`,
+    jsrWholeLotHint: "此批之件號載於裝箱單，非此工單。勾選後將採用裝箱單上該批的全部貨箱。",
+    jsrSubmitBtn: "送至舊資料上載",
+    jsrSubmitSource: (d) => `工單讀取 ${d}`,
+    jsrSubmitNothing: "目前沒有可提交的資料。",
+    jsrSubmitConfirm: (sheets, lots) => `確認將 ${sheets} 份工單共 ${lots} 個批次送至「舊資料上載」？\n\n此時不會寫入倉庫 \u2014 僅供與裝箱單核對，確認無誤後再按「處理」。\n\n讀取表格會清空，如需保留副本請先匯出。`,
     jsrChooseBtn: "選擇工單…",
     jsrCount: (rows, files) => `${files} 份工單共 ${rows} 個批次`,
     jsrColTally: "讀取件數",
@@ -6383,14 +6397,26 @@ function legacySourceName(row) {
 }
 // The columns the job sheet importer writes. Recognised by the ones that carry meaning
 // rather than by all of them, so a spreadsheet someone has added a column to still reads.
-const JOBSHEET_SS_REQUIRED = ["file name", "job number", "case numbers", "lot / dm no."];
+// Either wording is accepted: the reader now writes "File / DM No. / Cases" while older
+// spreadsheets say "File Name / Lot / DM No. / Case Numbers".
+const JOBSHEET_SS_REQUIRED = ["job number"];
 function jobSheetSpreadsheetColumns(headerRow) {
   const map = {};
   (headerRow || []).forEach((cell, i) => {
     const key = String(cell == null ? "" : cell).trim().toLowerCase();
     if (key && map[key] === undefined) map[key] = i;
   });
-  return JOBSHEET_SS_REQUIRED.every((k) => map[k] !== undefined) ? map : null;
+  const named = map["file name"] !== undefined || map.file !== undefined;
+  const lot = map["lot / dm no."] !== undefined || map["dm no."] !== undefined;
+  const cases = map["case numbers"] !== undefined || map.cases !== undefined;
+  if (!(JOBSHEET_SS_REQUIRED.every((k) => map[k] !== undefined) && named && lot && cases)) return null;
+  // Normalised so the reader below asks for one name whichever the sheet used.
+  if (map["file name"] === undefined) map["file name"] = map.file;
+  if (map["lot / dm no."] === undefined) map["lot / dm no."] = map["dm no."];
+  if (map["case numbers"] === undefined) map["case numbers"] = map.cases;
+  if (map["# of pkgs"] === undefined && map.pkgs !== undefined) map["# of pkgs"] = map.pkgs;
+  if (map.kg === undefined && map.kgs !== undefined) map.kg = map.kgs;
+  return map;
 }
 // Turns that spreadsheet back into the same staged rows an uploaded job sheet produces, so
 // everything downstream - matching to a shipment, pre-selecting cases, reporting what is not
@@ -10408,7 +10434,7 @@ function legacyFieldsFromScan(parsed) {
   }
   return out;
 }
-function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, legacyArchive, setLegacyArchive, items, incoming, onLegacyCheckIn, onLegacyCheckInBatch, directory, onLegacyImport, onLegacyDeliver, onLegacyEnrich, onLegacyReverse, onAddIncoming, colors, t, lang }) {
+function LegacyUploadsPanel({ seedRows, onSeedUsed, onReplaceIncomingCases, employees, setDirectory, legacyArchive, setLegacyArchive, items, incoming, onLegacyCheckIn, onLegacyCheckInBatch, directory, onLegacyImport, onLegacyDeliver, onLegacyEnrich, onLegacyReverse, onAddIncoming, colors, t, lang }) {
   const [rows, setRows] = useState([]);
   const [processing, setProcessing] = useState(false);
   const [results, setResults] = useState(null);
@@ -10440,6 +10466,12 @@ function LegacyUploadsPanel({ onReplaceIncomingCases, employees, setDirectory, l
     setLegacyArchive((prev) => prev.filter((r) => !ids.has(r.id)));
     setPicked({});
   }
+  // Taken once, then handed back so a later visit does not re-add them.
+  useEffect(() => {
+    if (!seedRows || !seedRows.length) return;
+    setRows((prev) => [...prev, ...seedRows]);
+    if (onSeedUsed) onSeedUsed();
+  }, [seedRows]);
   const [editingBacklogId, setEditingBacklogId] = useState(null);
   const [deletingBacklogId, setDeletingBacklogId] = useState(null);
   const [deletePlan, setDeletePlan] = useState(null);
@@ -11926,8 +11958,10 @@ function exportToExcel(items) {
   XLSX.writeFile(wb, `farspeed-depot-export-${todayStr()}.xlsx`);
 }
 
-function UploadPanel({ onReplaceIncomingCases, onImportRows, onAddIncoming, existingItems, directory, setDirectory, employees, legacyArchive, setLegacyArchive, items, incoming, onLegacyImport, onLegacyCheckIn, onLegacyCheckInBatch, onLegacyDeliver, onLegacyEnrich, onLegacyReverse, colors, t, lang }) {
-  const [mode, setMode] = useState("packinglist");
+function UploadPanel({ seedRows, onSeedUsed, onReplaceIncomingCases, onImportRows, onAddIncoming, existingItems, directory, setDirectory, employees, legacyArchive, setLegacyArchive, items, incoming, onLegacyImport, onLegacyCheckIn, onLegacyCheckInBatch, onLegacyDeliver, onLegacyEnrich, onLegacyReverse, colors, t, lang }) {
+  // Rows handed over by the Job sheet reader open on the legacy tab, since that is where
+  // they are checked and processed.
+  const [mode, setMode] = useState(seedRows && seedRows.length ? "legacy" : "packinglist");
   return (
     <div className="flex flex-col gap-4">
       <div className="flex gap-1 rounded-lg p-1 w-fit" style={{ background: colors.surfaceDim }}>
@@ -11942,7 +11976,7 @@ function UploadPanel({ onReplaceIncomingCases, onImportRows, onAddIncoming, exis
         <ImportPanel onImportRows={onImportRows} onAddIncoming={onAddIncoming} existingItems={existingItems} directory={directory} setDirectory={setDirectory} employees={employees} colors={colors} t={t} lang={lang} hideExcelMode />
       )}
       {mode === "legacy" && (
-        <LegacyUploadsPanel onReplaceIncomingCases={onReplaceIncomingCases} employees={employees} setDirectory={setDirectory} legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} incoming={incoming} onLegacyCheckIn={onLegacyCheckIn} onLegacyCheckInBatch={onLegacyCheckInBatch} directory={directory} onLegacyImport={onLegacyImport} onLegacyDeliver={onLegacyDeliver} onLegacyEnrich={onLegacyEnrich} onLegacyReverse={onLegacyReverse} onAddIncoming={onAddIncoming} colors={colors} t={t} lang={lang} />
+        <LegacyUploadsPanel seedRows={seedRows} onSeedUsed={onSeedUsed} onReplaceIncomingCases={onReplaceIncomingCases} employees={employees} setDirectory={setDirectory} legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} incoming={incoming} onLegacyCheckIn={onLegacyCheckIn} onLegacyCheckInBatch={onLegacyCheckInBatch} directory={directory} onLegacyImport={onLegacyImport} onLegacyDeliver={onLegacyDeliver} onLegacyEnrich={onLegacyEnrich} onLegacyReverse={onLegacyReverse} onAddIncoming={onAddIncoming} colors={colors} t={t} lang={lang} />
       )}
     </div>
   );
@@ -14337,6 +14371,21 @@ export default function FarspeedInventory() {
       ...notes,
     ]);
   }
+  const [legacySeed, setLegacySeed] = useState(null);
+  // Hands the reader's rows straight to Legacy Upload instead of going out to a spreadsheet
+  // and back in again. The same reader that writes the file builds the rows, so what gets
+  // checked is exactly what was on screen - and the checking, the case selection and the
+  // processing are the ones that already exist.
+  function submitJobSheetRows() {
+    const grid = [JOBSHEET_EXPORT_COLUMNS, ...jsrRows.map((r) => JOBSHEET_EXPORT_COLUMNS.map((c) => (r[c] === undefined ? "" : r[c])))];
+    const built = rowsFromJobSheetSpreadsheet(grid, { name: t.jsrSubmitSource(todayStr()) }, resolveClientGuess);
+    if (!built || !built.length) { alert(t.jsrSubmitNothing); return; }
+    if (!window.confirm(t.jsrSubmitConfirm(built.length, jsrRows.length))) return;
+    setLegacySeed(built);
+    setJsrRows([]);
+    setJsrNotes([]);
+    setView("upload");
+  }
   function exportJobSheetRows() {
     const data = jsrRows.map((r) => JOBSHEET_EXPORT_COLUMNS.map((c) => (r[c] === undefined ? "" : r[c])));
     const ws = XLSX.utils.aoa_to_sheet([JOBSHEET_EXPORT_COLUMNS, ...data]);
@@ -15524,6 +15573,9 @@ export default function FarspeedInventory() {
                   <button className="px-3 py-1.5 rounded text-sm font-semibold mr-2"
                     style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY }}
                     onClick={exportJobSheetRows}>{t.plrExportBtn}</button>
+                  <button className="px-3 py-1.5 rounded text-sm font-semibold mr-2"
+                    style={{ background: colors.green, color: "#fff", fontFamily: FONT_DISPLAY }}
+                    onClick={submitJobSheetRows}>{t.jsrSubmitBtn}</button>
                   <button className="text-sm font-semibold" style={{ color: colors.inkFaint }}
                     onClick={() => { setJsrRows([]); setJsrNotes([]); }}>{t.plrClearBtn}</button>
                   <div className="text-xs mt-2" style={{ color: colors.inkFaint }}>
@@ -15563,10 +15615,23 @@ export default function FarspeedInventory() {
                             </td>
                           ))}
                           <td className="px-3 py-1.5 whitespace-nowrap font-semibold"
-                            style={{ fontFamily: FONT_MONO, color: agree ? colors.green : colors.red }}>
-                            {declared ? `${listed} / ${declared}` : (listed ? `${listed}` : "\u2014")}
+                            style={{ fontFamily: FONT_MONO, color: (agree || r.__wholeLot) ? colors.green : colors.red }}>
+                            {declared ? (r.__wholeLot && listed === 0 ? t.jsrWholeLotTally(declared) : `${listed} / ${declared}`) : (listed ? `${listed}` : "\u2014")}
                           </td>
-                          <td className="px-2 py-1 text-center">
+                          <td className="px-2 py-1 whitespace-nowrap text-center">
+                            {/* A sheet that declares a count and lists no cases is usually
+                                right: the whole lot arrived, and its case numbers live on
+                                the packing list rather than the job sheet. Saying so here
+                                stops it reading as an error and tells the import to take
+                                every case the packing list holds for that lot. */}
+                            {declared > 0 && listed === 0 && (
+                              <label className="text-xs mr-2 cursor-pointer" style={{ color: r.__wholeLot ? colors.green : colors.inkFaint }}
+                                title={t.jsrWholeLotHint}>
+                                <input type="checkbox" checked={!!r.__wholeLot} className="mr-1"
+                                  onChange={(e) => setJsrRows((prev) => prev.map((row, n) => (n === i ? { ...row, __wholeLot: e.target.checked } : row)))} />
+                                {t.jsrWholeLot}
+                              </label>
+                            )}
                             <button title={t.plrRemoveRow} style={{ color: colors.red, fontSize: 16, lineHeight: 1, padding: "2px 6px" }}
                               onClick={() => setJsrRows((prev) => prev.filter((_, n) => n !== i))}>
                               {"\u00d7"}
@@ -16063,6 +16128,8 @@ export default function FarspeedInventory() {
 
         {view === "upload" && (
           <UploadPanel
+            seedRows={legacySeed}
+            onSeedUsed={() => setLegacySeed(null)}
             onImportRows={handleImportRows} onAddIncoming={handleAddIncoming} existingItems={items}
             directory={directory} setDirectory={setDirectory}
             legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive}
