@@ -6795,6 +6795,26 @@ function firstDayOfSpan(raw) {
 // 7th of January. Letting the browser decide instead means American order, which is wrong
 // here and wrong silently, since it only differs on the twelve days a month where both
 // readings are possible.
+// A job number carries the month it was issued in: 2605080 is May, 2511160 is November. Where
+// the date read off a sheet disagrees with that, and swapping its day and month makes it
+// agree, the swap is what the writer meant. This is the one case the day-first rule cannot
+// settle on its own - a real Excel date cell hands over a formatted string in the cell's own
+// order, and "9/5/26" is a valid reading either way with nothing in the file to choose.
+//
+// The correction only fires on positive evidence: both numbers twelve or under, the month
+// currently wrong, and the swap putting it right. The year is deliberately not checked -
+// these numbers roll over their own way, with January 2026 jobs still numbered 2501xxx.
+function reconcileDateWithJobNumber(date, jobNumber) {
+  const m = String(date || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const jm = String(jobNumber || "").match(/^\d{2}(\d{2})\d{3,4}$/);
+  if (!m || !jm) return date;
+  const month = Number(m[2]), day = Number(m[3]), want = Number(jm[1]);
+  if (!(want >= 1 && want <= 12)) return date;
+  if (month === want) return date;
+  if (!(day >= 1 && day <= 12)) return date;
+  if (day !== want) return date;
+  return `${m[1]}-${String(day).padStart(2, "0")}-${String(month).padStart(2, "0")}`;
+}
 function parseHKDate(value) {
   if (value instanceof Date && !isNaN(value)) return dateToLocalISO(value);
   const text = String(value == null ? "" : value).trim();
@@ -7493,6 +7513,13 @@ function guessFieldsFromWorkbook(wb, opts) {
     // The unformatted cell first, since a real date there settles it outright; otherwise the
     // formatted text, read day-first.
     out.date = parseHKDate(rawDateCell instanceof Date ? rawDateCell : rawDate);
+    // Checked against the month the job number carries, which settles a day/month swap that
+    // nothing in the date itself can.
+    const fixed = reconcileDateWithJobNumber(out.date, out.jobNumber);
+    if (fixed !== out.date) {
+      out.dateCorrectedFrom = out.date;
+      out.date = fixed;
+    }
   }
 
   const referMatches = [...flatText.matchAll(/ref(?:er)?\.?\s*(?:to\s+)?job\s*no\.?\s*([A-Za-z0-9\-]+)\s*(?:on\s*([\d\/\.\- ]+\d))?/gi)];
