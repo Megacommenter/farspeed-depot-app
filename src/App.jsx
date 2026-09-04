@@ -1968,6 +1968,9 @@ const TEXT = {
     resetConfirmMsg: "This clears every delivery record on every item so everything shows as not yet delivered. It does not delete any manifest entries. Continue?",
     resetDoneMsg: "All delivery records cleared.",
 
+    jobLogBackfillNote: (n, jobs) => `${n} check-in${n === 1 ? "" : "s"} carry no job number, from ${jobs} job${jobs === 1 ? "" : "s"} that were processed before the number was being recorded on them. The backlog still knows which file each came from, so they can be restored.`,
+    jobLogBackfillBtn: "Restore job numbers",
+    jobLogBackfillConfirm: (n, jobs) => `Restore job numbers on ${n} check-in${n === 1 ? "" : "s"}, covering ${jobs} job${jobs === 1 ? "" : "s"}?\n\nOnly the job number is written. No case, count, date or delivery is touched.`,
     navJobLog: "Job Log",
     navBilling: "Billing",
     navUpload: "Upload",
@@ -2828,6 +2831,9 @@ const TEXT = {
     resetConfirmMsg: "此操作將清除所有項目之送貨記錄，令所有貨物顯示為尚未送貨，但不會刪除任何倉存記錄。是否繼續？",
     resetDoneMsg: "所有送貨記錄已清除。",
 
+    jobLogBackfillNote: (n, jobs) => `有 ${n} 筆到倉記錄未附工單號，來自 ${jobs} 個於未記錄單號前已處理的工單。系統仍可從存檔找回對應檔案。`,
+    jobLogBackfillBtn: "復原工單號",
+    jobLogBackfillConfirm: (n, jobs) => `確認為 ${n} 筆到倉記錄（共 ${jobs} 個工單）復原工單號？\n\n僅寫入工單號，不會更動任何件號、件數、日期或送貨記錄。`,
     navJobLog: "單號記錄",
     navBilling: "帳單",
     navUpload: "上載",
@@ -13897,6 +13903,11 @@ export default function FarspeedInventory() {
         date: op.date, type: op.type, codes: op.codes,
         declared: op.declared || null,
         declaredSource: op.declaredSource || "",
+        // The job number that brought these cases in. It was being dropped here, so a CFS
+        // that checked cases into an entry created by an earlier one left no trace of its
+        // own job number anywhere - and the Job Log, which reads job numbers off entries and
+        // deliveries, had nothing to show for it.
+        jobNumber: op.jobNumber || "",
       };
       const prior = incomingPatches.get(op.incomingId);
       const effectiveLinkedId = prior ? prior.linkedItemId : inc.linkedItemId;
@@ -14823,10 +14834,67 @@ export default function FarspeedInventory() {
       }))
       .sort((a, b) => b.cbm - a.cbm);
   }, [openForDelivery, items, directory]);
+  // Arrival batches processed before the job number was recorded on them. The archive knows
+  // which file carried which job number, and every batch records the file it came from, so
+  // the two can be matched exactly rather than guessed at - no re-import, and not a single
+  // case or count is touched.
+  const jobNumberBackfill = useMemo(() => {
+    const byFile = new Map();
+    (legacyArchive || []).forEach((a) => {
+      const name = String(a.fileName || "").trim();
+      if (name && a.jobNumber) byFile.set(name, a.jobNumber);
+    });
+    const fixes = [];
+    (items || []).forEach((it) => {
+      if (it.cancelled) return;
+      (it.arrivals || []).forEach((ar) => {
+        if (ar.jobNumber) return;
+        const jn = byFile.get(String(ar.declaredSource || "").trim());
+        if (jn) fixes.push({ itemId: it.id, arrivalId: ar.id, jobNumber: jn, file: ar.declaredSource });
+      });
+    });
+    return fixes;
+  }, [items, legacyArchive]);
+  function applyJobNumberBackfill() {
+    if (!jobNumberBackfill.length) return;
+    if (!window.confirm(t.jobLogBackfillConfirm(jobNumberBackfill.length,
+      new Set(jobNumberBackfill.map((f) => f.jobNumber)).size))) return;
+    const byItem = new Map();
+    jobNumberBackfill.forEach((f) => byItem.set(f.itemId, [...(byItem.get(f.itemId) || []), f]));
+    persist(items.map((it) => {
+      const fixes = byItem.get(it.id);
+      if (!fixes) return it;
+      return { ...it, arrivals: (it.arrivals || []).map((ar) => {
+        const hit = fixes.find((f) => f.arrivalId === ar.id);
+        return hit ? { ...ar, jobNumber: hit.jobNumber } : ar;
+      }) };
+    }));
+  }
   const jobLog = useMemo(() => {
     const rows = [];
     items.forEach((it) => {
-      if (it.jobNumber && !it.cancelled) {
+      if (it.cancelled) return;
+      // Every arrival, not just the entry's own job number. One entry can be filled by
+      // several check-ins - a CFS in November and another in August - and each is its own
+      // job with its own number, date and paperwork. Listing only the entry showed the first
+      // and hid the rest.
+      const seen = new Set();
+      activeArrivals(it).forEach((a) => {
+        const jn = a.jobNumber || it.jobNumber;
+        if (!jn || seen.has(`${jn}\u0000${a.date || ""}`)) return;
+        seen.add(`${jn}\u0000${a.date || ""}`);
+        rows.push({
+          jobNumber: jn,
+          type: a.type || it.arrivingType,
+          date: a.date || it.depotArrivalDate,
+          client: it.client,
+          site: it.project,
+          recordedBy: it.recordedBy,
+          sheet: { type: a.type || it.arrivingType, item: it },
+        });
+      });
+      // An entry with no arrival batches still has its own job number.
+      if (it.jobNumber && !activeArrivals(it).length) {
         rows.push({
           jobNumber: it.jobNumber,
           type: it.arrivingType,
@@ -16254,6 +16322,15 @@ export default function FarspeedInventory() {
             <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
               <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.jobLogTitle}</h3>
               <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.jobLogDesc}</p>
+              {jobNumberBackfill.length > 0 && (
+                <div className="rounded px-3 py-2 mb-3 text-sm flex flex-wrap items-center gap-3"
+                  style={{ background: colors.amberSoft, color: colors.amberText }}>
+                  <span>{t.jobLogBackfillNote(jobNumberBackfill.length, new Set(jobNumberBackfill.map((f) => f.jobNumber)).size)}</span>
+                  <button className="px-3 py-1 rounded text-sm font-semibold"
+                    style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}
+                    onClick={applyJobNumberBackfill}>{t.jobLogBackfillBtn}</button>
+                </div>
+              )}
               <div className="flex flex-wrap gap-3 items-end">
                 <Field label={t.searchLabel} colors={colors}>
                   <input className={inputClass} style={{ ...inputStyleFor(colors), minWidth: 220 }}
