@@ -2115,6 +2115,7 @@ const TEXT = {
     jobLogColRecordedBy: "Recorded By",
     jobLogNoneMsg: "No job numbers created yet.",
     viewReprintBtn: "View / Reprint",
+    jobLogArchivedOnly: "archived \u2014 no entry",
 
     navCancelledJobs: "Cancelled Jobs",
     cancelJobBtn: "Cancel",
@@ -2141,6 +2142,8 @@ const TEXT = {
     jsrWholeLot: "whole lot",
     jsrWholeLotTally: (n) => `all ${n}`,
     jsrWholeLotHint: "The case numbers for this lot are on its packing list, not on this sheet. Ticking this takes every case the packing list holds for the lot.",
+    jsrOneSiteOnly: (sites, clients) => `These job sheets are not all for the same job.\n\n${sites ? `Sites: ${sites}\n` : ""}${clients ? `Clients: ${clients}\n` : ""}\nSubmit one site at a time. Mixing them checks a lot's cases against another site's packing lists, which is very hard to spot afterwards.\n\nRemove the rows that do not belong with the \u00d7 at the end of each, or correct the site on them.`,
+    jsrNoSite: (files) => `These sheets have no site on them: ${files}.\n\nA row with no site cannot be matched to anything at the depot. Fill the site in, or remove those rows.`,
     jsrSubmitBtn: "Submit to Legacy Upload",
     jsrSubmitSource: (d) => `Job sheet reader ${d}`,
     jsrSubmitNothing: "There is nothing here to submit yet.",
@@ -2978,6 +2981,7 @@ const TEXT = {
     jobLogColRecordedBy: "記錄人",
     jobLogNoneMsg: "尚未建立任何單號。",
     viewReprintBtn: "查看／重印",
+    jobLogArchivedOnly: "已存檔 \u2014 無倉庫記錄",
 
     navCancelledJobs: "已取消工作",
     cancelJobBtn: "取消",
@@ -3004,6 +3008,8 @@ const TEXT = {
     jsrWholeLot: "整批",
     jsrWholeLotTally: (n) => `全部 ${n}`,
     jsrWholeLotHint: "此批之件號載於裝箱單，非此工單。勾選後將採用裝箱單上該批的全部貨箱。",
+    jsrOneSiteOnly: (sites, clients) => `這批工單並非同一項目。\n\n${sites ? `地盤：${sites}\n` : ""}${clients ? `客戶：${clients}\n` : ""}\n請每次只提交一個地盤。混雜提交會將貨箱與其他地盤之裝箱單核對，事後極難發現。\n\n請以行末之 \u00d7 刪除不屬於此批之行，或修正其地盤。`,
+    jsrNoSite: (files) => `以下工單未載地盤：${files}。\n\n無地盤之行無法與倉庫配對，請補上地盤或刪除該等行。`,
     jsrSubmitBtn: "送至舊資料上載",
     jsrSubmitSource: (d) => `工單讀取 ${d}`,
     jsrSubmitNothing: "目前沒有可提交的資料。",
@@ -14457,6 +14463,37 @@ export default function FarspeedInventory() {
       if (c === "Lift No.") return r.__lift || "";
       return r[c] === undefined ? "" : r[c];
     }))];
+    // One site per submission. A batch that mixes two sites is checked against the wrong
+    // depot stock - a lot's cases matched to another site's packing list - and that is the
+    // mistake that is hardest to see afterwards, because every row looks plausible on its
+    // own. Names are compared with punctuation and case set aside, so "SITE AT FANLING
+    // NORTH AREA 15 EAST PHASE 2" and "Fanling North Area 15 East Phase 2" count as one.
+    const norm = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9\u3400-\u9FFF]/g, "");
+    // One name containing another is the same place: a job sheet writes "SITE AT FANLING
+    // NORTH AREA 15 EAST PHASE 2" where the directory says "Fanling North Area 15 East
+    // Phase 2". Refusing those as two sites would block a batch that is perfectly fine.
+    const fold = (values) => {
+      const out = [];
+      values.forEach((v) => {
+        if (!out.some((k) => k.includes(v) || v.includes(k))) out.push(v);
+      });
+      return out;
+    };
+    const sites = fold([...new Set(jsrRows.map((r) => norm(r.__project)).filter(Boolean))]);
+    const clients = fold([...new Set(jsrRows.map((r) => norm(r.__client)).filter(Boolean))]);
+    if (sites.length > 1 || clients.length > 1) {
+      const shown = (key) => [...new Set(jsrRows.map((r) => String(r[key] || "").trim()).filter(Boolean))];
+      alert(t.jsrOneSiteOnly(
+        sites.length > 1 ? shown("__project").join("  /  ") : "",
+        clients.length > 1 ? shown("__client").join("  /  ") : ""
+      ));
+      return;
+    }
+    const blankSite = jsrRows.filter((r) => !String(r.__project || "").trim());
+    if (blankSite.length) {
+      alert(t.jsrNoSite([...new Set(blankSite.map((r) => r.File))].join(", ")));
+      return;
+    }
     const built = rowsFromJobSheetSpreadsheet(grid, { name: t.jsrSubmitSource(todayStr()) }, resolveClientGuess);
     if (!built || !built.length) { alert(t.jsrSubmitNothing); return; }
     if (!window.confirm(t.jsrSubmitConfirm(built.length, jsrRows.length))) return;
@@ -14919,11 +14956,33 @@ export default function FarspeedInventory() {
         }
       });
     });
+    // Jobs whose entry no longer exists. A job number is issued once and stays used whatever
+    // happens to the stock afterwards - an entry reversed, a site cleared out and rebuilt -
+    // and a log that reads only live inventory loses them the moment an entry is deleted,
+    // which is exactly when someone goes looking for the number. The backlog keeps the file
+    // and its number, so they are listed from there and marked as archived.
+    const live = new Set(rows.map((r) => `${r.jobNumber}\u0000${r.type}`));
+    (legacyArchive || []).forEach((a) => {
+      if (!a.jobNumber) return;
+      const type = a.docType || "";
+      if (live.has(`${a.jobNumber}\u0000${type}`)) return;
+      live.add(`${a.jobNumber}\u0000${type}`);
+      rows.push({
+        jobNumber: a.jobNumber,
+        type,
+        date: a.date || "",
+        client: a.client || "",
+        site: a.projectEn || a.projectZh || "",
+        recordedBy: "",
+        archivedOnly: true,
+        sheet: null,
+      });
+    });
     // Job numbers are issued in sequence, so sorting them numerically keeps 2608099 before
     // 2608100 rather than after it, the way a plain string sort would have it.
     return rows.sort((a, b) => b.jobNumber.localeCompare(a.jobNumber, undefined, { numeric: true })
       || String(b.date || "").localeCompare(String(a.date || "")));
-  }, [items]);
+  }, [items, legacyArchive]);
 
   // Job Log filters. Options come from the log itself, so a filter can never come back
   // empty, and job numbers sort in sequence - the order they were issued in, which is how
@@ -16405,9 +16464,16 @@ export default function FarspeedInventory() {
                       <td className="px-3 py-2 max-w-[220px] truncate">{row.site}</td>
                       <td className="px-3 py-2">{row.recordedBy || "—"}</td>
                       <td className="px-3 py-2 text-right">
-                        <button className="text-xs font-semibold px-2 py-1 rounded" style={{ background: colors.amber, color: colors.ink }} onClick={() => setPrintJobSheet(row.sheet)}>
-                          {t.viewReprintBtn}
-                        </button>
+                        {/* An archived job has no entry left to reprint from - the sheet is
+                            in the backlog, not in inventory - so it says so rather than
+                            offering a button that opens nothing. */}
+                        {row.archivedOnly ? (
+                          <span className="text-xs" style={{ color: colors.inkFaint }}>{t.jobLogArchivedOnly}</span>
+                        ) : (
+                          <button className="text-xs font-semibold px-2 py-1 rounded" style={{ background: colors.amber, color: colors.ink }} onClick={() => setPrintJobSheet(row.sheet)}>
+                            {t.viewReprintBtn}
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}
