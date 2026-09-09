@@ -2034,6 +2034,10 @@ const TEXT = {
     incomingLinkedTo: (id) => `linked to ${id}`,
     incomingFullyCheckedIn: "Fully checked in",
     incomingRemainingBadge: (remaining, total) => `${remaining} of ${total} not yet checked in`,
+    incomingEditCasesBtn: "Edit case numbers",
+    incomingEditCasesHint: (n) => `The ${n} case numbers on this shipment, in order, separated by commas. Correct a wrong one and it is renamed everywhere \u2014 on the shipment, on anything already checked in from it, and on any delivery that took it. The count must stay the same; to add or remove a case, edit the packing list instead.`,
+    incomingEditCasesReady: (n) => `${n} cases \u2014 ready to save`,
+    incomingEditCasesCount: (n, want) => `${n} case${n === 1 ? "" : "s"} listed, but this shipment has ${want}. The count must match.`,
     incomingSelectCasesLabel: "Select which cases are coming in",
     incomingCheckInBtn: (n) => n > 0 ? `Check In (${n})` : "Check In",
     incomingCheckedInNote: (incId) => `Checked in from Incoming ${incId}`,
@@ -2907,6 +2911,10 @@ const TEXT = {
     incomingLinkedTo: (id) => `已連結至 ${id}`,
     incomingFullyCheckedIn: "已全部到倉",
     incomingRemainingBadge: (remaining, total) => `尚有 ${remaining}／${total} 件未到倉`,
+    incomingEditCasesBtn: "\u4fee\u6539\u4ef6\u865f",
+    incomingEditCasesHint: (n) => `\u672c\u6279\u8ca8\u4ef6\u4e4b ${n} \u500b\u4ef6\u865f\uff08\u4f9d\u5e8f\uff0c\u4ee5\u9017\u865f\u5206\u9694\uff09\u3002\u4fee\u6b63\u5f8c\u6703\u540c\u6b65\u66f4\u65b0\u81f3\u5df2\u5230\u5009\u53ca\u5df2\u9001\u8ca8\u4e4b\u8a18\u9304\u3002\u4ef6\u6578\u5fc5\u9808\u76f8\u540c\uff1b\u5982\u9700\u589e\u6e1b\u8ca8\u4ef6\uff0c\u8acb\u4fee\u6539\u88dd\u7bb1\u55ae\u3002`,
+    incomingEditCasesReady: (n) => `${n} \u4ef6 \u2014 \u53ef\u5132\u5b58`,
+    incomingEditCasesCount: (n, want) => `\u5df2\u5217 ${n} \u4ef6\uff0c\u4f46\u672c\u6279\u70ba ${want} \u4ef6\uff0c\u4ef6\u6578\u5fc5\u9808\u76f8\u7b26\u3002`,
     incomingSelectCasesLabel: "選擇哪些件號到倉",
     incomingCheckInBtn: (n) => n > 0 ? `辦理到倉 (${n})` : "辦理到倉",
     incomingCheckedInNote: (incId) => `由待到倉記錄 ${incId} 辦理到倉`,
@@ -9968,7 +9976,7 @@ function ManualPackingListEntry({ onClose, onAddIncoming, existingItems, directo
     </div>
   );
 }
-function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, employees, onCheckIn, onAddIncoming, colors, t, lang }) {
+function IncomingPanel({ onReplaceIncomingCases, incoming, setIncoming, items, directory, setDirectory, employees, onCheckIn, onAddIncoming, colors, t, lang }) {
   const [search, setSearch] = useState("");
   const [filterClient, setFilterClient] = useState("All");
   const [showCompleted, setShowCompleted] = useState(false);
@@ -9976,6 +9984,13 @@ function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, 
   const [selectedByShipment, setSelectedByShipment] = useState({});
   const [formByShipment, setFormByShipment] = useState({});
   const [manualOpen, setManualOpen] = useState(false);
+  // Editing a shipment's case numbers. A packing list read from a PDF can land a case under
+  // the wrong lift - "C 02 (#.01)" becoming 02C02 rather than 01C02 - and until now the only
+  // way out was to delete the shipment and start again, which loses anything already checked
+  // in against it. Renaming keeps the shipment, its arrivals and its deliveries, and carries
+  // the new name through all of them.
+  const [editingCasesFor, setEditingCasesFor] = useState(null);
+  const [caseDraft, setCaseDraft] = useState("");
   // Clearing a site's shipments one card at a time is the same hundred clicks the backlog
   // had. Selection follows the filters, so "select all" is always the cards on screen and
   // never one a filter is hiding.
@@ -10189,8 +10204,46 @@ function IncomingPanel({ incoming, setIncoming, items, directory, setDirectory, 
                       <div>
                         <div className="flex items-center justify-between mb-2">
                           <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{t.incomingSelectCasesLabel}</div>
-                          <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => selectAll(inc)}>{t.selectAllBtn}</button>
+                          <span>
+                            {onReplaceIncomingCases && (
+                              <button type="button" className="text-xs font-semibold mr-3" style={{ color: colors.amberText }}
+                                onClick={() => {
+                                  setEditingCasesFor(editingCasesFor === inc.id ? null : inc.id);
+                                  setCaseDraft((inc.packages || []).map((p) => p.code).join(", "));
+                                }}>
+                                {editingCasesFor === inc.id ? t.cancelBtn : t.incomingEditCasesBtn}
+                              </button>
+                            )}
+                            <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }} onClick={() => selectAll(inc)}>{t.selectAllBtn}</button>
+                          </span>
                         </div>
+                        {editingCasesFor === inc.id && (
+                          <div className="mb-3 rounded p-3" style={{ background: colors.amberSoft, border: `1px solid ${colors.amber}` }}>
+                            <div className="text-xs mb-2" style={{ color: colors.amberText }}>{t.incomingEditCasesHint((inc.packages || []).length)}</div>
+                            <textarea className={inputClass} style={{ ...inputStyle, minHeight: 90, fontFamily: FONT_MONO, fontSize: 12 }}
+                              value={caseDraft} onChange={(e) => setCaseDraft(e.target.value)} />
+                            {(() => {
+                              const next = caseDraft.split(",").map((c) => c.trim()).filter(Boolean);
+                              const same = next.length === (inc.packages || []).length;
+                              return (
+                                <div className="flex items-center gap-3 mt-2">
+                                  <button type="button" className="px-3 py-1 rounded text-sm font-semibold"
+                                    style={{ background: same ? colors.navy : colors.line, color: same ? colors.onDark : colors.inkFaint, fontFamily: FONT_DISPLAY }}
+                                    disabled={!same}
+                                    onClick={() => {
+                                      onReplaceIncomingCases(inc.id, next);
+                                      setEditingCasesFor(null);
+                                    }}>
+                                    {t.saveBtn}
+                                  </button>
+                                  <span className="text-xs" style={{ color: same ? colors.inkFaint : colors.red }}>
+                                    {same ? t.incomingEditCasesReady(next.length) : t.incomingEditCasesCount(next.length, (inc.packages || []).length)}
+                                  </span>
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        )}
                         <div className="flex flex-col gap-3">
                           {groupPackagesByOrder(remaining).map((grp) => (
                             <div key={grp.orderNo || "_"}>
@@ -16589,7 +16642,7 @@ export default function FarspeedInventory() {
         )}
 
         {view === "incoming" && (
-          <IncomingPanel incoming={incoming} setIncoming={setIncoming} items={items} directory={directory} setDirectory={setDirectory} employees={employees} onCheckIn={handleCheckIn} onAddIncoming={handleAddIncoming} colors={colors} t={t} lang={lang} />
+          <IncomingPanel onReplaceIncomingCases={handleReplaceIncomingCases} incoming={incoming} setIncoming={setIncoming} items={items} directory={directory} setDirectory={setDirectory} employees={employees} onCheckIn={handleCheckIn} onAddIncoming={handleAddIncoming} colors={colors} t={t} lang={lang} />
         )}
 
         {view === "billing" && (
