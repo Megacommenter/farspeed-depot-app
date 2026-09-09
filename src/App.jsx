@@ -1250,6 +1250,53 @@ function storageLedger(items, directory) {
       outTotal: moves.filter((m) => m.dir === "OUT").reduce((n, m) => n + m.pkgs, 0) };
   }).filter((g) => g.moves.length).sort((a, b) => b.balance - a.balance);
 }
+// One row per case, keyed by the reference it belongs to. The case number alone is not an
+// identifier - the same marking exists under several DMs, and at different sites - so
+// everything here is scoped by reference first and case second, which is the pairing the
+// paperwork actually uses.
+const CASE_VIEW_COLUMNS = ["Reference", "Case Number/ String", "CFS/DEVAN In Job Number", "CFS/DEVAN Date",
+  "Delivery Job number", "Delivery Date", "Return Job Number", "Return Date", "Still here, or delivered"];
+function caseByCaseRows(items, directory) {
+  const out = [];
+  (items || []).forEach((it) => {
+    if (it.cancelled) return;
+    const entry = (directory || []).find((d) => d.id === it.directoryId);
+    const site = (entry && entry.siteEn) || it.project || "";
+    const ref = String(it.invoiceNumber || "").trim() || String(it.unitCode || "").trim() || "\u2014";
+    // Which arrival brought each case in, and which delivery took it out.
+    const arrivalOf = new Map();
+    activeArrivals(it).forEach((a) => (a.codes || []).forEach((c) => {
+      if (!arrivalOf.has(String(c).trim())) arrivalOf.set(String(c).trim(), a);
+    }));
+    const deliveryOf = new Map();
+    activeDeliveries(it).forEach((d) => (d.codes || []).forEach((c) => {
+      if (!deliveryOf.has(String(c).trim())) deliveryOf.set(String(c).trim(), d);
+    }));
+    (it.packages || []).forEach((p) => {
+      const code = String(p.code || "").trim();
+      const a = arrivalOf.get(code);
+      const d = deliveryOf.get(code);
+      out.push({
+        "Reference": ref,
+        "Case Number/ String": code,
+        "CFS/DEVAN In Job Number": (a && a.jobNumber) || (a ? it.jobNumber : "") || (activeArrivals(it).length ? "" : it.jobNumber || ""),
+        "CFS/DEVAN Date": (a && a.date) || it.depotArrivalDate || "",
+        "Delivery Job number": (d && d.jobNumber) || "",
+        "Delivery Date": (d && d.date) || "",
+        // A return takes its cases back off the delivery that carried them, so a returned
+        // case shows no delivery at all rather than a return date. Left blank rather than
+        // guessed at; the ledger is where a return is read.
+        "Return Job Number": "",
+        "Return Date": "",
+        "Still here, or delivered": d ? "delivered" : "still here",
+        __entry: it.id, __site: site, __client: it.client || "",
+        __kg: p.weightKg || "", __cbm: p.cbm || "", __lift: it.unitCode || "",
+      });
+    });
+  });
+  return out.sort((x, y) => String(x.Reference).localeCompare(String(y.Reference))
+    || String(x["Case Number/ String"]).localeCompare(String(y["Case Number/ String"])));
+}
 function checkInAudit(items) {
   const groups = new Map();
   (items || []).forEach((it) => {
@@ -1734,6 +1781,7 @@ const TEXT = {
     selectedCount: (sel, tot) => `${sel} of ${tot} selected to import.`,
     selectAllBtn: "Select all",
     clearBtn: "Clear",
+    colSite: "Site",
     legacyRangeTapHint: "Tap a case, then shift-tap another to take everything between them.",
     selectNonDupBtn: "Select non-duplicates only",
     unmatchedMsg: "Columns not recognized (skipped): ",
@@ -2169,6 +2217,12 @@ const TEXT = {
     plrClearBtn: "Start over",
     plrTooBig: (kb) => `too big to scan at ${kb} KB \u2014 split it, or use the Excel version if there is one`,
     plrCount: (rows, files, off) => `${rows} lot${rows === 1 ? "" : "s"} from ${files} file${files === 1 ? "" : "s"}${off ? ` \u00b7 ${off} where the packages and the cases disagree` : ""}`,
+    navCaseView: "Case by case",
+    caseViewTitle: "Case by case",
+    caseViewDesc: "One row per case, keyed by the reference it belongs to \u2014 the DM, SHK or whatever the maker uses. The case number alone is not an identifier: the same marking exists under several references and at different sites, so both are shown together. Filter any column, and export what you are looking at.",
+    caseViewCount: (shown, all) => `${shown} of ${all} cases`,
+    caseViewFilterHint: "filter\u2026",
+    caseViewTruncated: (shown, all) => `Showing the first ${shown} of ${all}. Narrow a filter, or export to see them all.`,
     navLedger: "Storage ledger",
     ledgerTitle: "Storage ledger",
     ledgerDesc: "Every arrival and delivery the depot has recorded, a site at a time, in date order with a running balance \u2014 the same shape as a client's own store list, so the two can be read side by side. Charges and free days are not shown here; those follow the billing rules rather than the movements.",
@@ -2602,6 +2656,7 @@ const TEXT = {
     selectedCount: (sel, tot) => `已選擇 ${sel} 項，共 ${tot} 項可匯入。`,
     selectAllBtn: "全選",
     clearBtn: "清除",
+    colSite: "地盤",
     legacyRangeTapHint: "點選一件，再按住 Shift 點選另一件，即可選取兩者之間全部。",
     selectNonDupBtn: "只選擇非重複項目",
     unmatchedMsg: "無法識別之欄位（已略過）：",
@@ -3035,6 +3090,12 @@ const TEXT = {
     plrClearBtn: "重新開始",
     plrTooBig: (kb) => `檔案過大（${kb} KB），無法掃描 \u2014 請分割或改用 Excel 版本`,
     plrCount: (rows, files, off) => `${files} 份檔案共 ${rows} 個批次${off ? ` \u00b7 其中 ${off} 個件數與件號不符` : ""}`,
+    navCaseView: "逐件核對",
+    caseViewTitle: "逐件核對",
+    caseViewDesc: "每件貨箱一行，以其所屬參考編號（DM、SHK 等）為主。單看件號並不足以識別：同一件號可能出現於多個參考編號及不同地盤，故兩者並列。可逐欄篩選並匯出。",
+    caseViewCount: (shown, all) => `共 ${all} 件，顯示 ${shown} 件`,
+    caseViewFilterHint: "篩選…",
+    caseViewTruncated: (shown, all) => `僅顯示前 ${shown} 件（共 ${all} 件）。請縮小篩選範圍或匯出查看。`,
     navLedger: "存倉紀錄",
     ledgerTitle: "存倉紀錄",
     ledgerDesc: "依地盤列出所有到倉及送貨記錄，按日期排列並附累計餘數 \u2014 格式與客戶存倉清單一致，便於對照。此處不列載費用及免費期，該等項目依據收費規則而非出入記錄。",
@@ -7802,7 +7863,14 @@ function siteKeyFor(en, zh) {
 function normalizeSiteForMatch(s) {
   return String(s || "")
     .toLowerCase()
-    .replace(/^(site at|no\.?)\s*/i, "")
+    // "Site at" is how a job sheet introduces the place, not part of its name: the directory
+    // says "Fanling North Area 15 East Phase 2" and the sheet says "SITE AT FANLING NORTH
+    // AREA 15 EAST PHASE 2". Stripped wherever it appears rather than only at the very
+    // start, since it also turns up after a job or client name - "Mitsubishi - site at
+    // Fanling" - where a start-anchored rule left it in and the two names never matched.
+    .replace(/\bsites?\s+(?:at|of|in)\s+/g, " ")
+    .replace(/^\s*(?:sites?|no\.?)\s+/, "")
+    .replace(/\u5730\u76e4\uff1a?/g, "")
     .replace(/,?\s*(hong ?kong|hk|wan ?chai)\s*$/i, "")
     .replace(/[^\w\u4e00-\u9fff]+/g, " ")
     .trim();
@@ -8649,12 +8717,17 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
     // A Delivery can only take what is still at the depot. A Return is putting cases back,
     // so the entries it needs are the ones that have been delivered from - filtering to what
     // is still deliverable would hide exactly the entries it is looking for.
-    const base = (items || []).filter((it) => it.client === row.client
-      && (it.packages || []).length > 0
-      && (row.docType === "Return" || deliverablePackages(it).length > 0));
     const siteOk = (it) => !!(row.projectEn || row.projectZh)
       && sitesLooselyMatch(row.projectEn, row.projectZh, it.project, it.constructionSite);
-    if (!deliveryRefBlocks.length) return { list: base.filter(siteOk), unmatched: [] };
+    // Client and project are not tie-breakers, they are the boundary. An entry at another
+    // site is not a weaker match for this sheet - it is not a candidate at all. The job
+    // number branch used to skip the site check, which let a delivery at one site reach an
+    // entry at another simply because a job number or a case marking happened to line up.
+    const base = (items || []).filter((it) => it.client === row.client
+      && siteOk(it)
+      && (it.packages || []).length > 0
+      && (row.docType === "Return" || deliverablePackages(it).length > 0));
+    if (!deliveryRefBlocks.length) return { list: base, unmatched: [] };
     const chosen = new Map();
     const blockByItem = new Map();
     const unmatched = [];
@@ -8664,15 +8737,23 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
       // two different arrivals, and the cases each block lists belong to its own arrival.
       if (!blockByItem.has(it.id)) blockByItem.set(it.id, b);
     });
+    // Client, then project, then the reference the sheet names, then the job number it
+    // refers back to. Each step narrows what the one below it may look at, and the case
+    // markings are only compared afterwards, among whatever survives. A sheet that names its
+    // lot has said which stock it means; a marking found outside that lot is not a candidate.
+    const refOf = (it) => [it.invoiceNumber, it.unitCode].filter(Boolean);
     for (const b of deliveryRefBlocks) {
-      const byJob = base.filter((it) => jobNosMatch(it.jobNumber, b.refJobNumber));
-      if (byJob.length) { take(byJob, b); continue; }
-      const lotCodes = (b.lots || []).flatMap((l) => [l.unitCode, l.lotRef]).filter(Boolean);
-      const byLot = lotCodes.length
-        ? base.filter((it) => !chosen.has(it.id) && siteOk(it) && lotCodes.some((c) => lotTokenMatches(it.unitCode, c)))
+      const lotCodes = (b.lots || []).flatMap((l) => [l.lotRef, l.altRef, l.unitCode]).filter(Boolean);
+      const byRef = lotCodes.length
+        ? base.filter((it) => !chosen.has(it.id)
+          && lotCodes.some((c) => refOf(it).some((r) => lotTokenMatches(r, c))))
         : [];
-      if (byLot.length) { take(byLot, b); continue; }
-      unmatched.push(b.refJobNumber);
+      if (byRef.length) { take(byRef, b); continue; }
+      const byJob = b.refJobNumber
+        ? base.filter((it) => !chosen.has(it.id) && jobNosMatch(it.jobNumber, b.refJobNumber))
+        : [];
+      if (byJob.length) { take(byJob, b); continue; }
+      unmatched.push(b.refJobNumber || (b.lots || []).map((l) => l.lotRef).filter(Boolean).join(", "));
     }
     return { list: [...chosen.values()], unmatched, blockByItem };
   })();
@@ -8785,12 +8866,23 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
   // difference between a puzzle and a correction someone can make in a few seconds. Only
   // this client's entries are searched, and markings are compared with brackets off so a
   // sheet's "(10-1/10B-1)" finds the case the packing list holds as "10-1/10B-1".
-  function locateMissingCases(missing, exceptId) {
+  function locateMissingCases(missing, exceptId, lotCodes) {
     const out = [];
+    // Only entries this sheet could legitimately have meant. A case marking is not unique -
+    // 01C02 exists under 13-DM-25-0571 and again under 13-DM-26-0500, at another site
+    // entirely - so a search by marking alone reported a delivery's missing cases as sitting
+    // in another project's stock, which is not a correction anyone could act on. Same
+    // client, same site, and where the sheet named a lot, the same lot.
+    const wanted = (lotCodes || []).filter(Boolean);
     for (const code of missing || []) {
       for (const other of items || []) {
         if (other.id === exceptId || other.cancelled) continue;
         if (row.client && other.client && other.client !== row.client) continue;
+        if (!sitesLooselyMatch(row.projectEn, row.projectZh, other.project, other.constructionSite)) continue;
+        if (wanted.length) {
+          const refs = [other.invoiceNumber, other.unitCode].filter(Boolean);
+          if (!wanted.some((c) => refs.some((r) => lotTokenMatches(r, c)))) continue;
+        }
         if (!(other.packages || []).some((p) => sameCaseCode(p.code, code))) continue;
         out.push({ code, label: `${other.id}${other.unitCode ? ` \u00b7 ${other.unitCode}` : ""}` });
         break;
@@ -9402,7 +9494,11 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
                         <span style={{ color: colors.red }}> {"\u00b7"} {t.legacySheetCasesMissing(sheetSel.missing.join(", "))}</span>
                       )}
                       {(() => {
-                        const found = locateMissingCases(sheetSel.missing, it.id);
+                        // The block this entry was matched under, so "elsewhere" can only
+                        // mean elsewhere within the lot the sheet actually named.
+                        const blk = deliveryMatch.blockByItem && deliveryMatch.blockByItem.get(it.id);
+                        const found = locateMissingCases(sheetSel.missing, it.id,
+                          ((blk && blk.lots) || []).flatMap((l) => [l.lotRef, l.altRef, l.unitCode]));
                         if (!found.length) return null;
                         return (
                           <span style={{ color: colors.amberText }}> {"\u00b7"} {t.legacySheetCasesElsewhere(
@@ -14730,6 +14826,29 @@ export default function FarspeedInventory() {
       return recomputeItemTotals({ ...it, depotArrivalDate: date, awaitingCollection: false });
     }));
   }
+  // Case by case: one row per case, filterable a column at a time.
+  const caseRows = useMemo(() => caseByCaseRows(activeItemsList, directory), [activeItemsList, directory]);
+  const [caseFilters, setCaseFilters] = useState({});
+  const [caseStatus, setCaseStatus] = useState("All");
+  const caseFiltered = useMemo(() => caseRows.filter((r) => {
+    if (caseStatus !== "All" && r["Still here, or delivered"] !== caseStatus) return false;
+    return Object.entries(caseFilters).every(([col, q]) => {
+      const needle = String(q || "").trim().toLowerCase();
+      if (!needle) return true;
+      const hay = col === "__site" ? r.__site : String(r[col] || "");
+      return hay.toLowerCase().includes(needle);
+    });
+  }), [caseRows, caseFilters, caseStatus]);
+  function exportCaseRows() {
+    const head = [...CASE_VIEW_COLUMNS, "Site", "Client", "Lift", "Entry", "KG", "CBM"];
+    const data = caseFiltered.map((r) => [...CASE_VIEW_COLUMNS.map((c) => r[c] === undefined ? "" : r[c]),
+      r.__site, r.__client, r.__lift, r.__entry, r.__kg, r.__cbm]);
+    const ws = XLSX.utils.aoa_to_sheet([head, ...data]);
+    ws["!cols"] = head.map((h) => ({ wch: h === "Reference" || h === "Site" ? 26 : 16 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Case by Case");
+    XLSX.writeFile(wb, `case-by-case-${todayStr()}.xlsx`);
+  }
   const ledgerAll = useMemo(() => storageLedger(activeItemsList, directory), [activeItemsList, directory]);
   const [ledgerOpen, setLedgerOpen] = useState({});
   const [ledgerAsOf, setLedgerAsOf] = useState(todayStr());
@@ -15151,7 +15270,7 @@ export default function FarspeedInventory() {
                 onClick={() => { setSettingsOpen((o) => !o); setNewEntryMenuOpen(false); }}
                 title={t.settingsLabel}
                 className="px-3 py-1.5 rounded text-sm font-semibold"
-                style={{ fontFamily: FONT_DISPLAY, background: ["duplicates", "cancelledjobs", "checkins", "ledger", "plreader", "jsreader"].includes(view) ? colors.amber : "transparent", color: ["duplicates", "cancelledjobs", "checkins", "ledger", "plreader", "jsreader"].includes(view) ? colors.ink : colors.onDark }}
+                style={{ fontFamily: FONT_DISPLAY, background: ["duplicates", "cancelledjobs", "checkins", "ledger", "plreader", "jsreader", "cases"].includes(view) ? colors.amber : "transparent", color: ["duplicates", "cancelledjobs", "checkins", "ledger", "plreader", "jsreader", "cases"].includes(view) ? colors.ink : colors.onDark }}
               >
                 ⚙
               </button>
@@ -15177,6 +15296,13 @@ export default function FarspeedInventory() {
                     onClick={() => { setView("ledger"); setSettingsOpen(false); }}
                   >
                     {t.navLedger}
+                  </button>
+                  <button
+                    className="block w-full text-left px-3 py-2 text-sm font-semibold"
+                    style={{ color: colors.ink, fontFamily: FONT_DISPLAY, borderTop: `1px solid ${colors.surfaceDim}` }}
+                    onClick={() => { setView("cases"); setSettingsOpen(false); }}
+                  >
+                    {t.navCaseView}
                   </button>
                   <button
                     className="block w-full text-left px-3 py-2 text-sm font-semibold"
@@ -15243,6 +15369,7 @@ export default function FarspeedInventory() {
             ["joblog", t.navJobLog],
             ["plreader", t.navPlReader],
             ["jsreader", t.navJsReader],
+            ["cases", t.navCaseView],
             ["ledger", t.navLedger],
             ["checkins", overCheckedIn > 0 ? t.navCheckInsCount(overCheckedIn) : t.navCheckIns],
             ["duplicates", duplicateGroups.length > 0 ? t.navDuplicatesCount(duplicateGroups.length) : t.navDuplicatesShort],
@@ -15297,7 +15424,7 @@ export default function FarspeedInventory() {
           six-column page frame squeezed them into a ribbon down the middle of a monitor.
           Those two get the full width; everything else keeps the narrower measure, which is
           easier to read for forms and lists. */}
-      <div className={`p-3 md:p-6 mx-auto${["plreader", "jsreader", "ledger", "checkins"].includes(view) ? " w-full" : " max-w-6xl"}`}>
+      <div className={`p-3 md:p-6 mx-auto${["plreader", "jsreader", "ledger", "checkins", "cases"].includes(view) ? " w-full" : " max-w-6xl"}`}>
         {error && <div className="mb-4 px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>{error}</div>}
         {conflictKey && (
           <div className="mb-4 px-3 py-3 rounded text-sm" style={{ background: colors.amberSoft, color: colors.ink, borderLeft: `3px solid ${colors.amber}` }}>
@@ -16010,6 +16137,76 @@ export default function FarspeedInventory() {
                 </table>
               </div>
             )}
+          </div>
+        )}
+
+        {view === "cases" && (
+          <div className="flex flex-col gap-4">
+            <div className="rounded-lg p-4" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+              <h3 className="text-sm font-bold uppercase tracking-wider mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.caseViewTitle}</h3>
+              <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.caseViewDesc}</p>
+              <div className="flex flex-wrap items-end gap-3">
+                <Field label={t.colStatus} colors={colors}>
+                  <select className={inputClass} style={inputStyleFor(colors)} value={caseStatus} onChange={(e) => setCaseStatus(e.target.value)}>
+                    {["All", "still here", "delivered"].map((o) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                </Field>
+                <button className="px-3 py-1.5 rounded text-sm font-semibold mb-0.5"
+                  style={{ border: `1px solid ${colors.line}`, color: colors.ink, fontFamily: FONT_DISPLAY }}
+                  onClick={() => { setCaseFilters({}); setCaseStatus("All"); }}>{t.clearBtn}</button>
+                <button className="px-3 py-1.5 rounded text-sm font-semibold mb-0.5"
+                  style={{ background: colors.navy, color: colors.onDark, fontFamily: FONT_DISPLAY }}
+                  onClick={exportCaseRows}>{t.exportBtn(caseFiltered.length)}</button>
+                <span className="text-xs mb-2" style={{ color: colors.inkFaint }}>{t.caseViewCount(caseFiltered.length, caseRows.length)}</span>
+              </div>
+            </div>
+            <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}`, background: colors.surface }}>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr style={{ background: colors.surfaceDim }}>
+                    {[...CASE_VIEW_COLUMNS, t.colSite].map((h) => (
+                      <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider whitespace-nowrap" style={{ color: colors.inkFaint, fontFamily: FONT_DISPLAY }}>{h}</th>
+                    ))}
+                  </tr>
+                  {/* A filter box under each heading. Searching one column at a time is how
+                      someone actually looks for a case - by its reference, or its marking,
+                      or the job that brought it in. */}
+                  <tr style={{ background: colors.surfaceDim }}>
+                    {[...CASE_VIEW_COLUMNS, "__site"].map((c) => (
+                      <th key={c} className="px-2 pb-2">
+                        <input className="w-full rounded" placeholder={t.caseViewFilterHint}
+                          style={{ border: `1px solid ${colors.line}`, background: colors.surface, padding: "2px 6px", fontSize: 12, color: colors.ink, minWidth: 110 }}
+                          value={caseFilters[c] || ""}
+                          onChange={(e) => setCaseFilters((f) => ({ ...f, [c]: e.target.value }))} />
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {caseFiltered.length === 0 && (
+                    <tr><td colSpan={CASE_VIEW_COLUMNS.length + 1} className="px-3 py-6 text-center text-sm" style={{ color: colors.inkFaint }}>{t.noRecordsMsg}</td></tr>
+                  )}
+                  {caseFiltered.slice(0, 2000).map((r, i) => (
+                    <tr key={i} style={{ borderTop: `1px solid ${colors.surfaceDim}`, color: colors.ink }}>
+                      {CASE_VIEW_COLUMNS.map((c) => (
+                        <td key={c} className="px-3 py-1.5 whitespace-nowrap"
+                          style={{
+                            fontFamily: c === "Case Number/ String" || c === "Reference" ? FONT_MONO : undefined,
+                            color: c === "Still here, or delivered"
+                              ? (r[c] === "delivered" ? colors.inkFaint : colors.green) : undefined,
+                          }}>
+                          {r[c] === "" || r[c] === undefined ? "\u2014" : String(r[c])}
+                        </td>
+                      ))}
+                      <td className="px-3 py-1.5" style={{ color: colors.inkFaint, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.__site}>{r.__site}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {caseFiltered.length > 2000 && (
+                <div className="px-3 py-2 text-xs" style={{ color: colors.inkFaint }}>{t.caseViewTruncated(2000, caseFiltered.length)}</div>
+              )}
+            </div>
           </div>
         )}
 
