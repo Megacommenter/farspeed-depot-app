@@ -2035,7 +2035,7 @@ const TEXT = {
     incomingFullyCheckedIn: "Fully checked in",
     incomingRemainingBadge: (remaining, total) => `${remaining} of ${total} not yet checked in`,
     incomingEditCasesBtn: "Edit case numbers",
-    incomingEditCasesHint: (n) => `The ${n} case numbers on this shipment, in order, separated by commas. Correct a wrong one and it is renamed everywhere \u2014 on the shipment, on anything already checked in from it, and on any delivery that took it. The count must stay the same; to add or remove a case, edit the packing list instead.`,
+    incomingEditCasesHint: (n) => `The ${n} case numbers on this shipment, one per line, in order. Correct a wrong one and it is renamed everywhere \u2014 on the shipment, on anything already checked in from it, and on any delivery that took it. The count must stay the same; to add or remove a case, edit the packing list instead.`,
     incomingEditCasesReady: (n) => `${n} cases \u2014 ready to save`,
     incomingEditCasesCount: (n, want) => `${n} case${n === 1 ? "" : "s"} listed, but this shipment has ${want}. The count must match.`,
     incomingSelectCasesLabel: "Select which cases are coming in",
@@ -10214,7 +10214,7 @@ function IncomingPanel({ onReplaceIncomingCases, incoming, setIncoming, items, d
                               <button type="button" className="text-xs font-semibold mr-3" style={{ color: colors.amberText }}
                                 onClick={() => {
                                   setEditingCasesFor(editingCasesFor === inc.id ? null : inc.id);
-                                  setCaseDraft((inc.packages || []).map((p) => p.code).join(", "));
+                                  setCaseDraft((inc.packages || []).map((p) => p.code).join("\n"));
                                 }}>
                                 {editingCasesFor === inc.id ? t.cancelBtn : t.incomingEditCasesBtn}
                               </button>
@@ -10225,10 +10225,13 @@ function IncomingPanel({ onReplaceIncomingCases, incoming, setIncoming, items, d
                         {editingCasesFor === inc.id && (
                           <div className="mb-3 rounded p-3" style={{ background: colors.amberSoft, border: `1px solid ${colors.amber}` }}>
                             <div className="text-xs mb-2" style={{ color: colors.amberText }}>{t.incomingEditCasesHint((inc.packages || []).length)}</div>
-                            <textarea className={inputClass} style={{ ...inputStyle, minHeight: 90, fontFamily: FONT_MONO, fontSize: 12 }}
+                            <textarea className={inputClass}
+                              style={{ ...inputStyle, width: "100%", minHeight: 280, fontFamily: FONT_MONO, fontSize: 13, lineHeight: 1.6, whiteSpace: "pre" }}
                               value={caseDraft} onChange={(e) => setCaseDraft(e.target.value)} />
                             {(() => {
-                              const next = caseDraft.split(",").map((c) => c.trim()).filter(Boolean);
+                              // One per line is what goes in; commas are still accepted so a list pasted from
+                            // a spreadsheet works too.
+                            const next = caseDraft.split(/[\n,]/).map((c) => c.trim()).filter(Boolean);
                               const same = next.length === (inc.packages || []).length;
                               return (
                                 <div className="flex items-center gap-3 mt-2">
@@ -10372,7 +10375,7 @@ function IncomingPanel({ onReplaceIncomingCases, incoming, setIncoming, items, d
                           <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }}
                             onClick={() => {
                               setEditingCasesFor(editingCasesFor === inc.id ? null : inc.id);
-                              setCaseDraft((inc.packages || []).map((p) => p.code).join(", "));
+                              setCaseDraft((inc.packages || []).map((p) => p.code).join("\n"));
                             }}>
                             {editingCasesFor === inc.id ? t.cancelBtn : t.incomingEditCasesBtn}
                           </button>
@@ -10381,10 +10384,13 @@ function IncomingPanel({ onReplaceIncomingCases, incoming, setIncoming, items, d
                       {editingCasesFor === inc.id && (
                         <div className="rounded p-3" style={{ background: colors.amberSoft, border: `1px solid ${colors.amber}` }}>
                           <div className="text-xs mb-2" style={{ color: colors.amberText }}>{t.incomingEditCasesHint((inc.packages || []).length)}</div>
-                          <textarea className={inputClass} style={{ ...inputStyle, minHeight: 90, fontFamily: FONT_MONO, fontSize: 12 }}
+                          <textarea className={inputClass}
+                            style={{ ...inputStyle, width: "100%", minHeight: 280, fontFamily: FONT_MONO, fontSize: 13, lineHeight: 1.6, whiteSpace: "pre" }}
                             value={caseDraft} onChange={(e) => setCaseDraft(e.target.value)} />
                           {(() => {
-                            const next = caseDraft.split(",").map((c) => c.trim()).filter(Boolean);
+                            // One per line is what goes in; commas are still accepted so a list pasted from
+                            // a spreadsheet works too.
+                            const next = caseDraft.split(/[\n,]/).map((c) => c.trim()).filter(Boolean);
                             const same = next.length === (inc.packages || []).length;
                             return (
                               <div className="flex items-center gap-3 mt-2">
