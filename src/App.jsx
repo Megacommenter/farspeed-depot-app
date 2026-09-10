@@ -10360,7 +10360,49 @@ function IncomingPanel({ onReplaceIncomingCases, incoming, setIncoming, items, d
                       </button>
                     </>
                   ) : (
-                    <div className="text-sm" style={{ color: colors.green }}>{t.incomingFullyCheckedIn}</div>
+                    // Fully checked in, so there is nothing left to select - but the case
+                    // numbers may still be wrong, and this was the only screen that could
+                    // correct them. Hiding the editor here meant a shipment could only be
+                    // fixed before it was checked in, which is precisely when nobody has
+                    // noticed yet.
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="text-sm" style={{ color: colors.green }}>{t.incomingFullyCheckedIn}</div>
+                        {onReplaceIncomingCases && (
+                          <button type="button" className="text-xs font-semibold" style={{ color: colors.amberText }}
+                            onClick={() => {
+                              setEditingCasesFor(editingCasesFor === inc.id ? null : inc.id);
+                              setCaseDraft((inc.packages || []).map((p) => p.code).join(", "));
+                            }}>
+                            {editingCasesFor === inc.id ? t.cancelBtn : t.incomingEditCasesBtn}
+                          </button>
+                        )}
+                      </div>
+                      {editingCasesFor === inc.id && (
+                        <div className="rounded p-3" style={{ background: colors.amberSoft, border: `1px solid ${colors.amber}` }}>
+                          <div className="text-xs mb-2" style={{ color: colors.amberText }}>{t.incomingEditCasesHint((inc.packages || []).length)}</div>
+                          <textarea className={inputClass} style={{ ...inputStyle, minHeight: 90, fontFamily: FONT_MONO, fontSize: 12 }}
+                            value={caseDraft} onChange={(e) => setCaseDraft(e.target.value)} />
+                          {(() => {
+                            const next = caseDraft.split(",").map((c) => c.trim()).filter(Boolean);
+                            const same = next.length === (inc.packages || []).length;
+                            return (
+                              <div className="flex items-center gap-3 mt-2">
+                                <button type="button" className="px-3 py-1 rounded text-sm font-semibold"
+                                  style={{ background: same ? colors.navy : colors.line, color: same ? colors.onDark : colors.inkFaint, fontFamily: FONT_DISPLAY }}
+                                  disabled={!same}
+                                  onClick={() => { onReplaceIncomingCases(inc.id, next); setEditingCasesFor(null); }}>
+                                  {t.saveBtn}
+                                </button>
+                                <span className="text-xs" style={{ color: same ? colors.inkFaint : colors.red }}>
+                                  {same ? t.incomingEditCasesReady(next.length) : t.incomingEditCasesCount(next.length, (inc.packages || []).length)}
+                                </span>
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
@@ -14035,6 +14077,27 @@ export default function FarspeedInventory() {
   function handleReplaceIncomingCases(incomingId, codes) {
     const list = (codes || []).map((c) => String(c || "").trim()).filter(Boolean);
     if (!list.length) return;
+    // The inventory entry has to be renamed too. A shipment that has been checked in has
+    // handed its case numbers to an entry, its arrival batches and any delivery taken from
+    // it; correcting only the shipment left the depot still holding the wrong numbers, so
+    // the delivery that prompted the correction went on failing to match.
+    const source = (incoming || []).find((i) => i.id === incomingId);
+    if (source && (source.packages || []).length === list.length) {
+      const map = new Map();
+      (source.packages || []).forEach((p, i) => { if (!map.has(p.code)) map.set(p.code, list[i]); });
+      const swap = (c) => map.get(c) || c;
+      const touched = (it) => it.id === source.linkedItemId
+        || (it.packages || []).some((p) => map.has(p.code));
+      persist(items.map((it) => {
+        if (!touched(it)) return it;
+        return {
+          ...it,
+          packages: (it.packages || []).map((p) => ({ ...p, code: swap(p.code) })),
+          arrivals: (it.arrivals || []).map((a) => ({ ...a, codes: (a.codes || []).map(swap) })),
+          deliveries: (it.deliveries || []).map((d) => ({ ...d, codes: (d.codes || []).map(swap) })),
+        };
+      }));
+    }
     setIncoming((prev) => prev.map((inc) => {
       if (inc.id !== incomingId) return inc;
       const old = inc.packages || [];
