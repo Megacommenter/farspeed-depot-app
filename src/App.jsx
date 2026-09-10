@@ -8959,7 +8959,12 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
   const caseAutoApplied = row.caseAutoApplied || {};
   const matchedItemKey = matchedItems.map((it) => it.id).join("|");
   useEffect(() => {
-    if (row.docType !== "Delivery") return;
+    // Returns as well as deliveries. This is the effect that actually *commits* the
+    // pre-selection to the row; the "N cases pre-selected" text beside each entry is
+    // computed separately for display. Gating this on Delivery alone meant a Return showed
+    // its cases as pre-selected and then processed with an empty selection - it wrote
+    // nothing at all, while looking as though it would.
+    if (!matchesInventory) return;
     const pending = {};
     for (const it of matchedItems) {
       if (caseAutoApplied[it.id]) continue;
@@ -8977,7 +8982,7 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
     });
     // Runs once per matched item: the applied flag survives further edits, so a case the
     // user then unticks by hand is not silently ticked again on the next render.
-  }, [matchedItemKey, row.docType]);
+  }, [matchedItemKey, row.docType, matchesInventory]);
   // A Delivery sheet declares its own totals just as a Devan does - the L7/L8/L9 sheet
   // closes with one line covering all twelve packages - and that figure is the accurate
   // one, so it drives the delivery instead of the packing-list sum of the cases ticked.
