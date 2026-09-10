@@ -14091,7 +14091,19 @@ export default function FarspeedInventory() {
     if (source && (source.packages || []).length === list.length) {
       const map = new Map();
       (source.packages || []).forEach((p, i) => { if (!map.has(p.code)) map.set(p.code, list[i]); });
-      const swap = (c) => map.get(c) || c;
+      const linked = (items || []).find((it) => it.id === source.linkedItemId);
+      // The entry and the shipment can hold different spellings of the same cases: an
+      // import that joined the markings one way for the entry and left them raw on the
+      // shipment leaves nothing to match on, and a rename by code then silently misses the
+      // entry entirely. Where the two are the same length and share no codes at all, they
+      // are the same cases in the same order, so position is the only link left - and using
+      // it is better than correcting the shipment and leaving the depot wrong.
+      const shared = linked && (linked.packages || []).some((p) => map.has(p.code));
+      const positional = linked && !shared
+        && (linked.packages || []).length === list.length
+        ? new Map((linked.packages || []).map((p, i) => [p.code, list[i]]))
+        : null;
+      const swap = (c) => map.get(c) || (positional && positional.get(c)) || c;
       const touched = (it) => it.id === source.linkedItemId
         || (it.packages || []).some((p) => map.has(p.code));
       persist(items.map((it) => {
