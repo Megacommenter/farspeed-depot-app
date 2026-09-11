@@ -8975,7 +8975,12 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
     onChange({ ...row, selectedByItem: nextSelected });
   }
   const caseAutoApplied = row.caseAutoApplied || {};
-  const matchedItemKey = matchedItems.map((it) => it.id).join("|");
+  // What each matched entry holds, not just which entries matched. Keyed on ids alone, the
+  // pre-selection never looked again after a case was renamed: correcting 04C11 to 05C11
+  // on FS-0263 left the entry's id unchanged, so a Delivery 8 row already open went on
+  // ticking six cases of ten until the file was loaded from scratch.
+  const codesSig = (it) => (it.packages || []).map((p) => p.code).join(",");
+  const matchedItemKey = matchedItems.map((it) => `${it.id}:${codesSig(it)}`).join("|");
   useEffect(() => {
     // Returns as well as deliveries. This is the effect that actually *commits* the
     // pre-selection to the row; the "N cases pre-selected" text beside each entry is
@@ -8984,22 +8989,34 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
     // nothing at all, while looking as though it would.
     if (!matchesInventory) return;
     const pending = {};
+    const applied = {};
     for (const it of matchedItems) {
-      if (caseAutoApplied[it.id]) continue;
-      if ((selectedByItem[it.id] || []).length) continue;
+      const sig = codesSig(it);
+      const was = caseAutoApplied[it.id];
+      // Already applied against exactly these case numbers: leave the selection alone, so
+      // a case the user unticked by hand is not ticked again on the next render.
+      if (was === sig) continue;
+      const cur = selectedByItem[it.id] || [];
+      // Picked by hand before anything was pre-selected - the user's choice stands.
+      if (!was && cur.length) continue;
       const sel = sheetSelectionFor(it);
-      if (!sel || !sel.codes.length) continue;
-      pending[it.id] = sel.codes;
+      if (!sel || !sel.codes.length) {
+        if (was) applied[it.id] = sig;
+        continue;
+      }
+      // The entry's case numbers changed since the last pass (or this row predates the
+      // signature and only recorded "true"). Keep what is still ticked and still exists,
+      // and add whatever the sheet now finds.
+      const held = new Set((it.packages || []).map((p) => p.code));
+      pending[it.id] = [...new Set([...cur.filter((c) => held.has(c)), ...sel.codes])];
+      applied[it.id] = sig;
     }
-    const ids = Object.keys(pending);
-    if (!ids.length) return;
+    if (!Object.keys(pending).length && !Object.keys(applied).length) return;
     onChange({
       ...row,
       selectedByItem: { ...selectedByItem, ...pending },
-      caseAutoApplied: { ...caseAutoApplied, ...Object.fromEntries(ids.map((id) => [id, true])) },
+      caseAutoApplied: { ...caseAutoApplied, ...applied },
     });
-    // Runs once per matched item: the applied flag survives further edits, so a case the
-    // user then unticks by hand is not silently ticked again on the next render.
   }, [matchedItemKey, row.docType, matchesInventory]);
   // A Delivery sheet declares its own totals just as a Devan does - the L7/L8/L9 sheet
   // closes with one line covering all twelve packages - and that figure is the accurate
