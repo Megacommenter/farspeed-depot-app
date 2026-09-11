@@ -2033,6 +2033,11 @@ const TEXT = {
     incomingCaseCount: (n) => `${n} case${n === 1 ? "" : "s"} on packing list`,
     incomingLinkedTo: (id) => `linked to ${id}`,
     incomingMoreCases: (n) => `+${n} more`,
+    incomingLinkGone: (id) => `${id} no longer exists`,
+    incomingLinkForeign: (id) => `${id} holds other cases, not these`,
+    incomingLinkBrokenHint: "This shipment shows as checked in, but the entry it points at doesn't hold its cases. Release it so its cases show as not yet checked in, then check them in again or delete the card.",
+    incomingReleaseBtn: "Release",
+    incomingReleaseConfirm: (id) => `Release this shipment from ${id}? Its cases go back to showing as not yet checked in. Nothing in the depot is changed.`,
     incomingCasesOnShipment: "Cases on this shipment",
     incomingHiddenMatches: (n) => `${n} more shipment${n === 1 ? "" : "s"} match${n === 1 ? "es" : ""} but ${n === 1 ? "is" : "are"} fully checked in.`,
     incomingShowThemBtn: "Show them",
@@ -2914,6 +2919,11 @@ const TEXT = {
     incomingCaseCount: (n) => `裝箱單共 ${n} 件`,
     incomingLinkedTo: (id) => `已連結至 ${id}`,
     incomingMoreCases: (n) => `另有 ${n} 件`,
+    incomingLinkGone: (id) => `${id} 已不存在`,
+    incomingLinkForeign: (id) => `${id} 所存為其他貨件`,
+    incomingLinkBrokenHint: "此貨件顯示已到倉，但所連結的記錄並無其貨箱。請解除連結，貨箱會回復為未到倉，然後重新到倉或刪除此卡。",
+    incomingReleaseBtn: "解除連結",
+    incomingReleaseConfirm: (id) => `解除此貨件與 ${id} 的連結？其貨箱會回復為未到倉。倉存記錄不會改動。`,
     incomingCasesOnShipment: "本批貨件之件號",
     incomingHiddenMatches: (n) => `另有 ${n} 批符合的貨件已全部到倉，目前隱藏。`,
     incomingShowThemBtn: "顯示",
@@ -10017,6 +10027,25 @@ function IncomingPanel({ onReplaceIncomingCases, incoming, setIncoming, items, d
   function isComplete(inc) {
     return remainingPkgs(inc).length === 0;
   }
+  // A card can say "Fully checked in" while the entry it names is gone, or has been
+  // replaced under the same number by another memo's cases. Either way the card is lying,
+  // and it was hiding among the finished ones where nobody would look.
+  const itemById = useMemo(() => new Map((items || []).map((it) => [it.id, it])), [items]);
+  function linkProblem(inc) {
+    if (!inc.linkedItemId) return null;
+    const it = itemById.get(inc.linkedItemId);
+    if (!it) return { kind: "gone", id: inc.linkedItemId };
+    const mine = inc.packages || [];
+    const theirs = it.packages || [];
+    if (!mine.length) return null;
+    const shared = mine.some((p) => theirs.some((q) => sameCaseCode(p.code, q.code)));
+    // Same number of cases and nothing in common is the same cases spelt another way,
+    // which the rename already knows how to handle - not a broken link.
+    if (!shared && (theirs.length !== mine.length || it.client !== inc.client)) {
+      return { kind: "foreign", id: inc.linkedItemId };
+    }
+    return null;
+  }
 
   const clientOptions = useMemo(() => [...new Set(incoming.map((i) => i.client).filter(Boolean))].sort(), [incoming]);
   const pickedIncoming = incoming.filter((i) => picked[i.id]);
@@ -10040,7 +10069,7 @@ function IncomingPanel({ onReplaceIncomingCases, incoming, setIncoming, items, d
   }
   const filtered = incoming.filter((inc) => {
     if (filterClient !== "All" && inc.client !== filterClient) return false;
-    if (!showCompleted && isComplete(inc)) return false;
+    if (!showCompleted && isComplete(inc) && !linkProblem(inc)) return false;
     return matchesSearch(inc);
   });
   // A search for a case number is usually a search for something to correct, and the
@@ -10048,7 +10077,7 @@ function IncomingPanel({ onReplaceIncomingCases, incoming, setIncoming, items, d
   // default. Saying so beats an empty list that suggests the case does not exist.
   const hiddenCompletedMatches = (!showCompleted && searchQ)
     ? incoming.filter((inc) => (filterClient === "All" || inc.client === filterClient)
-      && isComplete(inc) && matchesSearch(inc)).length
+      && isComplete(inc) && !linkProblem(inc) && matchesSearch(inc)).length
     : 0;
 
   function getSel(id) { return selectedByShipment[id] || []; }
@@ -10237,7 +10266,21 @@ function IncomingPanel({ onReplaceIncomingCases, incoming, setIncoming, items, d
                   })()}
                 </div>
                 </div>
-                {complete ? (
+                {linkProblem(inc) ? (
+                  <span className="flex items-center gap-2" title={t.incomingLinkBrokenHint}>
+                    <Badge tone="red" colors={colors}>
+                      {linkProblem(inc).kind === "gone" ? t.incomingLinkGone(inc.linkedItemId) : t.incomingLinkForeign(inc.linkedItemId)}
+                    </Badge>
+                    <button type="button" className="text-xs font-semibold underline" style={{ color: colors.red }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!window.confirm(t.incomingReleaseConfirm(inc.linkedItemId))) return;
+                        setIncoming((prev) => prev.map((i) => (i.id === inc.id ? { ...i, linkedItemId: null, checkedInCodes: [] } : i)));
+                      }}>
+                      {t.incomingReleaseBtn}
+                    </button>
+                  </span>
+                ) : complete ? (
                   <Badge tone="green" colors={colors}>{t.incomingFullyCheckedIn}</Badge>
                 ) : (
                   <Badge tone="amber" colors={colors}>{t.incomingRemainingBadge(remaining.length, (inc.packages || []).length)}</Badge>
@@ -14199,8 +14242,9 @@ export default function FarspeedInventory() {
       const sameSite = (it) => it.client === source.client
         && ((source.directoryId && it.directoryId === source.directoryId)
           || (it.project || "") === (source.project || ""));
-      const touched = (it) => source.linkedItemId
-        ? it.id === source.linkedItemId
+      const liveLink = linked ? source.linkedItemId : null;
+      const touched = (it) => liveLink
+        ? it.id === liveLink
         : (!claimed.has(it.id) && sameSite(it) && (it.packages || []).some((p) => map.has(p.code)));
       persist(items.map((it) => {
         if (!touched(it)) return it;
@@ -14256,7 +14300,7 @@ export default function FarspeedInventory() {
   // arrival batch. This computes everything against one working copy instead.
   function handleCheckInBatch(operations) {
     let workingItems = [...items];
-    let counter = workingItems.reduce((m, i) => Math.max(m, i.numericId || 0), 0);
+    let counter = highestFsNumber(workingItems);
     const incomingPatches = new Map();
     const results = [];
     for (const op of operations) {
@@ -14331,7 +14375,7 @@ export default function FarspeedInventory() {
     let resultItemId = inc.linkedItemId;
 
     if (!inc.linkedItemId) {
-      let counter = items.reduce((m, i) => Math.max(m, i.numericId || 0), 0) + 1;
+      let counter = highestFsNumber() + 1;
       const totalWeight = inc.packages.reduce((s, p) => s + (Number(p.weightKg) || 0), 0);
       const totalCbm = inc.packages.reduce((s, p) => s + (Number(p.cbm) || 0), 0);
       const newItem = {
@@ -14417,8 +14461,22 @@ export default function FarspeedInventory() {
     return persistGuarded("items", next, setItems, (v) => JSON.parse(v));
   }
 
+  // The next entry number has to clear every number anything still points at, not just
+  // the entries that exist. Taking the highest existing entry and adding one meant that
+  // deleting the newest entries handed their numbers straight back out - and every
+  // Incoming card and backlog listing still linked to the deleted FS-0263 was then linked
+  // to whatever new entry got FS-0263, a different memo's cases entirely.
+  function highestFsNumber(list) {
+    let max = (list || items).reduce((m, i) => Math.max(m, i.numericId || 0), 0);
+    const see = (ref) => {
+      for (const m of String(ref || "").matchAll(/FS-(\d+)/g)) max = Math.max(max, Number(m[1]));
+    };
+    (incoming || []).forEach((inc) => see(inc.linkedItemId));
+    (legacyArchive || []).forEach((r) => { see(r.linkedItemId); (r.linkedItemIds || []).forEach(see); });
+    return max;
+  }
   function nextId() {
-    const max = items.reduce((m, i) => Math.max(m, i.numericId || 0), 0);
+    const max = highestFsNumber();
     return { numericId: max + 1, id: `FS-${String(max + 1).padStart(4, "0")}` };
   }
 
@@ -14481,8 +14539,21 @@ export default function FarspeedInventory() {
     }));
   }
 
+  // Deleting an entry has to let go of the Incoming shipments checked into it. Leaving them
+  // linked kept them marked "Fully checked in" against an entry that no longer existed,
+  // hid them from the list, and - once the number was reused - pointed them at somebody
+  // else's cases. Released, they go back to showing their cases as not yet checked in,
+  // which is the truth: nothing in the depot holds them any more.
+  function releaseIncomingFor(ids) {
+    const gone = new Set(ids || []);
+    if (!gone.size || !(incoming || []).some((inc) => gone.has(inc.linkedItemId))) return;
+    setIncoming((prev) => prev.map((inc) => (gone.has(inc.linkedItemId)
+      ? { ...inc, linkedItemId: null, checkedInCodes: [] }
+      : inc)));
+  }
   function handleDelete(id) {
     persist(items.filter((i) => i.id !== id));
+    releaseIncomingFor([id]);
   }
   // Deleting several at once has to be one pass. Calling handleDelete in a loop computed
   // every removal from the same snapshot of `items`, so each write undid the one before it
@@ -14491,6 +14562,7 @@ export default function FarspeedInventory() {
     const gone = new Set(ids || []);
     if (!gone.size) return;
     persist(items.filter((i) => !gone.has(i.id)));
+    releaseIncomingFor([...gone]);
   }
 
   function handleAddDelivery(delivery, itemId) {
@@ -14668,7 +14740,7 @@ export default function FarspeedInventory() {
   }
 
   function handleImportRows(rows) {
-    let counter = items.reduce((m, i) => Math.max(m, i.numericId || 0), 0);
+    let counter = highestFsNumber();
     const newItems = rows.map((r) => {
       counter += 1;
       return { ...r, numericId: counter, id: `FS-${String(counter).padStart(4, "0")}`, createdAt: todayStr() };
@@ -14680,7 +14752,7 @@ export default function FarspeedInventory() {
   // Same as handleImportRows but stays on the current screen and returns the created
   // items (with their assigned FS ids) - used by the Legacy Uploads bulk importer.
   function handleLegacyImport(rows) {
-    let counter = items.reduce((m, i) => Math.max(m, i.numericId || 0), 0);
+    let counter = highestFsNumber();
     const newItems = rows.map((r) => {
       counter += 1;
       return { ...r, numericId: counter, id: `FS-${String(counter).padStart(4, "0")}`, createdAt: todayStr() };
@@ -14695,6 +14767,7 @@ export default function FarspeedInventory() {
 
   function handleDeleteGroup(groupIds) {
     persist(items.filter((i) => !groupIds.includes(i.id)));
+    releaseIncomingFor(groupIds);
   }
 
   const activeItemsList = useMemo(() => items.filter((i) => !i.cancelled), [items]);
