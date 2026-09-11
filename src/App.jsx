@@ -7019,6 +7019,18 @@ const CASE_CODE_SPLIT_RE = /[,&\u3001]/;
 // sheet asked for. That fallback has to be unique to be trusted: where a lot holds
 // 03B4203-2-1 and 03B4203-2-2, a sheet asking for "03B42" could mean either, and guessing
 // would put the wrong case out of the door. Ambiguous ones are left unmatched and reported.
+// A split marking put back together the wrong way round. "D51 03-2-1 (#.03)" is
+// 03D5103-2-1 - lift, component, then the suffix - but it has also come through as
+// 03-2-1D5103, with the suffix moved to the front and the lift left on the end. Nothing
+// the delivery sheets ask for is written that way, so 13-DM-26-0203's three split cases
+// matched nothing and the delivery found 19 of 22. Only that exact shape is touched: a
+// two-digit lift, a -n-n part, a component code, and the same lift again at the end.
+function unscrambleMarking(code) {
+  const text = String(code == null ? "" : code).trim();
+  const m = text.toUpperCase().replace(/\s+/g, "").match(/^(\d{2})((?:-\d{1,2})+)([A-Z]{1,3}\d{0,2}[A-Z]?)(\d{2})$/);
+  if (!m || m[1] !== m[4]) return text;
+  return `${m[4]}${m[3]}${m[1]}${m[2]}`;
+}
 function resolveCaseCode(code, packages) {
   const exact = (packages || []).find((p) => sameCaseCode(p.code, code));
   if (exact) return exact;
@@ -7029,7 +7041,7 @@ function resolveCaseCode(code, packages) {
   return starts.length === 1 ? starts[0] : null;
 }
 function sameCaseCode(a, b) {
-  const norm = (c) => String(c || "").toUpperCase().replace(/[\s()#'\u2018\u2019]/g, "");
+  const norm = (c) => unscrambleMarking(String(c || "").toUpperCase().replace(/[\s()#'\u2018\u2019]/g, ""));
   return norm(a) === norm(b);
 }
 // A case list typed as a grid rather than a line: each cell one marking, read left to right
@@ -12684,7 +12696,7 @@ function siteNamePair(raw, directory) {
 // parentheses, all on one marking. Anything already joined, or shaped any other way, is
 // left alone - guessing more widely would corrupt the makers who number their cases plainly.
 function repairLiftFirstMarking(code, lift) {
-  const text = String(code == null ? "" : code).trim();
+  const text = unscrambleMarking(code);
   // The component code is one to three letters and may carry no digits at all: a machine
   // room list writes "B11 01", a guide-rail list writes "C 01", and both become
   // lift-first - 01B1101 and 19C01. Requiring digits after the letters matched the first
