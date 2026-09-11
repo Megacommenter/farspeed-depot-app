@@ -14223,7 +14223,10 @@ export default function FarspeedInventory() {
       // are the same cases in the same order, so position is the only link left - and using
       // it is better than correcting the shipment and leaving the depot wrong.
       const shared = linked && (linked.packages || []).some((p) => map.has(p.code));
-      const positional = linked && !shared
+      // Position is only trusted when the entry is plainly this shipment's own - same
+      // client as well as the same number of cases. A card left pointing at a number that
+      // has since gone to another client's entry would otherwise rename that entry's cases.
+      const positional = linked && !shared && linked.client === source.client
         && (linked.packages || []).length === list.length
         ? new Map((linked.packages || []).map((p, i) => [p.code, list[i]]))
         : null;
