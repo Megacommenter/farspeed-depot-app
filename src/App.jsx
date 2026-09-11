@@ -2459,6 +2459,8 @@ const TEXT = {
     legacyCasesFormatClash: (sheet, list) => `Not one of them matched, so nothing could be pre-selected. The sheet asks for ${sheet}\u2026 while the packing list holds ${list}\u2026 \u2014 the same cases written differently. Re-import the packing list to rebuild its markings, or tick the cases by hand this once.`,
     legacySheetCasesMissing: (list) => `case ${list} not at the depot`,
     legacySheetCasesElsewhere: (list, more) => `but checked in elsewhere: ${list}${more ? `, and ${more} more` : ""} \u2014 deliver from that entry instead, or move the cases across in Inventory`,
+    legacySheetCasesDeliveredElsewhere: (list) => `already delivered: ${list} \u2014 a case can only leave once. If that earlier job was really for another memo that uses the same case numbers, move its delivery record to that memo's entry and these become deliverable again`,
+    legacySheetCasesNeverArrived: (list) => `on the packing list but never checked in: ${list} \u2014 check them in on that entry first, then this delivery can take them`,
     legacyReplaceCasesHint: (n) => `Same number of cases, but ${n} numbered differently here than on this sheet. Either source can be wrong \u2014 a scan can drop a digit, a typed sheet can carry a typo \u2014 so check the paper before changing anything:`,
     legacyReplaceCasesBtn: "Renumber this shipment to match the sheet",
     legacyScannedFromPdf: "Read by scanning the page \u2014 check the fields and case numbers against the paper before processing.",
@@ -3345,6 +3347,8 @@ const TEXT = {
     legacyCasesFormatClash: (sheet, list) => `全部不符，故未能預先選取。工單要求 ${sheet}…而裝箱單記載為 ${list}… \u2014 同一批貨箱但寫法不同。請重新匯入裝箱單以重建件號，或今次先手動選取。`,
     legacySheetCasesMissing: (list) => `第 ${list} 件不在倉內`,
     legacySheetCasesElsewhere: (list, more) => `但已入於其他批次：${list}${more ? `，另有 ${more} 件` : ""} \u2014 請改由該批次出貨，或於存倉列表調整貨箱歸屬`,
+    legacySheetCasesDeliveredElsewhere: (list) => `已送出：${list} \u2014 每件貨箱只能送出一次。如該次送貨實屬另一份使用相同件號的DM，請將該送貨記錄移至該DM的批次，此等貨箱即可再次出貨`,
+    legacySheetCasesNeverArrived: (list) => `在裝箱單上但從未到倉：${list} \u2014 請先於該批次辦理到倉，然後此次送貨方可選取`,
     legacyReplaceCasesHint: (n) => `件數相同，但其中 ${n} 個件號與本工單不符。兩者皆可能有誤 \u2014 掃描可能漏字，工單亦可能手誤 \u2014 請先核對紙本再作更改：`,
     legacyReplaceCasesBtn: "將此批到貨件號改為工單所示",
     legacyScannedFromPdf: "此為掃描讀取結果 \u2014 處理前請與紙本核對各欄位及件號。",
@@ -8909,8 +8913,21 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
           const refs = [other.invoiceNumber, other.unitCode].filter(Boolean);
           if (!wanted.some((c) => refs.some((r) => lotTokenMatches(r, c)))) continue;
         }
-        if (!(other.packages || []).some((p) => sameCaseCode(p.code, code))) continue;
-        out.push({ code, label: `${other.id}${other.unitCode ? ` \u00b7 ${other.unitCode}` : ""}` });
+        const held = (other.packages || []).find((p) => sameCaseCode(p.code, code));
+        if (!held) continue;
+        // Where it was found says nothing about whether it can go. "Deliver from that entry
+        // instead" was the advice even when the entry had already delivered the case, or
+        // never checked it in - and then the entry was not offered here at all, because it
+        // had nothing deliverable, so the advice could not be followed.
+        const gone = activeDeliveries(other).find((d) => (d.codes || []).some((c) => sameCaseCode(c, held.code)));
+        const landed = !usesArrivalBatches(other) || [...arrivedCodesSet(other)].some((c) => sameCaseCode(c, held.code));
+        const state = gone ? "delivered" : (landed ? "atDepot" : "notArrived");
+        out.push({
+          code, state,
+          label: `${other.id}${other.unitCode ? ` \u00b7 ${other.unitCode}` : ""}`,
+          job: gone ? (gone.jobNumber || "") : "",
+          date: gone ? (gone.date || "") : "",
+        });
         break;
       }
     }
@@ -9548,11 +9565,28 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
                         const found = locateMissingCases(sheetSel.missing, it.id,
                           ((blk && blk.lots) || []).flatMap((l) => [l.lotRef, l.altRef, l.unitCode]));
                         if (!found.length) return null;
+                        const at = found.filter((f) => f.state === "atDepot");
+                        const out = found.filter((f) => f.state === "delivered");
+                        const never = found.filter((f) => f.state === "notArrived");
                         return (
-                          <span style={{ color: colors.amberText }}> {"\u00b7"} {t.legacySheetCasesElsewhere(
-                            found.slice(0, 6).map((f) => `${f.code} \u2192 ${f.label}`).join(", "),
-                            found.length > 6 ? found.length - 6 : 0
-                          )}</span>
+                          <>
+                            {at.length > 0 && (
+                              <span style={{ color: colors.amberText }}> {"\u00b7"} {t.legacySheetCasesElsewhere(
+                                at.slice(0, 6).map((f) => `${f.code} \u2192 ${f.label}`).join(", "),
+                                at.length > 6 ? at.length - 6 : 0
+                              )}</span>
+                            )}
+                            {out.length > 0 && (
+                              <span style={{ color: colors.red }}> {"\u00b7"} {t.legacySheetCasesDeliveredElsewhere(
+                                out.map((f) => `${f.code} \u2192 ${f.label}${f.job ? `, job ${f.job}` : ""}${f.date ? ` (${f.date})` : ""}`).join("; ")
+                              )}</span>
+                            )}
+                            {never.length > 0 && (
+                              <span style={{ color: colors.red }}> {"\u00b7"} {t.legacySheetCasesNeverArrived(
+                                never.map((f) => `${f.code} \u2192 ${f.label}`).join(", ")
+                              )}</span>
+                            )}
+                          </>
                         );
                       })()}
                     </div>
