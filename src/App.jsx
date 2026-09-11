@@ -7038,7 +7038,13 @@ function resolveCaseCode(code, packages) {
   const wanted = norm(code);
   if (wanted.length < 4) return null;
   const starts = (packages || []).filter((p) => norm(p.code).startsWith(wanted));
-  return starts.length === 1 ? starts[0] : null;
+  if (starts.length === 1) return starts[0];
+  // A dash dropped or moved in typing. Delivery 14 asks for "07D11072-1" where the packing
+  // list and the depot both hold 07D1107-2-1: the same characters, one hyphen short. Only a
+  // single case that reads identically with every hyphen taken out will do.
+  const bare = (c) => norm(c).replace(/-/g, "");
+  const loose = (packages || []).filter((p) => bare(p.code) === bare(code));
+  return loose.length === 1 ? loose[0] : null;
 }
 function sameCaseCode(a, b) {
   const norm = (c) => unscrambleMarking(String(c || "").toUpperCase().replace(/[\s()#'\u2018\u2019]/g, ""));
@@ -7943,6 +7949,19 @@ function lotTokenMatches(a, b) {
       if (partA === partB) return true;
       const [s, l] = partA.length <= partB.length ? [partA, partB] : [partB, partA];
       if (s.length >= 2 && l.startsWith(s) && /[^A-Z0-9]/.test(l.charAt(s.length))) return true;
+    }
+  }
+  // Squeezing the spaces out first welded a reference to whatever followed it: an entry
+  // filed as "13-DM-26-0042 26PKGS" became 13-DM-26-004226PKGS, which no longer starts with
+  // 13-DM-26-0042 at a boundary, so a delivery naming the memo could not find it. 0145 and
+  // 0203 were only found because their job numbers happened to match as well; 0042 had no
+  // such luck. A space is a boundary like any other - for a reference long enough to mean
+  // something on its own, so a bare lift number like "24" still cannot claim "24 PKGS".
+  const spaced = (v) => String(v || "").toUpperCase().trim().replace(/\s+/g, " ");
+  for (const partA of spaced(a).split(/[,;]/).map((x) => x.trim()).filter(Boolean)) {
+    for (const partB of spaced(b).split(/[,;]/).map((x) => x.trim()).filter(Boolean)) {
+      const [s, l] = partA.length <= partB.length ? [partA, partB] : [partB, partA];
+      if (s.length >= 6 && l.startsWith(s) && l.charAt(s.length) === " ") return true;
     }
   }
   return false;
