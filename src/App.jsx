@@ -9552,17 +9552,26 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
                       <button type="button" className="text-xs font-semibold" style={{ color: colors.inkFaint }} onClick={() => clearItem(it.id)}>{t.clearBtn}</button>
                     </div>
                   </div>
-                  {sheetSel && (
+                  {sheetSel && (() => {
+                    // One memo checked in as several entries - 13-DM-25-0613 is FS-0202 with
+                    // its 44 cases plus FS-0203 and FS-0204 with one each - gives every entry
+                    // the whole block's list. The two cases FS-0202 is already taking on this
+                    // same delivery were then reported in red under the other two as "not at
+                    // the depot", which reads as a failure when nothing is wrong. A case another
+                    // entry on this delivery can supply is not missing from the delivery.
+                    const missingHere = (sheetSel.missing || []).filter((c) => !matchedItems.some((other) =>
+                      other.id !== it.id && resolveCaseCode(c, selectablePackages(other))));
+                    return (
                     <div className="text-xs mb-2" style={{ color: colors.inkFaint }}>
                       {t.legacySheetCasesNote(sheetSel.text, sheetSel.codes.length)}
-                      {sheetSel.missing.length > 0 && (
-                        <span style={{ color: colors.red }}> {"\u00b7"} {t.legacySheetCasesMissing(sheetSel.missing.join(", "))}</span>
+                      {missingHere.length > 0 && (
+                        <span style={{ color: colors.red }}> {"\u00b7"} {t.legacySheetCasesMissing(missingHere.join(", "))}</span>
                       )}
                       {(() => {
                         // The block this entry was matched under, so "elsewhere" can only
                         // mean elsewhere within the lot the sheet actually named.
                         const blk = deliveryMatch.blockByItem && deliveryMatch.blockByItem.get(it.id);
-                        const found = locateMissingCases(sheetSel.missing, it.id,
+                        const found = locateMissingCases(missingHere, it.id,
                           ((blk && blk.lots) || []).flatMap((l) => [l.lotRef, l.altRef, l.unitCode]));
                         if (!found.length) return null;
                         const at = found.filter((f) => f.state === "atDepot");
@@ -9590,7 +9599,8 @@ function LegacyUploadRow({ onReplaceIncomingCases, directory, setDirectory, empl
                         );
                       })()}
                     </div>
-                  )}
+                    );
+                  })()}
                   {(() => {
                     const misfiled = misfiledCasesFor(it);
                     if (!misfiled.length) return null;
