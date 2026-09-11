@@ -2032,6 +2032,10 @@ const TEXT = {
     incomingNoneMsg: "Nothing incoming right now \u2014 upload a packing list to add cases here.",
     incomingCaseCount: (n) => `${n} case${n === 1 ? "" : "s"} on packing list`,
     incomingLinkedTo: (id) => `linked to ${id}`,
+    incomingMoreCases: (n) => `+${n} more`,
+    incomingCasesOnShipment: "Cases on this shipment",
+    incomingHiddenMatches: (n) => `${n} more shipment${n === 1 ? "" : "s"} match${n === 1 ? "es" : ""} but ${n === 1 ? "is" : "are"} fully checked in.`,
+    incomingShowThemBtn: "Show them",
     incomingFullyCheckedIn: "Fully checked in",
     incomingRemainingBadge: (remaining, total) => `${remaining} of ${total} not yet checked in`,
     incomingEditCasesBtn: "Edit case numbers",
@@ -2909,6 +2913,10 @@ const TEXT = {
     incomingNoneMsg: "目前沒有待到倉貨件 \u2014 上載裝箱單以新增。",
     incomingCaseCount: (n) => `裝箱單共 ${n} 件`,
     incomingLinkedTo: (id) => `已連結至 ${id}`,
+    incomingMoreCases: (n) => `另有 ${n} 件`,
+    incomingCasesOnShipment: "本批貨件之件號",
+    incomingHiddenMatches: (n) => `另有 ${n} 批符合的貨件已全部到倉，目前隱藏。`,
+    incomingShowThemBtn: "顯示",
     incomingFullyCheckedIn: "已全部到倉",
     incomingRemainingBadge: (remaining, total) => `尚有 ${remaining}／${total} 件未到倉`,
     incomingEditCasesBtn: "\u4fee\u6539\u4ef6\u865f",
@@ -10016,19 +10024,32 @@ function IncomingPanel({ onReplaceIncomingCases, incoming, setIncoming, items, d
   // A shipment already checked into an inventory entry is the one worth warning about:
   // deleting it leaves that entry with no packing list behind it.
   const pickedLinked = pickedIncoming.filter((i) => i.linkedItemId).length;
-  const filtered = incoming.filter((inc) => {
-    if (filterClient !== "All" && inc.client !== filterClient) return false;
-    if (!showCompleted && isComplete(inc)) return false;
-    if (!search.trim()) return true;
-    const q = search.toLowerCase();
+  const searchQ = search.trim().toLowerCase();
+  const caseHit = (code) => !!searchQ && String(code || "").toLowerCase().includes(searchQ);
+  function matchesSearch(inc) {
+    if (!searchQ) return true;
+    const q = searchQ;
     // Searchable by the things written on the paperwork - the SHK reference and the
     // order/commission number on the cases - as well as by site, lift and case code.
     return inc.client?.toLowerCase().includes(q) || inc.project?.toLowerCase().includes(q) ||
       inc.constructionSite?.toLowerCase().includes(q) || inc.unitCode?.toLowerCase().includes(q) ||
       inc.shkNumber?.toLowerCase().includes(q) || inc.jobRef?.toLowerCase().includes(q) ||
+      (inc.linkedItemId || "").toLowerCase().includes(q) ||
       (inc.packages || []).some((p) => (p.code || "").toLowerCase().includes(q)
         || String(p.orderNo || "").toLowerCase().includes(q));
+  }
+  const filtered = incoming.filter((inc) => {
+    if (filterClient !== "All" && inc.client !== filterClient) return false;
+    if (!showCompleted && isComplete(inc)) return false;
+    return matchesSearch(inc);
   });
+  // A search for a case number is usually a search for something to correct, and the
+  // shipment holding it has usually been checked in already - which this list hides by
+  // default. Saying so beats an empty list that suggests the case does not exist.
+  const hiddenCompletedMatches = (!showCompleted && searchQ)
+    ? incoming.filter((inc) => (filterClient === "All" || inc.client === filterClient)
+      && isComplete(inc) && matchesSearch(inc)).length
+    : 0;
 
   function getSel(id) { return selectedByShipment[id] || []; }
   function toggleCode(id, code) {
@@ -10108,6 +10129,14 @@ function IncomingPanel({ onReplaceIncomingCases, incoming, setIncoming, items, d
       </div>
 
       <div className="flex flex-col gap-3">
+        {hiddenCompletedMatches > 0 && (
+          <div className="px-3 py-2 rounded text-sm flex flex-wrap items-center gap-3" style={{ background: colors.amberSoft, border: `1px solid ${colors.amber}`, color: colors.amberText }}>
+            <span>{t.incomingHiddenMatches(hiddenCompletedMatches)}</span>
+            <button type="button" className="text-xs font-semibold underline" style={{ color: colors.amberText }} onClick={() => setShowCompleted(true)}>
+              {t.incomingShowThemBtn}
+            </button>
+          </div>
+        )}
         {filtered.length > 0 && (
           <div className="flex flex-wrap items-center gap-3 px-1">
             <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: colors.inkFaint }}>
@@ -10174,6 +10203,38 @@ function IncomingPanel({ onReplaceIncomingCases, incoming, setIncoming, items, d
                       inc.linkedItemId ? t.incomingLinkedTo(inc.linkedItemId) : "",
                     ].filter(Boolean).join(" \u00b7 ")}
                   </div>
+                  {(() => {
+                    // One delivery memo imported as several lots gives several cards with the
+                    // same client, site and reference, and nothing on any of them said which
+                    // cases it held - so finding the one with a wrong case number meant opening
+                    // each in turn. The cases are the difference between them, so they show.
+                    // Long lots show the first few, plus any case the search matched wherever
+                    // it sits in the list.
+                    const pk = inc.packages || [];
+                    if (!pk.length) return null;
+                    const SHOWN = pk.length <= 12 ? pk.length : 8;
+                    const visible = pk.filter((p, i) => i < SHOWN || caseHit(p.code));
+                    const more = pk.length - visible.length;
+                    return (
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        {visible.map((p, i) => (
+                          <span key={`${p.code}-${i}`} className="px-1.5 py-0.5 rounded"
+                            style={{
+                              fontFamily: FONT_MONO, fontSize: 11, lineHeight: 1.4,
+                              background: caseHit(p.code) ? colors.amberSoft : colors.surface,
+                              border: `1px solid ${caseHit(p.code) ? colors.amber : colors.line}`,
+                              color: caseHit(p.code) ? colors.amberText : colors.inkFaint,
+                              fontWeight: caseHit(p.code) ? 600 : 400,
+                            }}>
+                            {p.code}
+                          </span>
+                        ))}
+                        {more > 0 && (
+                          <span className="px-1 py-0.5 text-xs" style={{ color: colors.inkFaint }}>{t.incomingMoreCases(more)}</span>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
                 </div>
                 {complete ? (
@@ -10381,6 +10442,26 @@ function IncomingPanel({ onReplaceIncomingCases, incoming, setIncoming, items, d
                           </button>
                         )}
                       </div>
+                      {editingCasesFor !== inc.id && (inc.packages || []).length > 0 && (
+                        <div className="mb-1">
+                          <div className="text-xs mb-1.5" style={{ color: colors.inkFaint }}>{t.incomingCasesOnShipment}</div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {(inc.packages || []).map((p, i) => (
+                              <span key={`${p.code}-${i}`} className="px-2 py-1 rounded text-xs"
+                                title={p.description}
+                                style={{
+                                  fontFamily: FONT_MONO,
+                                  background: caseHit(p.code) ? colors.amberSoft : colors.surfaceDim,
+                                  border: `1px solid ${caseHit(p.code) ? colors.amber : colors.line}`,
+                                  color: caseHit(p.code) ? colors.amberText : colors.ink,
+                                  fontWeight: caseHit(p.code) ? 600 : 400,
+                                }}>
+                                {p.code}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       {editingCasesFor === inc.id && (
                         <div className="rounded p-3" style={{ background: colors.amberSoft, border: `1px solid ${colors.amber}` }}>
                           <div className="text-xs mb-2" style={{ color: colors.amberText }}>{t.incomingEditCasesHint((inc.packages || []).length)}</div>
@@ -14104,8 +14185,23 @@ export default function FarspeedInventory() {
         ? new Map((linked.packages || []).map((p, i) => [p.code, list[i]]))
         : null;
       const swap = (c) => map.get(c) || (positional && positional.get(c)) || c;
-      const touched = (it) => it.id === source.linkedItemId
-        || (it.packages || []).some((p) => map.has(p.code));
+      // Which entries the rename reaches. It used to be any entry anywhere holding one of
+      // these case numbers - but Mitsubishi numbers repeat from memo to memo (01D5101 sits
+      // under at least four), so correcting 02C02 to 01C02 on one lot quietly renamed a
+      // genuine 02C02 on another memo, another card of the same memo, even another site.
+      // A checked-in shipment's cases, arrivals and deliveries all live on the one entry it
+      // is linked to, so that entry is the whole of it. Only a shipment with no link falls
+      // back to matching by code, and then only on entries for the same client and site
+      // that no other shipment has claimed.
+      const claimed = new Set((incoming || [])
+        .filter((i) => i.id !== source.id && i.linkedItemId)
+        .map((i) => i.linkedItemId));
+      const sameSite = (it) => it.client === source.client
+        && ((source.directoryId && it.directoryId === source.directoryId)
+          || (it.project || "") === (source.project || ""));
+      const touched = (it) => source.linkedItemId
+        ? it.id === source.linkedItemId
+        : (!claimed.has(it.id) && sameSite(it) && (it.packages || []).some((p) => map.has(p.code)));
       persist(items.map((it) => {
         if (!touched(it)) return it;
         return {
