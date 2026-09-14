@@ -885,12 +885,16 @@ function parseMitsubishiPackingList(rows) {
     }
   }
   const codes = [];
+  const caseRows = [];
   // The lift a case belongs to is announced on the same row in parentheses - "(#.09)" -
   // and it is the first part of the marking painted on the box.
+  // A case serving more than one lift is announced "(#.01-02)", and every document in the
+  // chain marks it with both numbers run together - 0102B4201A. Matching only a single
+  // number left those cases with no lift at all, and they fell back to "B42-01A".
   const liftOnRow = (row) => {
     for (const cell of row || []) {
-      const m = String(cell == null ? "" : cell).match(/\(\s*#\s*\.?\s*(\d{1,3})\s*\)/);
-      if (m) return m[1];
+      const m = String(cell == null ? "" : cell).match(/\(\s*#\s*\.?\s*(\d{1,3}(?:\s*-\s*\d{1,3})*)\s*\)/);
+      if (m) return m[1].replace(/[\s-]/g, "");
     }
     return "";
   };
@@ -900,11 +904,22 @@ function parseMitsubishiPackingList(rows) {
       const raw = String((rows[r] || [])[caseCol] == null ? "" : rows[r][caseCol]).trim();
       if (!raw || skip.some((k) => raw.includes(k)) || /case\s*number/i.test(raw)) continue;
       // The case number is split across two columns: a type prefix and a running number.
-      let suffix = "";
+      // Which column holds the number moves between lists from the same factory in the
+      // same month: 1325003000E puts a constant "001" between the two, so taking the first
+      // non-empty cell read every A10 case as "01A10001" - one code where there were five,
+      // and a count that missed 总箱数 and threw the whole listing away for "1/35 ... 35/35".
+      // The case number opens with its own lift ("01-5-1", "01", "01A" under (#.01)), which
+      // the packing-note column never does, so that is what picks it out. Where nothing
+      // matches - a lift that was not announced, an unfamiliar layout - the old first
+      // non-empty cell still applies.
+      const lift = liftOnRow(rows[r]);
+      const nearby = [];
       for (let c = caseCol + 1; c < Math.min(caseCol + 6, (rows[r] || []).length); c++) {
         const v = String(rows[r][c] == null ? "" : rows[r][c]).trim();
-        if (v) { suffix = v; break; }
+        if (v) nearby.push(v);
       }
+      const leadLift = lift ? (lift.match(/\d{2}/g) || []) : [];
+      const suffix = nearby.find((v) => leadLift.some((n) => v.startsWith(n))) || nearby[0] || "";
       if (!suffix) continue;
       // The factory list splits the marking into columns; every other document in the
       // chain - the Delivery Memo, the CFS sheet, the delivery job sheet - writes it whole
@@ -912,9 +927,8 @@ function parseMitsubishiPackingList(rows) {
       // "01A" is 01E2101A. Joining the two columns with a hyphen instead produced "B11-09",
       // a marking that appears on no piece of paper and on no box, so a delivery asking for
       // 01B1101 found nothing at the depot and pre-selected nothing.
-      const lift = liftOnRow(rows[r]);
       const code = lift && PL_MITSUBISHI_CASE_RE.test(raw) ? `${lift}${raw}${suffix}` : `${raw}-${suffix}`;
-      if (!codes.includes(code)) codes.push(code);
+      if (!codes.includes(code)) { codes.push(code); caseRows.push(r); }
     }
   }
   // The stated count is what the factory certifies; where the listing disagrees, take the
@@ -926,6 +940,35 @@ function parseMitsubishiPackingList(rows) {
     const each = Math.round((total / list.length) * 1000) / 1000;
     return String(i === list.length - 1 ? Math.round((total - each * (list.length - 1)) * 1000) / 1000 : each);
   };
+  // Every case states its own gross weight and volume on its announcement row, and they
+  // are wildly uneven - 4kg for a bracket against 1,206kg for a machine case, 90kg against
+  // 640kg on the rails. Splitting the stated total evenly instead priced a part delivery
+  // by how many boxes went out rather than which ones, so three rail bundles billed at
+  // 1,081kg against a truck carrying 1,920kg. The stated figures are used when they are
+  // complete and add up to the totals on the header; anything else falls back to the split.
+  const findCol = (needles) => {
+    for (let r = headerRow; r < Math.min(headerRow + 4, rows.length); r++) {
+      for (let c = 0; c < (rows[r] || []).length; c++) {
+        const cell = String(rows[r][c] == null ? "" : rows[r][c]);
+        if (needles.some((n) => (n instanceof RegExp ? n.test(cell) : cell.includes(n)))) return c;
+      }
+    }
+    return -1;
+  };
+  let stated = null;
+  if (headerRow >= 0 && caseRows.length === list.length) {
+    const grossCol = findCol(["\u6bdb\u91cd", /gross/i]);
+    const cbmCol = findCol(["\u4f53\u79ef", /dimensions/i]);
+    if (grossCol >= 0 && cbmCol >= 0) {
+      const kgs = caseRows.map((r) => plNum((rows[r] || [])[grossCol]));
+      const cbms = caseRows.map((r) => plNum((rows[r] || [])[cbmCol]));
+      const sum = (a) => a.reduce((n, v) => n + v, 0);
+      const close = (a, b) => b > 0 && Math.abs(a - b) <= Math.max(0.05, b * 0.005);
+      if (kgs.every((v) => v > 0) && cbms.every((v) => v > 0) && close(sum(kgs), weight) && close(sum(cbms), cbm)) {
+        stated = { kgs, cbms };
+      }
+    }
+  }
   const description = plCjkLabelledText(rows, ["\u4ea7\u54c1\u540d\u79f0", "product name"]) || "ELEVATOR PARTS";
   // The shipping mark - the leading number of 合同号, "1325003000 ZS1680-260350-OV0" - is
   // the one identifier this factory list shares with the Delivery Memo that follows it, so
@@ -942,7 +985,8 @@ function parseMitsubishiPackingList(rows) {
       totalCbm: cbm,
       packages: list.map((code, i) => ({
         code, orderNo: "", description,
-        weightKg: per(weight, i), cbm: per(cbm, i),
+        weightKg: stated ? String(stated.kgs[i]) : per(weight, i),
+        cbm: stated ? String(stated.cbms[i]) : per(cbm, i),
       })),
     }],
     client: plCjkLabelledText(rows, ["\u987e\u5ba2\u540d\u79f0", "consignee"]),
