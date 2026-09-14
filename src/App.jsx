@@ -1690,6 +1690,7 @@ const TEXT = {
     fConfirmedCollectionHint: "Date we go to terminal",
     fDepotArrival: "Depot Arrival Date",
     fDepotArrivalHint: "Starts the 14-day free storage clock",
+    fDepotArrivalLockedHint: "Earliest arrival batch below \u2014 edit the date in the batch table to change it",
     fPlannedDelivery: "Planned Delivery Date",
     fPlannedDeliveryHint: "Estimate only — record real deliveries via the Deliveries tab",
     deliveryProgress: (del, tot, count) => `${del} of ${tot} unit(s) delivered across ${count} delivery record(s), last on `,
@@ -3581,6 +3582,7 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, onMoveCases, dir
   const [showOlderSites, setShowOlderSites] = useState(false);
   const [form, setForm] = useState(initial || { ...emptyForm(), recordedBy: currentUser || "" });
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const arrivalBatchCount = (form.arrivals || []).length;
   const inputStyle = inputStyleFor(colors);
   // Saving used to fail silently: the button tested these conditions and simply returned,
   // so an entry missing one just would not save and gave no reason for it. Every entry
@@ -3775,10 +3777,21 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, onMoveCases, dir
           <input type="date" className={inputClass} style={inputStyle} value={form.confirmedCollectionDate} onChange={set("confirmedCollectionDate")} />
         </Field>
 
-        <Field label={t.fDepotArrival} hint={t.fDepotArrivalHint} colors={colors}>
-          <input type="date" className={inputClass}
-            style={{ ...inputStyle, ...(form.depotArrivalDate || form.awaitingCollection ? {} : { borderColor: colors.red, background: colors.redSoft }) }}
-            value={form.depotArrivalDate} onChange={set("depotArrivalDate")} />
+        {/* Once an entry carries arrival batches this date is derived from them - adding,
+            removing or re-dating a batch recomputes it. Leaving it typeable meant a date
+            corrected here was silently discarded: the batches kept their own dates, and
+            those are what the site table, the storage clock and the billing rows read. It
+            is shown read-only instead, pointing at the batch table that does own it. */}
+        <Field
+          label={t.fDepotArrival}
+          hint={arrivalBatchCount > 0 ? t.fDepotArrivalLockedHint : t.fDepotArrivalHint}
+          colors={colors}
+        >
+          <input type="date" className={inputClass} readOnly={arrivalBatchCount > 0}
+            style={{ ...inputStyle,
+              ...(arrivalBatchCount > 0 ? { background: colors.surfaceDim, color: colors.inkFaint } : {}),
+              ...(form.depotArrivalDate || form.awaitingCollection ? {} : { borderColor: colors.red, background: colors.redSoft }) }}
+            value={form.depotArrivalDate} onChange={arrivalBatchCount > 0 ? undefined : set("depotArrivalDate")} />
         </Field>
         <Field label={t.fPlannedDelivery} hint={t.fPlannedDeliveryHint} colors={colors}>
           <input type="date" className={inputClass} style={inputStyle} value={form.plannedDeliveryDate} onChange={set("plannedDeliveryDate")} />
@@ -3786,7 +3799,9 @@ function ItemForm({ initial, onSave, onCancel, onPrintJobSheet, onMoveCases, dir
         <div />
         <div />
 
-        {(form.packages || []).length > 0 && (
+        {/* Also shown for an entry that has batches but no itemised cases, otherwise the
+            read-only arrival date above would have nowhere to be corrected. */}
+        {((form.packages || []).length > 0 || arrivalBatchCount > 0) && (
           <ArrivalBatchesEditor form={form} setForm={setForm} colors={colors} t={t} lang={lang} />
         )}
 
