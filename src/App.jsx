@@ -1738,7 +1738,7 @@ const TEXT = {
     fPlannedDelivery: "Planned Delivery Date",
     fPlannedDeliveryHint: "Estimate only — record real deliveries via the Deliveries tab",
     deliveryProgress: (del, tot, count) => `${del} of ${tot} unit(s) delivered across ${count} delivery record(s), last on `,
-    deliveryProgressManage: "Manage deliveries via the Deliveries tab.",
+    deliveryProgressManage: "Open the Deliveries tab to correct one or put its cases back.",
     fNotes: "Notes",
     saveBtn: "Save Entry",
     cancelBtn: "Cancel",
@@ -2065,6 +2065,20 @@ const TEXT = {
     jobLogBackfillBtn: "Restore job numbers",
     jobLogBackfillConfirm: (n, jobs) => `Restore job numbers on ${n} check-in${n === 1 ? "" : "s"}, covering ${jobs} job${jobs === 1 ? "" : "s"}?\n\nOnly the job number is written. No case, count, date or delivery is touched.`,
     navJobLog: "Job Log",
+    deliveriesTitle: "Deliveries",
+    deliveriesDesc: "Every delivery recorded against the depot, newest first. Grouped by job number, so one sheet that took cases off several lots reads as one delivery. Open one to correct it, or to put its cases back.",
+    deliveriesSearchPh: "Job no., client, site, lot, entry, case\u2026",
+    deliveriesShowCancelled: (n) => `Show reversed (${n})`,
+    deliveriesNone: "No deliveries recorded yet.",
+    deliveriesNoMatch: "Nothing matches that. Try a job number, a lot like 60768711/T3-3, or a single case.",
+    deliveriesColLots: "Entries",
+    deliveriesLotCount: (n) => (n === 1 ? "1 entry" : `${n} entries`),
+    deliveriesNoJobNo: "(no job no.)",
+    deliveriesCancelledTag: "REVERSED",
+    deliveriesPartCancelledTag: "PARTLY REVERSED",
+    deliveriesPkgsOnly: (n) => `${n} pkgs (no case numbers)`,
+    deliveriesReverseBtn: "Reverse",
+    deliveriesFootnote: "Reversing a delivery puts its cases back in the depot and keeps the record, so the job number stays reserved and the history still shows what happened. Permanently deleting one is only offered after it has been reversed.",
     navBilling: "Billing",
     navUpload: "Upload",
     navIncoming: "Incoming",
@@ -2628,7 +2642,7 @@ const TEXT = {
     fPlannedDelivery: "預計送貨日期",
     fPlannedDeliveryHint: "僅供預算之用 — 實際送貨請於「送貨記錄」分頁記錄",
     deliveryProgress: (del, tot, count) => `已送出 ${tot} 件中之 ${del} 件，共 ${count} 次送貨記錄，最近一次為 `,
-    deliveryProgressManage: "請於「送貨記錄」分頁管理送貨情況。",
+    deliveryProgressManage: "可於「送貨記錄」分頁修改或退回貨件。",
     fNotes: "備註",
     saveBtn: "儲存記錄",
     cancelBtn: "取消",
@@ -2953,6 +2967,20 @@ const TEXT = {
     jobLogBackfillBtn: "復原工單號",
     jobLogBackfillConfirm: (n, jobs) => `確認為 ${n} 筆到倉記錄（共 ${jobs} 個工單）復原工單號？\n\n僅寫入工單號，不會更動任何件號、件數、日期或送貨記錄。`,
     navJobLog: "單號記錄",
+    deliveriesTitle: "送貨記錄",
+    deliveriesDesc: "所有已記錄之送貨，最新在前。按快達單號分組，同一張工單取出多個批次之貨件仍作一次送貨顯示。點選可修改，或將貨件退回倉庫。",
+    deliveriesSearchPh: "快達單號、客戶、地盤、批次、箱號…",
+    deliveriesShowCancelled: (n) => `顯示已退回 (${n})`,
+    deliveriesNone: "尚未有送貨記錄。",
+    deliveriesNoMatch: "找不到相符記錄。可試快達單號、批次（如 60768711/T3-3）或單一箱號。",
+    deliveriesColLots: "存倉記錄",
+    deliveriesLotCount: (n) => `${n} 個記錄`,
+    deliveriesNoJobNo: "（無單號）",
+    deliveriesCancelledTag: "已退回",
+    deliveriesPartCancelledTag: "部分退回",
+    deliveriesPkgsOnly: (n) => `${n} 件（無箱號）`,
+    deliveriesReverseBtn: "退回",
+    deliveriesFootnote: "退回送貨會將貨件退回倉庫，並保留記錄，以免單號被重用，歷史亦保持完整。需先退回，才可永久刪除。",
     navBilling: "帳單",
     navUpload: "上載",
     navIncoming: "待到倉",
@@ -4282,6 +4310,202 @@ function DeliveryRecordEditor({ delivery, item, onPatch, onDone, colors, t }) {
     </div>
   );
 }
+// Every delivery ever recorded, in one place. Until now a delivery could only be reached
+// through the entry it came off: Inventory, find the entry, Deliver, and read its history.
+// That works when you know which entry holds it, and is no use at all when the question is
+// "what did job 2607117 take out", which is how a delivery is actually looked up. A job can
+// also span several entries - one sheet, six lots - and those rows only ever appeared apart.
+// Here they are grouped by job number, so a delivery reads the way its sheet reads.
+function DeliveriesPanel({ items, onUpdateDelivery, onCancelDelivery, onRestoreDelivery, onPurgeDelivery, onPrintJobSheet, colors, t, lang }) {
+  const [q, setQ] = useState("");
+  const [showCancelled, setShowCancelled] = useState(false);
+  const [openKey, setOpenKey] = useState(null);
+  const [editing, setEditing] = useState(null);
+
+  const rows = useMemo(() => {
+    const out = [];
+    (items || []).forEach((it) => {
+      (it.deliveries || []).forEach((d) => {
+        out.push({ item: it, delivery: d, totals: deliveryTotalsFor(it, d) });
+      });
+    });
+    return out;
+  }, [items]);
+
+  // A job number is the natural key - one delivery sheet, however many entries it touched.
+  // Records with no job number cannot be grouped with anything, so each stands alone.
+  const groups = useMemo(() => {
+    const byKey = new Map();
+    rows.forEach((r) => {
+      const jn = String(r.delivery.jobNumber || "").trim();
+      const key = jn ? `J:${jn}` : `D:${r.delivery.id}`;
+      if (!byKey.has(key)) byKey.set(key, { key, jobNumber: jn, rows: [] });
+      byKey.get(key).rows.push(r);
+    });
+    const list = [...byKey.values()].map((g) => {
+      const dates = g.rows.map((r) => r.delivery.date).filter(Boolean).sort();
+      const live = g.rows.filter((r) => !r.delivery.cancelled);
+      const num = (v) => { const n = Number(String(v).replace("~", "")); return Number.isFinite(n) ? n : 0; };
+      return {
+        ...g,
+        date: dates[0] || "",
+        cancelled: g.rows.every((r) => r.delivery.cancelled),
+        partlyCancelled: g.rows.some((r) => r.delivery.cancelled) && live.length > 0,
+        clients: [...new Set(g.rows.map((r) => r.item.client).filter(Boolean))],
+        sites: [...new Set(g.rows.map((r) => r.item.project).filter(Boolean))],
+        pkgs: live.reduce((s, r) => s + r.totals.pkgs, 0),
+        kgs: live.reduce((s, r) => s + num(r.totals.kgs), 0),
+        cbm: live.reduce((s, r) => s + num(r.totals.cbm), 0),
+        estimated: live.some((r) => r.totals.estimated),
+      };
+    });
+    return list.sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.jobNumber.localeCompare(a.jobNumber));
+  }, [rows]);
+
+  const shown = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return groups.filter((g) => {
+      if (g.cancelled && !showCancelled) return false;
+      if (!needle) return true;
+      const hay = [
+        g.jobNumber, g.date, ...g.clients, ...g.sites,
+        ...g.rows.map((r) => r.item.id),
+        ...g.rows.map((r) => r.item.unitCode || ""),
+        ...g.rows.map((r) => r.item.reference || ""),
+        ...g.rows.map((r) => r.delivery.deliveredTo || ""),
+        ...g.rows.map((r) => r.delivery.receivedBy || ""),
+        ...g.rows.flatMap((r) => r.delivery.codes || []),
+      ].join(" ").toLowerCase();
+      return hay.includes(needle);
+    });
+  }, [groups, q, showCancelled]);
+
+  const cancelledCount = groups.filter((g) => g.cancelled).length;
+  const th = { color: colors.inkFaint, fontFamily: FONT_DISPLAY };
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-end justify-between gap-3 mb-4">
+        <div>
+          <h2 className="text-2xl font-bold" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.deliveriesTitle}</h2>
+          <p className="text-sm mt-1" style={{ color: colors.inkFaint }}>{t.deliveriesDesc}</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <input
+            className={inputClass} style={{ ...inputStyleFor(colors), width: 280 }}
+            placeholder={t.deliveriesSearchPh} value={q} onChange={(e) => setQ(e.target.value)}
+          />
+          {cancelledCount > 0 && (
+            <label className="flex items-center gap-1.5 text-xs whitespace-nowrap" style={{ color: colors.inkFaint }}>
+              <input type="checkbox" checked={showCancelled} onChange={(e) => setShowCancelled(e.target.checked)} />
+              {t.deliveriesShowCancelled(cancelledCount)}
+            </label>
+          )}
+        </div>
+      </div>
+
+      {shown.length === 0 ? (
+        <div className="rounded-lg p-8 text-center text-sm" style={{ background: colors.surface, border: `1px solid ${colors.line}`, color: colors.inkFaint }}>
+          {q.trim() ? t.deliveriesNoMatch : t.deliveriesNone}
+        </div>
+      ) : (
+        <div className="rounded-lg overflow-hidden" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ background: colors.surfaceDim }}>
+                {[t.colJobNo, t.colDate, t.colClient, t.colSite, t.deliveriesColLots, t.colQty, t.jsKgs, t.jsCbm, ""].map((h, n) => (
+                  <th key={n} className="text-left px-3 py-2 text-xs font-semibold" style={th}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((g) => {
+                const open = openKey === g.key;
+                return (
+                  <React.Fragment key={g.key}>
+                    <tr
+                      style={{ borderTop: `1px solid ${colors.surfaceDim}`, cursor: "pointer", opacity: g.cancelled ? 0.55 : 1 }}
+                      onClick={() => { setOpenKey(open ? null : g.key); setEditing(null); }}
+                    >
+                      <td className="px-3 py-2 font-semibold" style={{ fontFamily: FONT_MONO, color: colors.ink }}>
+                        {g.jobNumber || t.deliveriesNoJobNo}
+                        {g.cancelled && <span className="ml-2 text-xs font-semibold" style={{ color: colors.red }}>{t.deliveriesCancelledTag}</span>}
+                        {g.partlyCancelled && <span className="ml-2 text-xs font-semibold" style={{ color: colors.amberText }}>{t.deliveriesPartCancelledTag}</span>}
+                      </td>
+                      <td className="px-3 py-2" style={{ color: colors.ink }}>{fmt(g.date)}</td>
+                      <td className="px-3 py-2" style={{ color: colors.ink }}>{g.clients.join(", ") || "—"}</td>
+                      <td className="px-3 py-2" style={{ color: colors.ink }}>{g.sites.join(", ") || "—"}</td>
+                      <td className="px-3 py-2" style={{ color: colors.inkFaint }}>{t.deliveriesLotCount(g.rows.length)}</td>
+                      <td className="px-3 py-2" style={{ color: colors.ink }}>{g.pkgs}</td>
+                      <td className="px-3 py-2" style={{ color: colors.ink }}>{g.estimated ? "~" : ""}{Math.round(g.kgs * 10) / 10}</td>
+                      <td className="px-3 py-2" style={{ color: colors.ink }}>{g.estimated ? "~" : ""}{Math.round(g.cbm * 1000) / 1000}</td>
+                      <td className="px-3 py-2 text-right text-xs font-semibold" style={{ color: colors.amberText }}>{open ? "▲" : "▼"}</td>
+                    </tr>
+
+                    {open && g.rows.map((r) => {
+                      const d = r.delivery, it = r.item;
+                      const isEditing = editing === d.id;
+                      return (
+                        <React.Fragment key={d.id}>
+                          <tr style={{ background: colors.surfaceDim, borderTop: `1px solid ${colors.line}` }}>
+                            <td className="px-3 py-2" style={{ fontFamily: FONT_MONO, fontSize: 12, color: colors.ink }}>{it.id}</td>
+                            <td className="px-3 py-2" style={{ fontSize: 12, color: colors.ink }}>{fmt(d.date)}</td>
+                            <td colSpan={2} className="px-3 py-2" style={{ fontSize: 12, color: colors.ink }}>
+                              <div style={{ fontFamily: FONT_MONO }}>{it.reference || it.unitCode || "—"}</div>
+                              <div style={{ color: colors.inkFaint }}>{d.deliveredTo || "—"}{d.receivedBy ? ` · ${d.receivedBy}` : ""}</div>
+                            </td>
+                            <td colSpan={2} className="px-3 py-2" style={{ fontSize: 12, color: colors.inkFaint, wordBreak: "break-word" }}>
+                              {d.codes && d.codes.length ? d.codes.join(", ") : t.deliveriesPkgsOnly(r.totals.pkgs)}
+                            </td>
+                            <td className="px-3 py-2" style={{ fontSize: 12, color: colors.ink }}>{r.totals.kgs || "—"}</td>
+                            <td className="px-3 py-2" style={{ fontSize: 12, color: colors.ink }}>{r.totals.cbm || "—"}</td>
+                            <td className="px-3 py-2 text-right whitespace-nowrap">
+                              <button className="text-xs font-semibold mr-2" style={{ color: colors.amberText }}
+                                onClick={(e) => { e.stopPropagation(); onPrintJobSheet({ type: "Delivery", item: it, delivery: d }); }}>{t.printBtn}</button>
+                              {!d.cancelled && (
+                                <button className="text-xs font-semibold mr-2" style={{ color: colors.amberText }}
+                                  onClick={(e) => { e.stopPropagation(); setEditing(isEditing ? null : d.id); }}>{t.editBtn}</button>
+                              )}
+                              {d.cancelled ? (
+                                <>
+                                  <button className="text-xs font-semibold mr-2" style={{ color: colors.amberText }}
+                                    onClick={(e) => { e.stopPropagation(); onRestoreDelivery(it.id, d.id); }}>{t.restoreBtn}</button>
+                                  <button className="text-xs font-semibold" style={{ color: colors.red }}
+                                    onClick={(e) => { e.stopPropagation(); onPurgeDelivery(it.id, d.id); }}>{t.purgeBtn}</button>
+                                </>
+                              ) : (
+                                <button className="text-xs font-semibold" style={{ color: colors.red }}
+                                  onClick={(e) => { e.stopPropagation(); onCancelDelivery(d.id, it.id); }}>{t.deliveriesReverseBtn}</button>
+                              )}
+                            </td>
+                          </tr>
+                          {isEditing && (
+                            <tr style={{ background: colors.surfaceDim }}>
+                              <td colSpan={9} className="px-3 py-3">
+                                <DeliveryRecordEditor
+                                  delivery={d} item={it}
+                                  onPatch={(patch) => onUpdateDelivery(d.id, it.id, patch)}
+                                  onDone={() => setEditing(null)}
+                                  colors={colors} t={t}
+                                />
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="text-xs mt-3" style={{ color: colors.inkFaint }}>{t.deliveriesFootnote}</p>
+    </div>
+  );
+}
+
 function DeliveryForm({ deliveryItems, onAddDelivery, onAddCombinedDelivery, onDeleteDelivery, onUpdateDelivery, onCancel, onPrintJobSheet, employees, currentUser, items, colors, t, lang }) {
   const firstItem = deliveryItems[0];
   const [extraItemIds, setExtraItemIds] = useState([]);
@@ -15716,6 +15940,7 @@ export default function FarspeedInventory() {
             {[
               ["upload", t.navUpload],
               ["incoming", t.navIncoming],
+              ["deliveries", t.navDeliveries],
               ["billing", t.navBilling],
               ["directory", t.navDirectory],
               ["joblog", t.navJobLog],
@@ -15826,6 +16051,7 @@ export default function FarspeedInventory() {
             ["add", t.navNewEntry],
             ["upload", t.navUpload],
             ["incoming", t.navIncoming],
+            ["deliveries", t.navDeliveries],
             ["billing", t.navBilling],
             ["directory", t.navDirectory],
             ["joblog", t.navJobLog],
@@ -15996,7 +16222,7 @@ export default function FarspeedInventory() {
                 className="px-4 py-2 rounded text-sm font-semibold"
                 style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}
               >
-                {t.navDeliveries} &rarr;
+                {t.recordDeliveryBtn} &rarr;
               </button>
             </div>
             <div className="rounded-lg overflow-x-auto" style={{ border: `1px solid ${colors.line}` }}>
@@ -17046,6 +17272,18 @@ export default function FarspeedInventory() {
             onLegacyImport={handleLegacyImport}
             onLegacyCheckIn={handleCheckIn} onLegacyCheckInBatch={handleCheckInBatch}
             onLegacyDeliver={handleAddCombinedDelivery} onLegacyEnrich={handleLegacyEnrich} onLegacyReverse={handleLegacyReverse}
+            colors={colors} t={t} lang={lang}
+          />
+        )}
+
+        {view === "deliveries" && (
+          <DeliveriesPanel
+            items={items}
+            onUpdateDelivery={handleUpdateDelivery}
+            onCancelDelivery={handleDeleteDelivery}
+            onRestoreDelivery={handleRestoreDelivery}
+            onPurgeDelivery={handlePermanentlyDeleteDelivery}
+            onPrintJobSheet={setPrintJobSheet}
             colors={colors} t={t} lang={lang}
           />
         )}
