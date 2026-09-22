@@ -2065,6 +2065,28 @@ const TEXT = {
     jobLogBackfillBtn: "Restore job numbers",
     jobLogBackfillConfirm: (n, jobs) => `Restore job numbers on ${n} check-in${n === 1 ? "" : "s"}, covering ${jobs} job${jobs === 1 ? "" : "s"}?\n\nOnly the job number is written. No case, count, date or delivery is touched.`,
     navJobLog: "Job Log",
+    uploadModeBatch: "Job Sheets (Excel)",
+    batchTitle: "Apply a checked job-sheet workbook",
+    batchDesc: "One spreadsheet holding every arrival and every delivery, applied in one go. Correct the sheets' mistakes in the file first - a lot written as 37 cases when it holds 36, a lift spelled T3-L1 instead of T3-1 - and they are corrected once rather than twenty times. Arrivals go in before deliveries. Nothing is written until you have read the preview.",
+    batchChooseBtn: "Choose workbook",
+    batchNoStructure: "No job-sheet table found. Each sheet needs a header row with Job No., Lot and Cases; a Delivery sheet is recognised by a \"Refers to arrival job\" column or by having \"Delivery\" in its tab name.",
+    batchArrivals: "Arrivals (Devan / CFS)",
+    batchDeliveries: "Deliveries",
+    batchRowSummary: (n, w, m) => `${n} row${n === 1 ? "" : "s"}` + (w ? `, ${w} to check` : "") + (m ? `, ${m} that cannot be matched` : ""),
+    batchColSheet: "Sheet",
+    batchColLot: "Lot",
+    batchColGoesTo: "Goes to",
+    batchColNote: "Note",
+    batchNoLot: "no lot with this sales order - import the packing list first",
+    batchNoEntry: "no depot entry for this lot yet - its arrival must go in first",
+    batchCasesNotInLot: (c) => `case(s) not in the lot: ${c}`,
+    batchAlreadyIn: (n) => `${n} case${n === 1 ? " is" : "s are"} already checked in - it will not go in twice`,
+    batchAlreadyOut: (c) => `already delivered: ${c}`,
+    batchNoDate: "no date read from this row",
+    batchDeclaredSource: (s) => `From ${s}`,
+    batchApplyBtn: (a, d) => `Apply ${a} arrival${a === 1 ? "" : "s"} and ${d} deliver${d === 1 ? "y" : "ies"}`,
+    batchApplyNote: "Rows shaded red are skipped. Rows shaded amber are applied - the note says what to look at afterwards.",
+    batchApplied: (a, d) => `Done: ${a} arrival${a === 1 ? "" : "s"} and ${d} deliver${d === 1 ? "y" : "ies"} recorded.`,
     deliveriesTitle: "Deliveries",
     deliveriesDesc: "Every delivery recorded against the depot, newest first. Grouped by job number, so one sheet that took cases off several lots reads as one delivery. Open one to correct it, or to put its cases back.",
     deliveriesSearchPh: "Job no., client, site, lot, entry, case\u2026",
@@ -2974,6 +2996,28 @@ const TEXT = {
     jobLogBackfillBtn: "復原工單號",
     jobLogBackfillConfirm: (n, jobs) => `確認為 ${n} 筆到倉記錄（共 ${jobs} 個工單）復原工單號？\n\n僅寫入工單號，不會更動任何件號、件數、日期或送貨記錄。`,
     navJobLog: "單號記錄",
+    uploadModeBatch: "\u5de5\u55ae\u6279\u91cf (Excel)",
+    batchTitle: "\u4e0a\u8f09\u5df2\u6838\u5c0d\u4e4b\u5de5\u55ae\u8868",
+    batchDesc: "\u4e00\u4efd\u8868\u683c\u5305\u542b\u6240\u6709\u5230\u5009\u53ca\u9001\u8ca8\u8a18\u9304\uff0c\u4e00\u6b21\u904e\u5e33\u3002\u8acb\u5148\u65bc\u6a94\u6848\u5167\u66f4\u6b63\u5de5\u55ae\u4e4b\u932f\u8aa4\uff08\u5982\u6279\u6b21\u5be6\u70ba 36 \u4ef6\u537b\u5beb\u4f5c 37\uff0c\u6216\u68af\u865f\u8aa4\u5beb\uff09\uff0c\u53ea\u9700\u6539\u4e00\u6b21\u3002\u5148\u8655\u7406\u5230\u5009\uff0c\u5f8c\u8655\u7406\u9001\u8ca8\u3002\u9810\u89bd\u78ba\u8a8d\u524d\u4e0d\u6703\u5beb\u5165\u4efb\u4f55\u8cc7\u6599\u3002",
+    batchChooseBtn: "\u9078\u64c7\u6a94\u6848",
+    batchNoStructure: "\u627e\u4e0d\u5230\u5de5\u55ae\u8868\u683c\u3002\u6bcf\u9801\u9700\u6709\u6a19\u984c\u5217\uff08\u5feb\u9054\u55ae\u865f\u3001\u6279\u6b21\u3001\u7bb1\u865f\uff09\uff1b\u9001\u8ca8\u9801\u9700\u6709\u300cRefers to arrival job\u300d\u6b04\u4f4d\u6216\u9801\u540d\u542b\u300cDelivery\u300d\u3002",
+    batchArrivals: "\u5230\u5009\uff08\u62c6\u6ac3\uff0fCFS\uff09",
+    batchDeliveries: "\u9001\u8ca8",
+    batchRowSummary: (n, w, m) => `${n} \u884c` + (w ? `\uff0c${w} \u884c\u9700\u6838\u5c0d` : "") + (m ? `\uff0c${m} \u884c\u7121\u6cd5\u914d\u5c0d` : ""),
+    batchColSheet: "\u5de5\u55ae",
+    batchColLot: "\u6279\u6b21",
+    batchColGoesTo: "\u5c0d\u61c9\u8a18\u9304",
+    batchColNote: "\u5099\u8a3b",
+    batchNoLot: "\u627e\u4e0d\u5230\u6b64\u8a02\u55ae\u865f\u4e4b\u6279\u6b21 \u2014 \u8acb\u5148\u4e0a\u8f09\u88dd\u7bb1\u55ae",
+    batchNoEntry: "\u5c1a\u7121\u6b64\u6279\u6b21\u4e4b\u5b58\u5009\u8a18\u9304 \u2014 \u9700\u5148\u8655\u7406\u5230\u5009",
+    batchCasesNotInLot: (c) => `\u6279\u6b21\u5167\u6c92\u6709\u9019\u4e9b\u7bb1\u865f\uff1a${c}`,
+    batchAlreadyIn: (n) => `\u5176\u4e2d ${n} \u4ef6\u5df2\u5230\u5009\uff0c\u4e0d\u6703\u91cd\u8907\u8a08\u5165`,
+    batchAlreadyOut: (c) => `\u5df2\u9001\u51fa\uff1a${c}`,
+    batchNoDate: "\u6b64\u884c\u8b80\u4e0d\u5230\u65e5\u671f",
+    batchDeclaredSource: (s) => `\u4f86\u81ea ${s}`,
+    batchApplyBtn: (a, d) => `\u904e\u5e33 ${a} \u7b46\u5230\u5009\u53ca ${d} \u7b46\u9001\u8ca8`,
+    batchApplyNote: "\u7d05\u5e95\u4e4b\u884c\u6703\u8df3\u904e\uff1b\u9ec3\u5e95\u4e4b\u884c\u4ecd\u6703\u904e\u5e33\uff0c\u5099\u8a3b\u8aaa\u660e\u9700\u6ce8\u610f\u4e4b\u8655\u3002",
+    batchApplied: (a, d) => `\u5df2\u5b8c\u6210\uff1a${a} \u7b46\u5230\u5009\u3001${d} \u7b46\u9001\u8ca8\u3002`,
     deliveriesTitle: "送貨記錄",
     deliveriesDesc: "所有已記錄之送貨，最新在前。按快達單號分組，同一張工單取出多個批次之貨件仍作一次送貨顯示。點選可修改，或將貨件退回倉庫。",
     deliveriesSearchPh: "快達單號、客戶、地盤、批次、箱號…",
@@ -12782,6 +12826,287 @@ function exportToExcel(items) {
   XLSX.writeFile(wb, `farspeed-depot-export-${todayStr()}.xlsx`);
 }
 
+// One workbook, every arrival and every delivery, applied in two writes. Twenty job sheets
+// uploaded one at a time is twenty chances to tick the wrong box, and the sheets themselves
+// carry mistakes - a lot written as 36 cases on one and 37 on another - which have to be
+// corrected the same way every time. A checked spreadsheet can be corrected once, read back,
+// and applied as a whole, which is also the only way the result can be diffed against what
+// was intended.
+const BATCH_ARR = ["sheet","job no.","date","reference","lot","cases","pkgs","kgs","cbm"];
+const BATCH_DLV = ["sheet","job no.","date","reference","lot","cases","pkgs","kgs","cbm"];
+function batchColumns(headerRow) {
+  const seen = {};
+  (headerRow || []).forEach((h, i) => {
+    const k = String(h == null ? "" : h).toLowerCase().replace(/\s+/g, " ").trim();
+    if (!k) return;
+    if (k.startsWith("sheet")) seen.sheet = i;
+    else if (k.startsWith("job no")) seen.job = i;
+    else if (k === "date") seen.date = i;
+    else if (k.startsWith("refers to")) seen.refers = i;
+    else if (k.startsWith("reference")) seen.ref = i;
+    else if (k === "lot") seen.lot = i;
+    else if (k.startsWith("cases")) seen.cases = i;
+    else if (k === "pkgs") seen.pkgs = i;
+    else if (k === "kgs") seen.kg = i;
+    else if (k === "cbm") seen.cbm = i;
+    else if (k.startsWith("packing list kgs")) seen.plkg = i;
+    else if (k.startsWith("packing list cbm")) seen.plcbm = i;
+    else if (k.startsWith("arriving type") || k === "type") seen.type = i;
+    else if (k === "depot") seen.depot = i;
+  });
+  return (seen.lot !== undefined && seen.cases !== undefined && seen.job !== undefined) ? seen : null;
+}
+// "24-26, 34-36/36" -> ["24/36","25/36","26/36","34/36","35/36","36/36"].
+// An escalator names its cases 501, 502, 503 and 001-004 instead, so those stay as written.
+function batchCaseCodes(spec) {
+  const txt = String(spec == null ? "" : spec).trim();
+  if (!txt || txt === "—") return [];
+  if (/^\s*(50[123]|00[1-4])/.test(txt)) {
+    const out = [];
+    txt.split(/[,、]/).forEach((part) => {
+      const p = part.trim().replace(/\s+/g, "");
+      if (/^00[1-4]-00[1-4]$/.test(p)) {
+        const a = Number(p.slice(0, 3)), b = Number(p.slice(4));
+        for (let n = a; n <= b; n++) out.push(String(n).padStart(3, "0"));
+      } else if (/^\d{3}$/.test(p)) out.push(p);
+    });
+    return out;
+  }
+  const den = (txt.match(/\/\s*(\d+)/g) || []).pop();
+  const total = den ? den.replace(/[^\d]/g, "") : "";
+  const out = [];
+  txt.split("/")[0].split(/[,、]/).forEach((part) => {
+    const p = part.trim();
+    const m = /^(\d+)\s*-\s*(\d+)$/.exec(p);
+    if (m) { for (let n = Number(m[1]); n <= Number(m[2]); n++) out.push(total ? `${n}/${total}` : String(n)); }
+    else if (/^\d+$/.test(p)) out.push(total ? `${p}/${total}` : p);
+  });
+  return out;
+}
+function readBatchWorkbook(wb) {
+  const arrivals = [], deliveries = [];
+  (wb.SheetNames || []).forEach((name) => {
+    const grid = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: "", raw: false });
+    const hi = grid.findIndex((r) => batchColumns(r));
+    if (hi === -1) return;
+    const col = batchColumns(grid[hi]);
+    const isDelivery = col.refers !== undefined || /deliver/i.test(name);
+    const get = (r, k) => (col[k] === undefined ? "" : String((r || [])[col[k]] == null ? "" : (r || [])[col[k]]).trim());
+    let carried = { sheet: "", job: "", date: "", ref: "" };
+    for (let i = hi + 1; i < grid.length; i++) {
+      const r = grid[i] || [];
+      if (r.every((c) => String(c == null ? "" : c).trim() === "")) continue;
+      // The checklist writes the sheet, job number and date once per block and leaves the
+      // rest of that block's rows blank, exactly as it reads on paper.
+      if (get(r, "sheet")) carried.sheet = get(r, "sheet");
+      if (get(r, "job")) carried.job = get(r, "job");
+      if (get(r, "date")) carried.date = get(r, "date");
+      if (get(r, "ref")) carried.ref = get(r, "ref");
+      const lot = get(r, "lot");
+      if (!lot || /TOTAL$/i.test(lot) || /TOTAL$/i.test(get(r, "ref"))) continue;
+      const codes = batchCaseCodes(get(r, "cases"));
+      if (!codes.length) continue;
+      const row = {
+        rowNo: i + 1, sheetName: carried.sheet, jobNumber: carried.job,
+        date: normalizeBatchDate(carried.date), reference: carried.ref, lot, codes,
+        kg: get(r, "kg") || get(r, "plkg"), cbm: get(r, "cbm") || get(r, "plcbm"),
+        type: get(r, "type") || (/devan/i.test(carried.sheet) ? "Devan" : "CFS"),
+        depot: get(r, "depot") || "Depot 1",
+      };
+      (isDelivery ? deliveries : arrivals).push(row);
+    }
+  });
+  return (arrivals.length || deliveries.length) ? { arrivals, deliveries } : null;
+}
+// Dates are written the way the job sheets write them - 08/04/2026 - not the way a
+// spreadsheet stores them, and a silent misread here dates every arrival wrongly.
+function normalizeBatchDate(v) {
+  const s = String(v == null ? "" : v).trim();
+  if (!s) return "";
+  const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  // The job sheets do not write clean dates. A devan that ran over three days is dated
+  // "12-14/5/2026", and a half-finished one "9-/6/2026". The year is the four-digit number
+  // at the end, the month is what sits just before it, and the day is the first number -
+  // the first day of a range, which is when the goods started landing.
+  const nums = (s.match(/\d+/g) || []);
+  if (nums.length < 3) return "";
+  const year = nums[nums.length - 1];
+  if (year.length !== 4) return "";
+  const month = Number(nums[nums.length - 2]);
+  const day = Number(nums[0]);
+  if (!(month >= 1 && month <= 12) || !(day >= 1 && day <= 31)) return "";
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+const batchNorm = (v) => String(v || "").toUpperCase().replace(/[\s_\-]/g, "");
+// A lot is found by its sales order, which is the one part of the name nobody rewrites.
+// The lift code after it is spelled four different ways across the sheets - T3-1, T3_1,
+// T3L1, T3-L1 - so it is compared with the separators taken out, and only as a tie-break.
+function findBatchTarget(lot, pool) {
+  const so = String(lot).split("/")[0].trim();
+  const lift = batchNorm(String(lot).split("/")[1] || "");
+  const hits = (pool || []).filter((x) => String(x.unitCode || "").includes(so));
+  if (hits.length <= 1) return hits[0] || null;
+  const byLift = hits.filter((x) => batchNorm(x.unitCode).includes(lift));
+  return byLift[0] || hits[0];
+}
+
+function JobSheetBatchPanel({ items, incoming, onCheckInBatch, onDeliverBatch, colors, t, lang }) {
+  const [plan, setPlan] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState("");
+  const inputRef = useRef(null);
+
+  function build(parsed) {
+    const arrivals = parsed.arrivals.map((r) => {
+      const inc = findBatchTarget(r.lot, incoming);
+      const item = findBatchTarget(r.lot, items);
+      let status = "ok", detail = "";
+      if (!inc && !item) { status = "missing"; detail = t.batchNoLot; }
+      else {
+        const known = new Set(((inc || item).packages || []).map((p) => String(p.code).trim()));
+        const unknown = r.codes.filter((c) => !known.has(c));
+        const already = new Set(inc ? (inc.checkedInCodes || []) : []);
+        const dup = r.codes.filter((c) => already.has(c));
+        if (unknown.length) { status = "warn"; detail = t.batchCasesNotInLot(unknown.join(", ")); }
+        else if (dup.length) { status = "warn"; detail = t.batchAlreadyIn(dup.length); }
+      }
+      if (!r.date) { status = status === "ok" ? "warn" : status; detail = detail || t.batchNoDate; }
+      return { ...r, inc, item, status, detail };
+    });
+    const deliveries = parsed.deliveries.map((r) => {
+      const item = findBatchTarget(r.lot, items);
+      let status = "ok", detail = "";
+      if (!item) { status = "missing"; detail = t.batchNoEntry; }
+      else {
+        const known = new Set((item.packages || []).map((p) => String(p.code).trim()));
+        const unknown = r.codes.filter((c) => !known.has(c));
+        const gone = new Set(deliveredCodes(item));
+        const twice = r.codes.filter((c) => gone.has(c));
+        if (unknown.length) { status = "warn"; detail = t.batchCasesNotInLot(unknown.join(", ")); }
+        else if (twice.length) { status = "warn"; detail = t.batchAlreadyOut(twice.join(", ")); }
+      }
+      return { ...r, item, status, detail };
+    });
+    return { arrivals, deliveries };
+  }
+
+  async function onFile(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    setErr(""); setDone(""); setPlan(null);
+    try {
+      const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const parsed = readBatchWorkbook(wb);
+      if (!parsed) { setErr(t.batchNoStructure); return; }
+      setPlan({ file: file.name, ...build(parsed) });
+    } catch (ex) { setErr(t.batchNoStructure); }
+  }
+
+  // Arrivals first, then deliveries, because a delivery can only take cases off an entry
+  // that exists. Each half is one write, so a run cannot end up half applied.
+  async function apply() {
+    if (!plan || busy) return;
+    setBusy(true);
+    try {
+      const arrOps = plan.arrivals.filter((r) => r.status !== "missing" && r.inc).map((r) => ({
+        incomingId: r.inc.id, codes: r.codes, type: r.type, depot: r.depot,
+        jobNumber: r.jobNumber, date: r.date, ssDoNo: "",
+        declared: (r.kg || r.cbm) ? { kg: r.kg, cbm: r.cbm, split: false } : null,
+        declaredSource: t.batchDeclaredSource(r.sheetName || plan.file),
+      }));
+      if (arrOps.length) onCheckInBatch(arrOps);
+      // The entries the arrivals just created are not on this render yet, so deliveries are
+      // grouped now and applied against the list as it stands after the check-in.
+      const byJob = new Map();
+      plan.deliveries.filter((r) => r.status !== "missing" && r.item).forEach((r) => {
+        const key = r.jobNumber || `row${r.rowNo}`;
+        if (!byJob.has(key)) byJob.set(key, []);
+        byJob.get(key).push(r);
+      });
+      const entries = [];
+      byJob.forEach((rows) => rows.forEach((r) => entries.push({
+        itemId: r.item.id,
+        delivery: {
+          date: r.date, codes: r.codes, jobNumber: r.jobNumber,
+          deliveredTo: r.item.constructionSite || r.item.project || "",
+          receivedBy: "", notes: t.batchDeclaredSource(r.sheetName || plan.file),
+          declared: (r.kg || r.cbm) ? { kg: r.kg, cbm: r.cbm, split: false } : null,
+        },
+      })));
+      if (entries.length) onDeliverBatch(entries);
+      setDone(t.batchApplied(arrOps.length, entries.length));
+      setPlan(null);
+    } finally { setBusy(false); }
+  }
+
+  const count = (list, s) => list.filter((r) => r.status === s).length;
+  const section = (title, rows, isDlv) => (
+    <div className="mb-4">
+      <div className="text-sm font-bold mb-2" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>
+        {title} — {t.batchRowSummary(rows.length, count(rows, "warn"), count(rows, "missing"))}
+      </div>
+      <div className="rounded overflow-hidden" style={{ border: `1px solid ${colors.line}` }}>
+        <table className="w-full text-xs" style={{ background: colors.surface }}>
+          <thead><tr style={{ background: colors.surfaceDim }}>
+            {[t.batchColSheet, t.colJobNo, t.colDate, t.batchColLot, t.batchColGoesTo, t.colQty, t.batchColNote].map((h, i) => (
+              <th key={i} className="text-left px-2 py-1.5 font-semibold" style={{ color: colors.inkFaint }}>{h}</th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} style={{ borderTop: `1px solid ${colors.surfaceDim}`,
+                background: r.status === "missing" ? "#FDE8E8" : r.status === "warn" ? "#FFF2CC" : "transparent" }}>
+                <td className="px-2 py-1.5" style={{ color: colors.ink }}>{r.sheetName || "—"}</td>
+                <td className="px-2 py-1.5" style={{ fontFamily: FONT_MONO, color: colors.ink }}>{r.jobNumber || "—"}</td>
+                <td className="px-2 py-1.5" style={{ color: colors.ink }}>{r.date ? fmt(r.date) : "—"}</td>
+                <td className="px-2 py-1.5" style={{ fontFamily: FONT_MONO, color: colors.ink }}>{r.lot}</td>
+                <td className="px-2 py-1.5" style={{ fontFamily: FONT_MONO, color: colors.inkFaint }}>
+                  {isDlv ? (r.item ? r.item.id : "—") : (r.inc ? r.inc.id : (r.item ? r.item.id : "—"))}
+                </td>
+                <td className="px-2 py-1.5" style={{ color: colors.ink }}>{r.codes.length}</td>
+                <td className="px-2 py-1.5" style={{ color: colors.inkFaint }}>{r.detail || ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="rounded-lg p-5" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+      <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.batchTitle}</h3>
+      <p className="text-sm mb-3" style={{ color: colors.inkFaint }}>{t.batchDesc}</p>
+      <input ref={inputRef} type="file" accept=".xlsx,.xls,.xlsm" className="hidden" onChange={onFile} disabled={busy} />
+      <button className="px-3 py-1.5 rounded text-sm font-semibold"
+        style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY, opacity: busy ? 0.6 : 1 }}
+        disabled={busy} onClick={() => inputRef.current && inputRef.current.click()}>{t.batchChooseBtn}</button>
+      {err && <div className="mt-3 text-sm" style={{ color: colors.red }}>{err}</div>}
+      {done && <div className="mt-3 text-sm font-semibold" style={{ color: colors.green }}>{done}</div>}
+      {plan && (
+        <div className="mt-4">
+          {plan.arrivals.length > 0 && section(t.batchArrivals, plan.arrivals, false)}
+          {plan.deliveries.length > 0 && section(t.batchDeliveries, plan.deliveries, true)}
+          <div className="flex items-center gap-3">
+            <button className="px-4 py-2 rounded text-sm font-semibold"
+              style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY, opacity: busy ? 0.6 : 1 }}
+              disabled={busy} onClick={apply}>
+              {t.batchApplyBtn(plan.arrivals.filter((r) => r.status !== "missing").length,
+                               plan.deliveries.filter((r) => r.status !== "missing").length)}
+            </button>
+            <button className="text-xs font-semibold underline" style={{ color: colors.inkFaint }}
+              onClick={() => setPlan(null)}>{t.cancelBtn}</button>
+          </div>
+          <p className="text-xs mt-2" style={{ color: colors.inkFaint }}>{t.batchApplyNote}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function UploadPanel({ seedRows, onSeedUsed, onReplaceIncomingCases, onImportRows, onAddIncoming, existingItems, directory, setDirectory, employees, legacyArchive, setLegacyArchive, items, incoming, onLegacyImport, onLegacyCheckIn, onLegacyCheckInBatch, onLegacyDeliver, onLegacyEnrich, onLegacyReverse, colors, t, lang }) {
   // Rows handed over by the Job sheet reader open on the legacy tab, since that is where
   // they are checked and processed.
@@ -12789,7 +13114,7 @@ function UploadPanel({ seedRows, onSeedUsed, onReplaceIncomingCases, onImportRow
   return (
     <div className="flex flex-col gap-4">
       <div className="flex gap-1 rounded-lg p-1 w-fit" style={{ background: colors.surfaceDim }}>
-        {[["packinglist", t.uploadModePackingList], ["legacy", t.uploadModeLegacy]].map(([k, label]) => (
+        {[["packinglist", t.uploadModePackingList], ["legacy", t.uploadModeLegacy], ["batch", t.uploadModeBatch]].map(([k, label]) => (
           <button key={k} onClick={() => setMode(k)} className="px-3 py-1.5 rounded text-sm font-semibold"
             style={{ fontFamily: FONT_DISPLAY, background: mode === k ? colors.surface : "transparent", color: colors.ink }}>
             {label}
@@ -12798,6 +13123,11 @@ function UploadPanel({ seedRows, onSeedUsed, onReplaceIncomingCases, onImportRow
       </div>
       {mode === "packinglist" && (
         <ImportPanel onImportRows={onImportRows} onAddIncoming={onAddIncoming} existingItems={existingItems} directory={directory} setDirectory={setDirectory} employees={employees} colors={colors} t={t} lang={lang} hideExcelMode />
+      )}
+      {mode === "batch" && (
+        <JobSheetBatchPanel items={items} incoming={incoming}
+          onCheckInBatch={onLegacyCheckInBatch} onDeliverBatch={onLegacyDeliver}
+          colors={colors} t={t} lang={lang} />
       )}
       {mode === "legacy" && (
         <LegacyUploadsPanel seedRows={seedRows} onSeedUsed={onSeedUsed} onReplaceIncomingCases={onReplaceIncomingCases} employees={employees} setDirectory={setDirectory} legacyArchive={legacyArchive} setLegacyArchive={setLegacyArchive} items={items} incoming={incoming} onLegacyCheckIn={onLegacyCheckIn} onLegacyCheckInBatch={onLegacyCheckInBatch} directory={directory} onLegacyImport={onLegacyImport} onLegacyDeliver={onLegacyDeliver} onLegacyEnrich={onLegacyEnrich} onLegacyReverse={onLegacyReverse} onAddIncoming={onAddIncoming} colors={colors} t={t} lang={lang} />
