@@ -2078,6 +2078,13 @@ const TEXT = {
     deliveriesPartCancelledTag: "PARTLY REVERSED",
     deliveriesPkgsOnly: (n) => `${n} pkgs (no case numbers)`,
     deliveriesReverseBtn: "Reverse",
+    deliveriesSelected: (n) => (n === 1 ? "1 delivery selected" : `${n} deliveries selected`),
+    deliveriesReverseSelected: (n) => `Reverse ${n}`,
+    deliveriesRestoreSelected: (n) => `Restore ${n}`,
+    deliveriesClearSelection: "Clear selection",
+    deliveriesSelectJob: "Select every delivery on this job",
+    deliveriesBulkConfirmReverse: (n) => `Reverse ${n} deliver${n === 1 ? "y" : "ies"}?\n\nTheir cases go back into the depot and the records are kept, so the job numbers stay reserved. This is one save, so it cannot half-finish.`,
+    deliveriesBulkConfirmRestore: (n) => `Restore ${n} deliver${n === 1 ? "y" : "ies"}?\n\nTheir cases leave the depot again.`,
     deliveriesFootnote: "Reversing a delivery puts its cases back in the depot and keeps the record, so the job number stays reserved and the history still shows what happened. Permanently deleting one is only offered after it has been reversed.",
     navBilling: "Billing",
     navUpload: "Upload",
@@ -2980,6 +2987,13 @@ const TEXT = {
     deliveriesPartCancelledTag: "部分退回",
     deliveriesPkgsOnly: (n) => `${n} 件（無箱號）`,
     deliveriesReverseBtn: "退回",
+    deliveriesSelected: (n) => `\u5df2\u9078 ${n} \u7b46\u9001\u8ca8`,
+    deliveriesReverseSelected: (n) => `\u9000\u56de ${n} \u7b46`,
+    deliveriesRestoreSelected: (n) => `\u9084\u539f ${n} \u7b46`,
+    deliveriesClearSelection: "\u6e05\u9664\u9078\u53d6",
+    deliveriesSelectJob: "\u9078\u53d6\u6b64\u55ae\u865f\u4e0b\u6240\u6709\u9001\u8ca8",
+    deliveriesBulkConfirmReverse: (n) => `\u78ba\u8a8d\u9000\u56de ${n} \u7b46\u9001\u8ca8\uff1f\n\n\u8ca8\u4ef6\u6703\u9000\u56de\u5009\u5eab\uff0c\u8a18\u9304\u4fdd\u7559\uff0c\u55ae\u865f\u4e0d\u6703\u88ab\u91cd\u7528\u3002\u6b64\u70ba\u55ae\u4e00\u5132\u5b58\uff0c\u4e0d\u6703\u53ea\u5b8c\u6210\u4e00\u534a\u3002`,
+    deliveriesBulkConfirmRestore: (n) => `\u78ba\u8a8d\u9084\u539f ${n} \u7b46\u9001\u8ca8\uff1f\n\n\u8ca8\u4ef6\u6703\u518d\u6b21\u96e2\u958b\u5009\u5eab\u3002`,
     deliveriesFootnote: "退回送貨會將貨件退回倉庫，並保留記錄，以免單號被重用，歷史亦保持完整。需先退回，才可永久刪除。",
     navBilling: "帳單",
     navUpload: "上載",
@@ -4316,8 +4330,9 @@ function DeliveryRecordEditor({ delivery, item, onPatch, onDone, colors, t }) {
 // "what did job 2607117 take out", which is how a delivery is actually looked up. A job can
 // also span several entries - one sheet, six lots - and those rows only ever appeared apart.
 // Here they are grouped by job number, so a delivery reads the way its sheet reads.
-function DeliveriesPanel({ items, onUpdateDelivery, onCancelDelivery, onRestoreDelivery, onPurgeDelivery, onPrintJobSheet, colors, t, lang }) {
+function DeliveriesPanel({ items, onUpdateDelivery, onCancelDelivery, onRestoreDelivery, onPurgeDelivery, onSetManyCancelled, onPrintJobSheet, colors, t, lang }) {
   const [q, setQ] = useState("");
+  const [picked, setPicked] = useState([]);   // "itemId|deliveryId"
   const [showCancelled, setShowCancelled] = useState(false);
   const [openKey, setOpenKey] = useState(null);
   const [editing, setEditing] = useState(null);
@@ -4383,6 +4398,39 @@ function DeliveriesPanel({ items, onUpdateDelivery, onCancelDelivery, onRestoreD
   const cancelledCount = groups.filter((g) => g.cancelled).length;
   const th = { color: colors.inkFaint, fontFamily: FONT_DISPLAY };
 
+  const keyOf = (itemId, deliveryId) => `${itemId}|${deliveryId}`;
+  const pickedSet = useMemo(() => new Set(picked), [picked]);
+  // Only what is on screen can be acted on, so a selection left behind by a search that has
+  // since changed cannot quietly take something with it.
+  const visible = useMemo(() => {
+    const out = [];
+    shown.forEach((g) => g.rows.forEach((r) => out.push({ key: keyOf(r.item.id, r.delivery.id), row: r })));
+    return out;
+  }, [shown]);
+  const visibleKeys = useMemo(() => new Set(visible.map((v) => v.key)), [visible]);
+  const live = useMemo(() => picked.filter((k) => visibleKeys.has(k)), [picked, visibleKeys]);
+  const chosen = useMemo(() => live.map((k) => {
+    const v = visible.find((x) => x.key === k);
+    return { itemId: v.row.item.id, deliveryId: v.row.delivery.id, cancelled: !!v.row.delivery.cancelled };
+  }), [live, visible]);
+  const toReverse = chosen.filter((c) => !c.cancelled);
+  const toRestore = chosen.filter((c) => c.cancelled);
+  function toggleOne(k) {
+    setPicked((p) => (p.includes(k) ? p.filter((x) => x !== k) : [...p, k]));
+  }
+  function toggleGroup(g) {
+    const ks = g.rows.map((r) => keyOf(r.item.id, r.delivery.id));
+    const allOn = ks.every((k) => pickedSet.has(k));
+    setPicked((p) => (allOn ? p.filter((k) => !ks.includes(k)) : [...new Set([...p, ...ks])]));
+  }
+  function runBulk(list, cancelled) {
+    if (!list.length) return;
+    const verb = cancelled ? t.deliveriesBulkConfirmReverse(list.length) : t.deliveriesBulkConfirmRestore(list.length);
+    if (!window.confirm(verb)) return;
+    onSetManyCancelled(list.map(({ itemId, deliveryId }) => ({ itemId, deliveryId })), cancelled);
+    setPicked([]);
+  }
+
   return (
     <div>
       <div className="flex flex-wrap items-end justify-between gap-3 mb-4">
@@ -4404,6 +4452,31 @@ function DeliveriesPanel({ items, onUpdateDelivery, onCancelDelivery, onRestoreD
         </div>
       </div>
 
+      {live.length > 0 && (
+        <div className="mb-3 rounded-lg px-4 py-3 flex flex-wrap items-center gap-3"
+          style={{ background: colors.surfaceDim, border: `1px solid ${colors.line}` }}>
+          <span className="text-sm font-semibold" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>
+            {t.deliveriesSelected(live.length)}
+          </span>
+          {toReverse.length > 0 && (
+            <button className="px-3 py-1.5 rounded text-sm font-semibold"
+              style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}
+              onClick={() => runBulk(toReverse, true)}>
+              {t.deliveriesReverseSelected(toReverse.length)}
+            </button>
+          )}
+          {toRestore.length > 0 && (
+            <button className="px-3 py-1.5 rounded text-sm font-semibold"
+              style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}
+              onClick={() => runBulk(toRestore, false)}>
+              {t.deliveriesRestoreSelected(toRestore.length)}
+            </button>
+          )}
+          <button className="text-xs font-semibold underline" style={{ color: colors.inkFaint }}
+            onClick={() => setPicked([])}>{t.deliveriesClearSelection}</button>
+        </div>
+      )}
+
       {shown.length === 0 ? (
         <div className="rounded-lg p-8 text-center text-sm" style={{ background: colors.surface, border: `1px solid ${colors.line}`, color: colors.inkFaint }}>
           {q.trim() ? t.deliveriesNoMatch : t.deliveriesNone}
@@ -4413,6 +4486,7 @@ function DeliveriesPanel({ items, onUpdateDelivery, onCancelDelivery, onRestoreD
           <table className="w-full text-sm">
             <thead>
               <tr style={{ background: colors.surfaceDim }}>
+                <th className="px-3 py-2" style={{ width: 34 }}></th>
                 {[t.colJobNo, t.colDate, t.colClient, t.colSite, t.deliveriesColLots, t.colQty, t.jsKgs, t.jsCbm, ""].map((h, n) => (
                   <th key={n} className="text-left px-3 py-2 text-xs font-semibold" style={th}>{h}</th>
                 ))}
@@ -4427,6 +4501,11 @@ function DeliveriesPanel({ items, onUpdateDelivery, onCancelDelivery, onRestoreD
                       style={{ borderTop: `1px solid ${colors.surfaceDim}`, cursor: "pointer", opacity: g.cancelled ? 0.55 : 1 }}
                       onClick={() => { setOpenKey(open ? null : g.key); setEditing(null); }}
                     >
+                      <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                        <input type="checkbox" title={t.deliveriesSelectJob}
+                          checked={g.rows.every((r) => pickedSet.has(keyOf(r.item.id, r.delivery.id)))}
+                          onChange={() => toggleGroup(g)} />
+                      </td>
                       <td className="px-3 py-2 font-semibold" style={{ fontFamily: FONT_MONO, color: colors.ink }}>
                         {g.jobNumber || t.deliveriesNoJobNo}
                         {g.cancelled && <span className="ml-2 text-xs font-semibold" style={{ color: colors.red }}>{t.deliveriesCancelledTag}</span>}
@@ -4448,6 +4527,11 @@ function DeliveriesPanel({ items, onUpdateDelivery, onCancelDelivery, onRestoreD
                       return (
                         <React.Fragment key={d.id}>
                           <tr style={{ background: colors.surfaceDim, borderTop: `1px solid ${colors.line}` }}>
+                            <td className="px-3 py-2">
+                              <input type="checkbox"
+                                checked={pickedSet.has(keyOf(it.id, d.id))}
+                                onChange={() => toggleOne(keyOf(it.id, d.id))} />
+                            </td>
                             <td className="px-3 py-2" style={{ fontFamily: FONT_MONO, fontSize: 12, color: colors.ink }}>{it.id}</td>
                             <td className="px-3 py-2" style={{ fontSize: 12, color: colors.ink }}>{fmt(d.date)}</td>
                             <td colSpan={2} className="px-3 py-2" style={{ fontSize: 12, color: colors.ink }}>
@@ -4481,7 +4565,7 @@ function DeliveriesPanel({ items, onUpdateDelivery, onCancelDelivery, onRestoreD
                           </tr>
                           {isEditing && (
                             <tr style={{ background: colors.surfaceDim }}>
-                              <td colSpan={9} className="px-3 py-3">
+                              <td colSpan={10} className="px-3 py-3">
                                 <DeliveryRecordEditor
                                   delivery={d} item={it}
                                   onPatch={(patch) => onUpdateDelivery(d.id, it.id, patch)}
@@ -14427,6 +14511,14 @@ export default function FarspeedInventory() {
   // The revision each shared record set was last read or written at. A save carries it
   // back so the database can refuse the write if someone else has saved since.
   const revs = useRef({});
+  // The last state we applied locally, readable synchronously. React state is only visible
+  // on the next render, so two actions in the same tick both computed from the same stale
+  // `items` - the second silently dropped the first, or carried its rev and was refused.
+  const latest = useRef({});
+  // One guarded write per key at a time. Two writes fired together both carried the rev we
+  // held before either landed, so the second was refused as somebody else's edit. There is
+  // no somebody else: it was the first click, still in flight.
+  const writeQueue = useRef({});
   const [conflictKey, setConflictKey] = useState("");
   const [currentUser, setCurrentUserState] = useState("");
   const [filterClient, setFilterClient] = useState("All");
@@ -14468,8 +14560,11 @@ export default function FarspeedInventory() {
       try {
         const res = await storageGet("items");
         revs.current.items = res ? res.rev : null;
-        setItems(res ? JSON.parse(res.value) : []);
+        const loaded = res ? JSON.parse(res.value) : [];
+        latest.current.items = loaded;
+        setItems(loaded);
       } catch (e) {
+        latest.current.items = [];
         setItems([]);
       }
       try {
@@ -14519,8 +14614,11 @@ export default function FarspeedInventory() {
       try {
         const res = await storageGet("incoming");
         revs.current.incoming = res ? res.rev : null;
-        setIncomingState(res ? JSON.parse(res.value) : []);
+        const loaded = res ? JSON.parse(res.value) : [];
+        latest.current.incoming = loaded;
+        setIncomingState(loaded);
       } catch (e) {
+        latest.current.incoming = [];
         setIncomingState([]);
       }
       try {
@@ -14653,8 +14751,7 @@ export default function FarspeedInventory() {
   }
 
   function setIncoming(updater) {
-    const next = typeof updater === "function" ? updater(incoming) : updater;
-    persistGuarded("incoming", next, setIncomingState, (v) => JSON.parse(v));
+    persistGuarded("incoming", updater, setIncomingState, (v) => JSON.parse(v));
   }
   // Adds shipments from a Packing List upload to the Incoming pool - informational only,
   // not yet checked into the depot via Devan or CFS.
@@ -14800,7 +14897,7 @@ export default function FarspeedInventory() {
 
   function handleResetDeliveries() {
     if (!window.confirm(t.resetConfirmMsg)) return;
-    persist(items.map((i) => ({ ...i, deliveries: [] })));
+    persist((list) => list.map((i) => ({ ...i, deliveries: [] })));
     window.alert(t.resetDoneMsg);
   }
 
@@ -14808,31 +14905,45 @@ export default function FarspeedInventory() {
   // last read it. On conflict the local change is rolled back to whatever is actually on
   // the server - overwriting someone else's entries silently is the failure this exists to
   // prevent, and a lost keystroke is far cheaper than a lost depot record.
+  // `next` may be a value or a function of the current state. A function is applied at the
+  // moment the write runs, against whatever the last applied state is - so a second action
+  // queued behind the first builds on it instead of on the snapshot its click was rendered
+  // from. That is what makes several reversals in a row safe.
   async function persistGuarded(key, next, applyLocal, parse) {
-    applyLocal(next);
-    try {
-      const res = await storageSetGuarded(key, JSON.stringify(next), revs.current[key]);
-      if (res && res.ok) {
-        revs.current[key] = res.rev;
-        setError("");
-        setConflictKey("");
-        return true;
-      }
-      if (res && res.conflict) {
-        const server = res.current;
-        revs.current[key] = server ? server.rev : null;
-        try {
-          applyLocal(server ? parse(server.value) : []);
-        } catch (e) {}
-        setConflictKey(key);
+    const run = async () => {
+      const base = latest.current[key];
+      const value = typeof next === "function" ? next(base === undefined ? [] : base) : next;
+      latest.current[key] = value;
+      applyLocal(value);
+      try {
+        const res = await storageSetGuarded(key, JSON.stringify(value), revs.current[key]);
+        if (res && res.ok) {
+          revs.current[key] = res.rev;
+          setError("");
+          setConflictKey("");
+          return true;
+        }
+        if (res && res.conflict) {
+          const server = res.current;
+          revs.current[key] = server ? server.rev : null;
+          let restored = [];
+          try { restored = server ? parse(server.value) : []; } catch (e) {}
+          latest.current[key] = restored;
+          applyLocal(restored);
+          setConflictKey(key);
+          return false;
+        }
+        setError(t.saveErrorMsg);
+        return false;
+      } catch (e) {
+        setError(t.saveErrorMsg);
         return false;
       }
-      setError(t.saveErrorMsg);
-      return false;
-    } catch (e) {
-      setError(t.saveErrorMsg);
-      return false;
-    }
+    };
+    const prev = writeQueue.current[key] || Promise.resolve();
+    const mine = prev.then(run, run);
+    writeQueue.current[key] = mine.catch(() => {});
+    return mine;
   }
 
   async function persist(next) {
@@ -14930,7 +15041,7 @@ export default function FarspeedInventory() {
       : inc)));
   }
   function handleDelete(id) {
-    persist(items.filter((i) => i.id !== id));
+    persist((list) => list.filter((i) => i.id !== id));
     releaseIncomingFor([id]);
   }
   // Deleting several at once has to be one pass. Calling handleDelete in a loop computed
@@ -14939,13 +15050,13 @@ export default function FarspeedInventory() {
   function handleDeleteMany(ids) {
     const gone = new Set(ids || []);
     if (!gone.size) return;
-    persist(items.filter((i) => !gone.has(i.id)));
+    persist((list) => list.filter((i) => !gone.has(i.id)));
     releaseIncomingFor([...gone]);
   }
 
   function handleAddDelivery(delivery, itemId) {
     const record = { ...delivery, id: `D${Date.now()}${Math.floor(Math.random() * 1000)}` };
-    persist(items.map((i) => (i.id === itemId ? { ...i, deliveries: [...(i.deliveries || []), record] } : i)));
+    persist((list) => list.map((i) => (i.id === itemId ? { ...i, deliveries: [...(i.deliveries || []), record] } : i)));
     setExitingItems((prev) => prev.map((i) => (i.id === itemId ? { ...i, deliveries: [...(i.deliveries || []), record] } : i)));
     return record;
   }
@@ -15077,35 +15188,51 @@ export default function FarspeedInventory() {
     const apply = (list) => list.map((i) => (i.id === itemId
       ? { ...i, deliveries: (i.deliveries || []).map((d) => (d.id === deliveryId ? { ...d, ...patch } : d)) }
       : i));
-    persist(apply(items));
+    persist(apply);
+    setExitingItems((prev) => apply(prev));
+  }
+
+  // Flips the cancelled flag on any number of deliveries in one write. Doing them one at a
+  // time meant one save per click, each computed from the state its own click was rendered
+  // against - so the second either lost the first or was refused as a clash with it.
+  function setDeliveriesCancelled(pairs, cancelled) {
+    const want = new Map();
+    (pairs || []).forEach(({ itemId, deliveryId }) => {
+      if (!want.has(itemId)) want.set(itemId, new Set());
+      want.get(itemId).add(deliveryId);
+    });
+    if (!want.size) return;
+    const apply = (list) => list.map((i) => (want.has(i.id)
+      ? { ...i, deliveries: (i.deliveries || []).map((d) => (want.get(i.id).has(d.id) ? { ...d, cancelled } : d)) }
+      : i));
+    persist(apply);
     setExitingItems((prev) => apply(prev));
   }
 
   function handleDeleteDelivery(deliveryId, itemId) {
-    persist(items.map((i) => (i.id === itemId ? { ...i, deliveries: (i.deliveries || []).map((d) => (d.id === deliveryId ? { ...d, cancelled: true } : d)) } : i)));
-    setExitingItems((prev) => prev.map((i) => (i.id === itemId ? { ...i, deliveries: (i.deliveries || []).map((d) => (d.id === deliveryId ? { ...d, cancelled: true } : d)) } : i)));
+    setDeliveriesCancelled([{ itemId, deliveryId }], true);
   }
 
   function handleCancelItem(itemId) {
-    persist(items.map((i) => (i.id === itemId ? { ...i, cancelled: true } : i)));
+    persist((list) => list.map((i) => (i.id === itemId ? { ...i, cancelled: true } : i)));
   }
 
   function handleRestoreItem(itemId) {
-    persist(items.map((i) => (i.id === itemId ? { ...i, cancelled: false } : i)));
+    persist((list) => list.map((i) => (i.id === itemId ? { ...i, cancelled: false } : i)));
   }
 
   function handleRestoreDelivery(itemId, deliveryId) {
-    persist(items.map((i) => (i.id === itemId ? { ...i, deliveries: (i.deliveries || []).map((d) => (d.id === deliveryId ? { ...d, cancelled: false } : d)) } : i)));
+    setDeliveriesCancelled([{ itemId, deliveryId }], false);
   }
 
   function handlePermanentlyDeleteDelivery(itemId, deliveryId) {
     if (!window.confirm(t.permanentDeleteConfirmMsg)) return;
-    persist(items.map((i) => (i.id === itemId ? { ...i, deliveries: (i.deliveries || []).filter((d) => d.id !== deliveryId) } : i)));
+    persist((list) => list.map((i) => (i.id === itemId ? { ...i, deliveries: (i.deliveries || []).filter((d) => d.id !== deliveryId) } : i)));
   }
 
   function handlePermanentlyDeleteItem(itemId) {
     if (!window.confirm(t.permanentDeleteConfirmMsg)) return;
-    persist(items.filter((i) => i.id !== itemId));
+    persist((list) => list.filter((i) => i.id !== itemId));
   }
   // Deleting several at once is not the single delete run in a loop. That asks once per
   // entry - eleven dialogs to dismiss - and worse, every call filters the same unchanged
@@ -15114,7 +15241,7 @@ export default function FarspeedInventory() {
   function handlePermanentlyDeleteItems(itemIds) {
     const gone = new Set(itemIds || []);
     if (!gone.size) return;
-    persist(items.filter((i) => !gone.has(i.id)));
+    persist((list) => list.filter((i) => !gone.has(i.id)));
   }
 
   function handleImportRows(rows) {
@@ -15123,7 +15250,7 @@ export default function FarspeedInventory() {
       counter += 1;
       return { ...r, numericId: counter, id: `FS-${String(counter).padStart(4, "0")}`, createdAt: todayStr() };
     });
-    persist([...items, ...newItems]);
+    persist((list) => [...list, ...newItems]);
     setView("inventory");
   }
 
@@ -15135,16 +15262,16 @@ export default function FarspeedInventory() {
       counter += 1;
       return { ...r, numericId: counter, id: `FS-${String(counter).padStart(4, "0")}`, createdAt: todayStr() };
     });
-    persist([...items, ...newItems]);
+    persist((list) => [...list, ...newItems]);
     return newItems;
   }
 
   function handleKeepOne(groupIds, keepId) {
-    persist(items.filter((i) => !(groupIds.includes(i.id) && i.id !== keepId)));
+    persist((list) => list.filter((i) => !(groupIds.includes(i.id) && i.id !== keepId)));
   }
 
   function handleDeleteGroup(groupIds) {
-    persist(items.filter((i) => !groupIds.includes(i.id)));
+    persist((list) => list.filter((i) => !groupIds.includes(i.id)));
     releaseIncomingFor(groupIds);
   }
 
@@ -17283,6 +17410,7 @@ export default function FarspeedInventory() {
             onCancelDelivery={handleDeleteDelivery}
             onRestoreDelivery={handleRestoreDelivery}
             onPurgeDelivery={handlePermanentlyDeleteDelivery}
+            onSetManyCancelled={setDeliveriesCancelled}
             onPrintJobSheet={setPrintJobSheet}
             colors={colors} t={t} lang={lang}
           />
