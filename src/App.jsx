@@ -1471,11 +1471,33 @@ function remainingShare(item) {
   const total = totalUnits(item) || 1;
   return remainingUnits(item) / total;
 }
+// What is still in the depot is the sum of the cases still in the depot. Scaling the lot
+// total by the proportion of cases left assumes every case weighs the same, and a lift's
+// machine weighs nothing like its guide rails - Kwu Tung read 359,690 kg that way against
+// 287,124 kg of cases actually there, an overstatement of 72 tonnes. The proportional
+// estimate is kept only for a lot whose cases carry no figures of their own, where there
+// is nothing better to go on.
+function remainingCaseTotals(item) {
+  const left = remainingPackages(item);
+  if (!left.length) return { kg: 0, cbm: 0, exact: (item.packages || []).length > 0 };
+  let kg = 0, cbm = 0, haveKg = true, haveCbm = true;
+  for (const p of left) {
+    if (p.weightKg === "" || p.weightKg == null || isNaN(Number(p.weightKg))) haveKg = false;
+    else kg += Number(p.weightKg);
+    if (p.cbm === "" || p.cbm == null || isNaN(Number(p.cbm))) haveCbm = false;
+    else cbm += Number(p.cbm);
+  }
+  return { kg, cbm, haveKg, haveCbm, exact: haveKg || haveCbm };
+}
 function remainingWeightKg(item) {
+  const t = remainingCaseTotals(item);
+  if (t.haveKg) return t.kg;
   if (!item.weightKg) return 0;
   return Number(item.weightKg) * remainingShare(item);
 }
 function remainingVolumeCbm(item) {
+  const t = remainingCaseTotals(item);
+  if (t.haveCbm) return t.cbm;
   if (!item.volumeCbm) return 0;
   return Number(item.volumeCbm) * remainingShare(item);
 }
@@ -8728,7 +8750,11 @@ function recomputeItemTotals(item) {
   // computeItemBillingRows and stands in as the billable volume when the cases carry no
   // CBM of their own - so a coarser lot total must not displace it. Weight has no such
   // override, which is why it takes the sheet figure unconditionally.
-  if (oversizeCbm == null && usedCbm && cbm) next.volumeCbm = String(Math.round(cbm * 1000) / 1000);
+  // Oversize outranks a sheet's lot total only where the cases themselves give no volume;
+  // where they do, that is the real size of the lot and the oversize figure stays where it
+  // belongs, on `oversizeCbm`, picking the rate tier.
+  const haveCaseCbm = (item.packages || []).some((p) => p.cbm !== "" && p.cbm != null && !isNaN(Number(p.cbm)));
+  if ((oversizeCbm == null || haveCaseCbm) && usedCbm && cbm) next.volumeCbm = String(Math.round(cbm * 1000) / 1000);
   else if (oversizeCbm != null) next.volumeSource = "oversize";
   return next;
 }
@@ -15131,7 +15157,11 @@ export default function FarspeedInventory() {
         const totalCbm = inc.packages.reduce((s, p) => s + (Number(p.cbm) || 0), 0);
         const opOversizeCases = cleanOversizeCases(op.oversizeCases);
         const oversizeCbmVal = op.isOversize ? (oversizeCbmTotal(opOversizeCases) || Number(op.oversizeCbm) || 0) : 0;
-        const effectiveCbm = oversizeCbmVal > 0 ? oversizeCbmVal : totalCbm;
+        // The oversize figure is a billing tier, not the lot's size. It stands in as the
+        // volume only where the cases give none - a 36-case lot with one oversize case in
+        // it still occupies its own 55 CBM, and recording 3.67 understates the depot by an
+        // order of magnitude.
+        const effectiveCbm = totalCbm || oversizeCbmVal;
         const newItem = {
           ...emptyForm(),
           client: inc.client, project: inc.project, constructionSite: inc.constructionSite || "",
