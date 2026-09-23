@@ -2109,6 +2109,22 @@ const TEXT = {
     batchApplyBtn: (a, d) => `Apply ${a} arrival${a === 1 ? "" : "s"} and ${d} deliver${d === 1 ? "y" : "ies"}`,
     batchApplyNote: "Rows shaded red are skipped. Rows shaded amber are applied - the note says what to look at afterwards.",
     batchApplied: (a, d) => `Done: ${a} arrival${a === 1 ? "" : "s"} and ${d} deliver${d === 1 ? "y" : "ies"} recorded.`,
+    navArrivals: "Arrivals",
+    arrivalsTitle: "Arrivals",
+    arrivalsDesc: "Every Devan and CFS check-in recorded against the depot, newest first. Grouped by job number, so one sheet that brought in several lots reads as one arrival. Open one to see its cases, or to put them back.",
+    arrivalsSearchPh: "Job no., client, site, lot, entry, case\u2026",
+    arrivalsNone: "No arrivals recorded yet.",
+    arrivalsNoMatch: "Nothing matches that. Try a job number, a lot like 60768711/T3-3, or a single case.",
+    arrivalsColType: "Type",
+    arrivalsSelected: (n) => (n === 1 ? "1 check-in selected" : `${n} check-ins selected`),
+    arrivalsReverseSelected: (n) => `Reverse ${n}`,
+    arrivalsSelectJob: "Select every check-in on this job",
+    arrivalsReverseConfirm: (n) => `Reverse ${n} check-in${n === 1 ? "" : "s"}?\n\nTheir cases go back to Incoming, and an entry left with no check-in at all goes with them. This is one save, so it cannot half-finish.`,
+    arrivalsHeldBack: (n) => `${n} left out: cases already delivered`,
+    arrivalsCasesOut: (n) => `${n} case${n === 1 ? "" : "s"} already delivered \u2014 reverse the delivery first`,
+    arrivalsPartlyOutTag: "PARTLY DELIVERED",
+    arrivalsNoId: "older batch \u2014 reverse from Check-ins",
+    arrivalsFootnote: "Reversing a check-in takes the batch off the entry and hands its cases back to the Incoming shipment they came from. An entry that exists only because of that check-in goes with it. A batch whose cases have already gone out cannot be reversed until the delivery is.",
     deliveriesTitle: "Deliveries",
     deliveriesDesc: "Every delivery recorded against the depot, newest first. Grouped by job number, so one sheet that took cases off several lots reads as one delivery. Open one to correct it, or to put its cases back.",
     deliveriesSearchPh: "Job no., client, site, lot, entry, case\u2026",
@@ -3040,6 +3056,22 @@ const TEXT = {
     batchApplyBtn: (a, d) => `\u904e\u5e33 ${a} \u7b46\u5230\u5009\u53ca ${d} \u7b46\u9001\u8ca8`,
     batchApplyNote: "\u7d05\u5e95\u4e4b\u884c\u6703\u8df3\u904e\uff1b\u9ec3\u5e95\u4e4b\u884c\u4ecd\u6703\u904e\u5e33\uff0c\u5099\u8a3b\u8aaa\u660e\u9700\u6ce8\u610f\u4e4b\u8655\u3002",
     batchApplied: (a, d) => `\u5df2\u5b8c\u6210\uff1a${a} \u7b46\u5230\u5009\u3001${d} \u7b46\u9001\u8ca8\u3002`,
+    navArrivals: "\u5230\u5009\u8a18\u9304",
+    arrivalsTitle: "\u5230\u5009\u8a18\u9304",
+    arrivalsDesc: "\u6240\u6709\u62c6\u6ac3\u53ca CFS \u5230\u5009\u8a18\u9304\uff0c\u6700\u65b0\u5728\u524d\u3002\u6309\u5feb\u9054\u55ae\u865f\u5206\u7d44\uff0c\u540c\u4e00\u5f35\u5de5\u55ae\u6536\u5165\u591a\u500b\u6279\u6b21\u4ecd\u4f5c\u4e00\u6b21\u5230\u5009\u986f\u793a\u3002\u9ede\u9078\u53ef\u67e5\u770b\u7bb1\u865f\u6216\u9000\u56de\u3002",
+    arrivalsSearchPh: "\u5feb\u9054\u55ae\u865f\u3001\u5ba2\u6236\u3001\u5730\u76e4\u3001\u6279\u6b21\u3001\u7bb1\u865f\u2026",
+    arrivalsNone: "\u5c1a\u672a\u6709\u5230\u5009\u8a18\u9304\u3002",
+    arrivalsNoMatch: "\u627e\u4e0d\u5230\u76f8\u7b26\u8a18\u9304\u3002",
+    arrivalsColType: "\u985e\u578b",
+    arrivalsSelected: (n) => `\u5df2\u9078 ${n} \u7b46\u5230\u5009`,
+    arrivalsReverseSelected: (n) => `\u9000\u56de ${n} \u7b46`,
+    arrivalsSelectJob: "\u9078\u53d6\u6b64\u55ae\u865f\u4e0b\u6240\u6709\u5230\u5009",
+    arrivalsReverseConfirm: (n) => `\u78ba\u8a8d\u9000\u56de ${n} \u7b46\u5230\u5009\uff1f\n\n\u8ca8\u4ef6\u6703\u9000\u56de\u300c\u5f85\u5230\u5009\u300d\uff1b\u82e5\u67d0\u5b58\u5009\u8a18\u9304\u518d\u7121\u4efb\u4f55\u5230\u5009\u6279\u6b21\uff0c\u8a72\u8a18\u9304\u4e00\u4f75\u522a\u9664\u3002\u6b64\u70ba\u55ae\u4e00\u5132\u5b58\u3002`,
+    arrivalsHeldBack: (n) => `${n} \u7b46\u672a\u8655\u7406\uff1a\u8ca8\u4ef6\u5df2\u9001\u51fa`,
+    arrivalsCasesOut: (n) => `${n} \u4ef6\u5df2\u9001\u51fa \u2014 \u9700\u5148\u9000\u56de\u9001\u8ca8`,
+    arrivalsPartlyOutTag: "\u90e8\u5206\u5df2\u9001\u51fa",
+    arrivalsNoId: "\u820a\u6279\u6b21 \u2014 \u8acb\u65bc\u300c\u5230\u5009\u6838\u5c0d\u300d\u8655\u7406",
+    arrivalsFootnote: "\u9000\u56de\u5230\u5009\u6703\u5c07\u8a72\u6279\u6b21\u5f9e\u5b58\u5009\u8a18\u9304\u79fb\u9664\uff0c\u8ca8\u4ef6\u9000\u56de\u539f\u4f86\u4e4b\u300c\u5f85\u5230\u5009\u300d\u3002\u82e5\u8ca8\u4ef6\u5df2\u9001\u51fa\uff0c\u9808\u5148\u9000\u56de\u9001\u8ca8\u3002",
     deliveriesTitle: "送貨記錄",
     deliveriesDesc: "所有已記錄之送貨，最新在前。按快達單號分組，同一張工單取出多個批次之貨件仍作一次送貨顯示。點選可修改，或將貨件退回倉庫。",
     deliveriesSearchPh: "快達單號、客戶、地盤、批次、箱號…",
@@ -4396,6 +4428,229 @@ function DeliveryRecordEditor({ delivery, item, onPatch, onDone, colors, t }) {
 // "what did job 2607117 take out", which is how a delivery is actually looked up. A job can
 // also span several entries - one sheet, six lots - and those rows only ever appeared apart.
 // Here they are grouped by job number, so a delivery reads the way its sheet reads.
+// Every check-in ever recorded, in one place, the way Deliveries shows every delivery. An
+// arrival could only be reached through the Check-ins audit, which lists batches by the
+// reference they were filed under and is built for finding what disagrees with the
+// paperwork - not for answering "what did Devan 2603164 bring in", which is how a Devan is
+// actually looked up. One Devan covers twelve lots; those twelve rows belong together.
+function ArrivalsPanel({ items, onReverseArrivals, onPrintJobSheet, colors, t, lang }) {
+  const [q, setQ] = useState("");
+  const [openKey, setOpenKey] = useState(null);
+  const [picked, setPicked] = useState([]);
+
+  const rows = useMemo(() => {
+    const out = [];
+    (items || []).forEach((it) => {
+      if (it.cancelled) return;
+      (it.arrivals || []).forEach((a) => {
+        const codes = a.codes || [];
+        const pk = (it.packages || []).filter((p) => codes.includes(p.code));
+        const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+        const haveKg = pk.length > 0 && pk.every((p) => p.weightKg !== "" && p.weightKg != null);
+        const haveCbm = pk.length > 0 && pk.every((p) => p.cbm !== "" && p.cbm != null);
+        out.push({
+          item: it, arrival: a,
+          pkgs: codes.length || Number(it.packageCount) || 0,
+          kg: haveKg ? pk.reduce((s, p) => s + num(p.weightKg), 0) : num(a.declared && a.declared.kg),
+          cbm: haveCbm ? pk.reduce((s, p) => s + num(p.cbm), 0) : num(a.declared && a.declared.cbm),
+          exact: haveKg && haveCbm,
+          // A batch whose cases have since gone out cannot simply be lifted off: the
+          // delivery behind them would be left with nothing to have taken.
+          delivered: codes.filter((c) => deliveredCodes(it).includes(c)),
+        });
+      });
+    });
+    return out;
+  }, [items]);
+
+  const groups = useMemo(() => {
+    const by = new Map();
+    rows.forEach((r) => {
+      const jn = String(r.arrival.jobNumber || "").trim();
+      const key = jn ? `J:${jn}` : `A:${r.arrival.id || r.item.id}`;
+      if (!by.has(key)) by.set(key, { key, jobNumber: jn, rows: [] });
+      by.get(key).rows.push(r);
+    });
+    return [...by.values()].map((g) => {
+      const dates = g.rows.map((r) => r.arrival.date).filter(Boolean).sort();
+      return {
+        ...g,
+        date: dates[0] || "",
+        types: [...new Set(g.rows.map((r) => r.arrival.type || r.item.arrivingType).filter(Boolean))],
+        clients: [...new Set(g.rows.map((r) => r.item.client).filter(Boolean))],
+        sites: [...new Set(g.rows.map((r) => r.item.project).filter(Boolean))],
+        pkgs: g.rows.reduce((s, r) => s + r.pkgs, 0),
+        kg: g.rows.reduce((s, r) => s + r.kg, 0),
+        cbm: g.rows.reduce((s, r) => s + r.cbm, 0),
+        estimated: g.rows.some((r) => !r.exact),
+        blocked: g.rows.reduce((s, r) => s + r.delivered.length, 0),
+      };
+    }).sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.jobNumber.localeCompare(a.jobNumber));
+  }, [rows]);
+
+  const shown = useMemo(() => {
+    const n = q.trim().toLowerCase();
+    if (!n) return groups;
+    return groups.filter((g) => [
+      g.jobNumber, g.date, ...g.clients, ...g.sites, ...g.types,
+      ...g.rows.map((r) => r.item.id),
+      ...g.rows.map((r) => r.item.unitCode || ""),
+      ...g.rows.map((r) => (r.arrival.declaredSource || "")),
+      ...g.rows.flatMap((r) => r.arrival.codes || []),
+    ].join(" ").toLowerCase().includes(n));
+  }, [groups, q]);
+
+  const keyOf = (itemId, arrivalId) => `${itemId}|${arrivalId}`;
+  const pickedSet = useMemo(() => new Set(picked), [picked]);
+  const visible = useMemo(() => {
+    const out = [];
+    shown.forEach((g) => g.rows.forEach((r) => {
+      if (r.arrival.id) out.push({ key: keyOf(r.item.id, r.arrival.id), row: r });
+    }));
+    return out;
+  }, [shown]);
+  const visibleKeys = useMemo(() => new Set(visible.map((v) => v.key)), [visible]);
+  const live = useMemo(() => picked.filter((k) => visibleKeys.has(k)), [picked, visibleKeys]);
+  const chosen = useMemo(() => live.map((k) => {
+    const v = visible.find((x) => x.key === k);
+    return { itemId: v.row.item.id, arrivalId: v.row.arrival.id, blocked: v.row.delivered.length };
+  }), [live, visible]);
+  const ready = chosen.filter((c) => !c.blocked);
+  const held = chosen.filter((c) => c.blocked);
+
+  function toggleOne(k) { setPicked((p) => (p.includes(k) ? p.filter((x) => x !== k) : [...p, k])); }
+  function toggleGroup(g) {
+    const ks = g.rows.filter((r) => r.arrival.id).map((r) => keyOf(r.item.id, r.arrival.id));
+    const on = ks.every((k) => pickedSet.has(k));
+    setPicked((p) => (on ? p.filter((k) => !ks.includes(k)) : [...new Set([...p, ...ks])]));
+  }
+  function run(list) {
+    if (!list.length) return;
+    if (!window.confirm(t.arrivalsReverseConfirm(list.length))) return;
+    onReverseArrivals(list.map(({ itemId, arrivalId }) => ({ itemId, arrivalId })));
+    setPicked([]);
+  }
+
+  const th = { color: colors.inkFaint, fontFamily: FONT_DISPLAY };
+  return (
+    <div>
+      <div className="flex flex-wrap items-end justify-between gap-3 mb-4">
+        <div>
+          <h2 className="text-2xl font-bold" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.arrivalsTitle}</h2>
+          <p className="text-sm mt-1" style={{ color: colors.inkFaint }}>{t.arrivalsDesc}</p>
+        </div>
+        <input className={inputClass} style={{ ...inputStyleFor(colors), width: 280 }}
+          placeholder={t.arrivalsSearchPh} value={q} onChange={(e) => setQ(e.target.value)} />
+      </div>
+
+      {live.length > 0 && (
+        <div className="mb-3 rounded-lg px-4 py-3 flex flex-wrap items-center gap-3"
+          style={{ background: colors.surfaceDim, border: `1px solid ${colors.line}` }}>
+          <span className="text-sm font-semibold" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>
+            {t.arrivalsSelected(live.length)}
+          </span>
+          {ready.length > 0 && (
+            <button className="px-3 py-1.5 rounded text-sm font-semibold"
+              style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}
+              onClick={() => run(ready)}>{t.arrivalsReverseSelected(ready.length)}</button>
+          )}
+          {held.length > 0 && (
+            <span className="text-xs" style={{ color: colors.red }}>{t.arrivalsHeldBack(held.length)}</span>
+          )}
+          <button className="text-xs font-semibold underline" style={{ color: colors.inkFaint }}
+            onClick={() => setPicked([])}>{t.deliveriesClearSelection}</button>
+        </div>
+      )}
+
+      {shown.length === 0 ? (
+        <div className="rounded-lg p-8 text-center text-sm" style={{ background: colors.surface, border: `1px solid ${colors.line}`, color: colors.inkFaint }}>
+          {q.trim() ? t.arrivalsNoMatch : t.arrivalsNone}
+        </div>
+      ) : (
+        <div className="rounded-lg overflow-hidden" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ background: colors.surfaceDim }}>
+                <th className="px-3 py-2" style={{ width: 34 }}></th>
+                {[t.colJobNo, t.colDate, t.arrivalsColType, t.colClient, t.colSite, t.deliveriesColLots, t.colQty, t.jsKgs, t.jsCbm, ""].map((h, i) => (
+                  <th key={i} className="text-left px-3 py-2 text-xs font-semibold" style={th}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((g) => {
+                const open = openKey === g.key;
+                return (
+                  <React.Fragment key={g.key}>
+                    <tr style={{ borderTop: `1px solid ${colors.surfaceDim}`, cursor: "pointer" }}
+                      onClick={() => setOpenKey(open ? null : g.key)}>
+                      <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                        <input type="checkbox" title={t.arrivalsSelectJob}
+                          checked={g.rows.filter((r) => r.arrival.id).length > 0
+                            && g.rows.filter((r) => r.arrival.id).every((r) => pickedSet.has(keyOf(r.item.id, r.arrival.id)))}
+                          onChange={() => toggleGroup(g)} />
+                      </td>
+                      <td className="px-3 py-2 font-semibold" style={{ fontFamily: FONT_MONO, color: colors.ink }}>
+                        {g.jobNumber || t.deliveriesNoJobNo}
+                        {g.blocked > 0 && <span className="ml-2 text-xs font-semibold" style={{ color: colors.amberText }}>{t.arrivalsPartlyOutTag}</span>}
+                      </td>
+                      <td className="px-3 py-2" style={{ color: colors.ink }}>{fmt(g.date)}</td>
+                      <td className="px-3 py-2" style={{ color: colors.ink }}>{g.types.join(", ") || "—"}</td>
+                      <td className="px-3 py-2" style={{ color: colors.ink }}>{g.clients.join(", ") || "—"}</td>
+                      <td className="px-3 py-2" style={{ color: colors.ink }}>{g.sites.join(", ") || "—"}</td>
+                      <td className="px-3 py-2" style={{ color: colors.inkFaint }}>{t.deliveriesLotCount(g.rows.length)}</td>
+                      <td className="px-3 py-2" style={{ color: colors.ink }}>{g.pkgs}</td>
+                      <td className="px-3 py-2" style={{ color: colors.ink }}>{g.estimated ? "~" : ""}{Math.round(g.kg * 10) / 10}</td>
+                      <td className="px-3 py-2" style={{ color: colors.ink }}>{g.estimated ? "~" : ""}{Math.round(g.cbm * 1000) / 1000}</td>
+                      <td className="px-3 py-2 text-right text-xs font-semibold" style={{ color: colors.amberText }}>{open ? "▲" : "▼"}</td>
+                    </tr>
+                    {open && g.rows.map((r) => (
+                      <tr key={(r.arrival.id || "") + r.item.id} style={{ background: colors.surfaceDim, borderTop: `1px solid ${colors.line}` }}>
+                        <td className="px-3 py-2">
+                          {r.arrival.id && (
+                            <input type="checkbox" checked={pickedSet.has(keyOf(r.item.id, r.arrival.id))}
+                              onChange={() => toggleOne(keyOf(r.item.id, r.arrival.id))} />
+                          )}
+                        </td>
+                        <td className="px-3 py-2" style={{ fontFamily: FONT_MONO, fontSize: 12, color: colors.ink }}>{r.item.id}</td>
+                        <td className="px-3 py-2" style={{ fontSize: 12, color: colors.ink }}>{fmt(r.arrival.date)}</td>
+                        <td className="px-3 py-2" style={{ fontSize: 12, color: colors.ink }}>{r.arrival.type || "—"}</td>
+                        <td colSpan={2} className="px-3 py-2" style={{ fontSize: 12, color: colors.ink }}>
+                          <div style={{ fontFamily: FONT_MONO }}>{r.item.unitCode || "—"}</div>
+                          <div style={{ color: colors.inkFaint, wordBreak: "break-word" }}>
+                            {(r.arrival.codes || []).join(", ") || t.deliveriesPkgsOnly(r.pkgs)}
+                          </div>
+                        </td>
+                        <td className="px-3 py-2" style={{ fontSize: 12, color: colors.inkFaint }}>{r.item.depot || "—"}</td>
+                        <td className="px-3 py-2" style={{ fontSize: 12, color: colors.ink }}>{r.pkgs}</td>
+                        <td className="px-3 py-2" style={{ fontSize: 12, color: colors.ink }}>{r.exact ? "" : "~"}{Math.round(r.kg * 10) / 10}</td>
+                        <td className="px-3 py-2" style={{ fontSize: 12, color: colors.ink }}>{r.exact ? "" : "~"}{Math.round(r.cbm * 1000) / 1000}</td>
+                        <td className="px-3 py-2 text-right whitespace-nowrap">
+                          <button className="text-xs font-semibold mr-2" style={{ color: colors.amberText }}
+                            onClick={(e) => { e.stopPropagation(); onPrintJobSheet({ type: r.arrival.type || r.item.arrivingType || "Devan", item: r.item }); }}>{t.printBtn}</button>
+                          {r.delivered.length > 0 ? (
+                            <span className="text-xs" style={{ color: colors.red }}>{t.arrivalsCasesOut(r.delivered.length)}</span>
+                          ) : r.arrival.id ? (
+                            <button className="text-xs font-semibold" style={{ color: colors.red }}
+                              onClick={(e) => { e.stopPropagation(); run([{ itemId: r.item.id, arrivalId: r.arrival.id }]); }}>
+                              {t.deliveriesReverseBtn}
+                            </button>
+                          ) : <span className="text-xs" style={{ color: colors.inkFaint }}>{t.arrivalsNoId}</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="text-xs mt-3" style={{ color: colors.inkFaint }}>{t.arrivalsFootnote}</p>
+    </div>
+  );
+}
+
 function DeliveriesPanel({ items, onUpdateDelivery, onCancelDelivery, onRestoreDelivery, onPurgeDelivery, onSetManyCancelled, onPrintJobSheet, colors, t, lang }) {
   const [q, setQ] = useState("");
   const [picked, setPicked] = useState([]);   // "itemId|deliveryId"
@@ -12901,8 +13156,15 @@ function batchCaseCodes(spec) {
   const den = (txt.match(/\/\s*(\d+)/g) || []).pop();
   const total = den ? den.replace(/[^\d]/g, "") : "";
   const out = [];
-  txt.split("/")[0].split(/[,、]/).forEach((part) => {
+  // A case is not always numbered n-of-total. Goods transferred from another warehouse are
+  // named by their GR number and some packing lists by handling unit - "GR25020894",
+  // "HSCK0131311511", "07A1007". Anything carrying a letter is a name, not a count, so it
+  // is taken exactly as written and never split on its slash.
+  const lettered = /[A-Za-z]/.test(txt);
+  (lettered ? txt : txt.split("/")[0]).split(/[,、]/).forEach((part) => {
     const p = part.trim();
+    if (!p) return;
+    if (/[A-Za-z]/.test(p)) { out.push(p); return; }
     const m = /^(\d+)\s*-\s*(\d+)$/.exec(p);
     if (m) { for (let n = Number(m[1]); n <= Number(m[2]); n++) out.push(total ? `${n}/${total}` : String(n)); }
     else if (/^\d+$/.test(p)) out.push(total ? `${p}/${total}` : p);
@@ -15529,6 +15791,34 @@ export default function FarspeedInventory() {
     handleLegacyReverse(plan);
   }
 
+  // Reverses any number of check-ins in one write. Undoing them one at a time meant one
+  // save per batch, each computed from the state its own click was rendered against, and an
+  // entry that lost its last batch in the first save was no longer there for the second.
+  // A Devan covering twelve lots is one action on the paper and should be one here.
+  function handleReverseArrivals(pairs) {
+    const want = new Map();
+    (pairs || []).forEach(({ itemId, arrivalId }) => {
+      if (!want.has(itemId)) want.set(itemId, new Set());
+      want.get(itemId).add(arrivalId);
+    });
+    if (!want.size) return { items: 0, removed: 0 };
+    const planItems = [];
+    const incPatches = [];
+    want.forEach((ids, itemId) => {
+      const item = (items || []).find((i) => i.id === itemId);
+      if (!item) return;
+      const picked = (item.arrivals || []).filter((a) => a.id && ids.has(a.id));
+      if (!picked.length) return;
+      const remaining = (item.arrivals || []).filter((a) => !(a.id && ids.has(a.id)));
+      const codes = picked.flatMap((a) => a.codes || []);
+      const remove = remaining.length === 0;
+      planItems.push({ itemId, arrivalIds: picked.map((a) => a.id), deliveryIds: [], remove });
+      (incoming || []).filter((inc) => inc.linkedItemId === itemId)
+        .forEach((inc) => incPatches.push({ incomingId: inc.id, codes, unlink: remove }));
+    });
+    return handleLegacyReverse({ items: planItems, incoming: incPatches });
+  }
+
   function handleAddCombinedDelivery(entries) {
     const records = entries.map(({ itemId, delivery }) => ({ itemId, record: { ...delivery, id: `D${Date.now()}${Math.floor(Math.random() * 10000)}-${itemId}` } }));
     const byItemId = new Map();
@@ -16427,7 +16717,9 @@ export default function FarspeedInventory() {
             {[
               ["upload", t.navUpload],
               ["incoming", t.navIncoming],
-              ["deliveries", t.navDeliveries],
+              ["arrivals", t.navArrivals],
+              ["arrivals", t.navArrivals],
+            ["deliveries", t.navDeliveries],
               ["billing", t.navBilling],
               ["directory", t.navDirectory],
               ["joblog", t.navJobLog],
@@ -17759,6 +18051,15 @@ export default function FarspeedInventory() {
             onLegacyImport={handleLegacyImport}
             onLegacyCheckIn={handleCheckIn} onLegacyCheckInBatch={handleCheckInBatch}
             onLegacyDeliver={handleAddCombinedDelivery} onLegacyEnrich={handleLegacyEnrich} onLegacyReverse={handleLegacyReverse}
+            colors={colors} t={t} lang={lang}
+          />
+        )}
+
+        {view === "arrivals" && (
+          <ArrivalsPanel
+            items={items}
+            onReverseArrivals={handleReverseArrivals}
+            onPrintJobSheet={setPrintJobSheet}
             colors={colors} t={t} lang={lang}
           />
         )}
