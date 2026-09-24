@@ -13291,14 +13291,17 @@ function batchColumns(headerRow) {
 function batchCaseCodes(spec) {
   const txt = String(spec == null ? "" : spec).trim();
   if (!txt || txt === "—") return [];
-  if (/^\s*(50[123]|00[1-4])/.test(txt)) {
+  // An escalator numbers its cases 501, 502, 503, 504 and 001 upwards, with no total after
+  // a slash. How far the small-parts run goes varies by escalator - E7 and E8 at Kwun Tong
+  // carry 001-006 - so any three-digit range is read, not just 001 to 004, which silently
+  // dropped six cases of every such lot.
+  const parts3 = txt.split(/[,、]/).map((x) => x.trim().replace(/\s+/g, "")).filter(Boolean);
+  if (parts3.length && parts3.every((p) => /^\d{3}(-\d{3})?$/.test(p))) {
     const out = [];
-    txt.split(/[,、]/).forEach((part) => {
-      const p = part.trim().replace(/\s+/g, "");
-      if (/^00[1-4]-00[1-4]$/.test(p)) {
-        const a = Number(p.slice(0, 3)), b = Number(p.slice(4));
-        for (let n = a; n <= b; n++) out.push(String(n).padStart(3, "0"));
-      } else if (/^\d{3}$/.test(p)) out.push(p);
+    parts3.forEach((p) => {
+      const m = /^(\d{3})-(\d{3})$/.exec(p);
+      if (m) { for (let n = Number(m[1]); n <= Number(m[2]); n++) out.push(String(n).padStart(3, "0")); }
+      else out.push(p);
     });
     return out;
   }
