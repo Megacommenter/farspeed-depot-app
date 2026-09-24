@@ -1659,6 +1659,72 @@ const TEXT = {
     navInventory: "Inventory",
     navNewEntry: "New Entry",
     navDeliveries: "Deliveries",
+    navReconciler: "Reconciler",
+    recTitle: "Reconcile a whole site from one workbook",
+    recDesc: "One file with a Packing List tab and the two job-sheet tabs. The lots, the arrivals and the deliveries are checked against each other first and applied together, so nothing lands half done.",
+    recSiteTitle: "Client and site — used for every lot this file creates",
+    recClient: "Client",
+    recClientZh: "Client (中文)",
+    recProject: "Project",
+    recProjectZh: "Project (中文)",
+    recJobRef: "Job ref.",
+    recOrderedBy: "Ordered by",
+    recDirectorySite: "Directory site",
+    recNoDirectorySite: "Not in the directory",
+    recSaveSite: "Save this site to the directory",
+    recChooseFile: "Choose workbook",
+    recNoStructure: "Nothing in this workbook looks like a packing list or a job sheet. The packing list tab needs File Name, PKGS and Cases; the job sheet tabs need Lot, Cases and Job No.",
+    recApplied: (l, a, d) => `Applied: ${l} lots created, ${a} arrivals checked in, ${d} deliveries booked out.`,
+    recApplyFailed: "Nothing was applied — the save did not go through. Try again.",
+    recApply: "Apply all",
+    recApplying: "Applying…",
+    recNeedProject: "Fill in the project before applying.",
+    recNewLots: "lots to create",
+    recKnownLots: "already known",
+    recArrivalRows: "arrival rows",
+    recDeliveryRows: "delivery rows",
+    recBlocked: "blocked",
+    recBlockedNote: (n) => `${n} arrival ${n === 1 ? "row is" : "rows are"} not applied.`,
+    recWarnings: "to look at",
+    recHeld: "held back",
+    recWillApply: "rows to apply",
+    recUse: "Use",
+    recUseHint: "Apply this row anyway",
+    recHeldNote: (n) => `${n} ${n === 1 ? "row has a warning on it and is" : "rows have warnings on them and are"} not applied. Tick one to let it through.`,
+    recHeldBack: (n) => `${n} ${n === 1 ? "row was" : "rows were"} held back.`,
+    recBalanceTitle: "Listed, arrived, delivered",
+    recLotsTitle: "Lots on the packing list",
+    recArrivalsTitle: "Arrivals",
+    recDeliveriesTitle: "Deliveries",
+    recLot: "Lot",
+    recListed: "Listed",
+    recArrived: "Arrived",
+    recDelivered: "Delivered",
+    recLeft: "In depot",
+    recNote: "Note",
+    recCases: "Cases",
+    recStatus: "What happens",
+    recWillCreate: "Created",
+    recConflict: "Conflict",
+    recSkip: "Already there — skipped",
+    recSheet: "Sheet",
+    recJob: "Job No.",
+    recDate: "Date",
+    recLotDiffers: (c) => `A lot of this name is already in the depot with a different case list. These are new to it: ${c}. Nothing is changed — check which list is right.`,
+    recLotAlready: "Already in the depot; the packing list row is ignored.",
+    recNoLot: "No lot of this sales order, here or in the depot.",
+    recNoEntry: "No entry for this lot, so there is nothing to deliver from.",
+    recNoDate: "No date on this row.",
+    recPkgsMismatch: (said, got) => `The sheet says ${said} packages but writes ${got} case ${got === 1 ? "number" : "numbers"}.`,
+    recArrivalNotOnList: (c) => `NOT APPLIED — these cases are not on the packing list for this lot: ${c}. A case cannot arrive before it is listed.`,
+    recArrivalAgain: (c) => `Already checked in: ${c}. They are not checked in twice.`,
+    recDeliveryNotOnList: (c) => `WARNING — delivered cases that are not on the packing list: ${c}.`,
+    recDeliveryNotArrived: (c) => `WARNING — delivered but never arrived: ${c}.`,
+    recDeliveryTwice: (c) => `WARNING — already delivered: ${c}.`,
+    recMoreArrivedThanListed: (a, l) => `${a} cases arrived against ${l} on the packing list.`,
+    recMoreDeliveredThanArrived: (d, a) => `${d} cases delivered against ${a} arrived.`,
+    recFromFile: (f) => `Reconciled from ${f}`,
+    recDeclaredSource: (s) => `Declared on ${s}`,
     navDuplicates: "Duplicates",
     navDuplicatesCount: (n) => `Duplicates (${n})`,
     navImport: "Import",
@@ -2609,6 +2675,72 @@ const TEXT = {
     navInventory: "存倉記錄",
     navNewEntry: "新增記錄",
     navDeliveries: "送貨記錄",
+    navReconciler: "對賬",
+    recTitle: "一個檔案對完整個地盤",
+    recDesc: "同一個檔案內包括裝箱單分頁和兩個工單分頁。先互相核對，再一次過數，不會做到一半。",
+    recSiteTitle: "客戶及地盤 — 本檔新增的批次全部用這個",
+    recClient: "客戶",
+    recClientZh: "客戶（中文）",
+    recProject: "工程",
+    recProjectZh: "工程（中文）",
+    recJobRef: "地盤代號",
+    recOrderedBy: "落單人",
+    recDirectorySite: "目錄地盤",
+    recNoDirectorySite: "不在目錄內",
+    recSaveSite: "將這個地盤存入目錄",
+    recChooseFile: "選擇檔案",
+    recNoStructure: "這個檔案找不到裝箱單或工單。裝箱單需要 File Name、PKGS、Cases；工單需要 Lot、Cases、Job No.。",
+    recApplied: (l, a, d) => `已完成：新增 ${l} 個批次，入倉 ${a} 行，送貨 ${d} 行。`,
+    recApplyFailed: "未有任何更改 — 儲存失敗，請再試一次。",
+    recApply: "全部過數",
+    recApplying: "處理中…",
+    recNeedProject: "請先填寫工程。",
+    recNewLots: "新增批次",
+    recKnownLots: "已存在",
+    recArrivalRows: "入倉行",
+    recDeliveryRows: "送貨行",
+    recBlocked: "不會過數",
+    recBlockedNote: (n) => `有 ${n} 行入倉不會過數。`,
+    recWarnings: "需要看一看",
+    recHeld: "暫不過數",
+    recWillApply: "會過數的行",
+    recUse: "採用",
+    recUseHint: "這行照樣過數",
+    recHeldNote: (n) => `有 ${n} 行有警告，暫時不過數。看過之後可以逐行採用。`,
+    recHeldBack: (n) => `有 ${n} 行暫不過數。`,
+    recBalanceTitle: "裝箱單、入倉、送貨",
+    recLotsTitle: "裝箱單上的批次",
+    recArrivalsTitle: "入倉",
+    recDeliveriesTitle: "送貨",
+    recLot: "批次",
+    recListed: "裝箱單",
+    recArrived: "入倉",
+    recDelivered: "送貨",
+    recLeft: "倉內",
+    recNote: "備註",
+    recCases: "件數",
+    recStatus: "處理方式",
+    recWillCreate: "新增",
+    recConflict: "有衝突",
+    recSkip: "已存在 — 跳過",
+    recSheet: "工單",
+    recJob: "快達單號",
+    recDate: "日期",
+    recLotDiffers: (c) => `倉內已有同名批次，但件號不同。新的件號：${c}。本次不作任何更改 — 請看哪一張才對。`,
+    recLotAlready: "倉內已有，這行裝箱單不處理。",
+    recNoLot: "倉內和本檔都找不到這個訂單號。",
+    recNoEntry: "找不到這個批次的入倉記錄，無貨可送。",
+    recNoDate: "這行沒有日期。",
+    recPkgsMismatch: (said, got) => `單上寫 ${said} 件，但只列出 ${got} 個件號。`,
+    recArrivalNotOnList: (c) => `不會過數 — 這些件號不在本批次的裝箱單內：${c}。未上單的貨不能入倉。`,
+    recArrivalAgain: (c) => `已經入倉：${c}。不會入兩次。`,
+    recDeliveryNotOnList: (c) => `警告 — 送貨的件號不在裝箱單內：${c}。`,
+    recDeliveryNotArrived: (c) => `警告 — 未入倉先送貨：${c}。`,
+    recDeliveryTwice: (c) => `警告 — 已經送過：${c}。`,
+    recMoreArrivedThanListed: (a, l) => `入倉 ${a} 件，裝箱單只有 ${l} 件。`,
+    recMoreDeliveredThanArrived: (d, a) => `送貨 ${d} 件，入倉只有 ${a} 件。`,
+    recFromFile: (f) => `由 ${f} 對賬匯入`,
+    recDeclaredSource: (s) => `${s} 申報`,
     navDuplicates: "重複記錄",
     navDuplicatesCount: (n) => `重複記錄（${n}）`,
     navImport: "匯入",
@@ -13160,14 +13292,30 @@ function batchCaseCodes(spec) {
   // named by their GR number and some packing lists by handling unit - "GR25020894",
   // "HSCK0131311511", "07A1007". Anything carrying a letter is a name, not a count, so it
   // is taken exactly as written and never split on its slash.
-  const lettered = /[A-Za-z]/.test(txt);
-  (lettered ? txt : txt.split("/")[0]).split(/[,、]/).forEach((part) => {
-    const p = part.trim();
+  // Each part carries its own "/total" when the sheet repeats it - "1,2,10/10, 3,4,5/10" -
+  // so the denominator is stripped part by part. Cutting the whole string at its first
+  // slash instead kept "1,2,10" and threw the other seven cases away without a word.
+  let last = null;
+  txt.split(/[,、]/).forEach((part) => {
+    let p = part.trim();
     if (!p) return;
-    if (/[A-Za-z]/.test(p)) { out.push(p); return; }
+    if (/[A-Za-z]/.test(p)) { out.push(p); last = null; return; }
+    p = p.split("/")[0].trim();
+    // "1,-2,5-6" is 1 to 2 and 5 to 6: the dash of a range was left on the second number.
+    const lead = /^-\s*(\d+)$/.exec(p);
+    if (lead && last !== null) {
+      for (let n = last + 1; n <= Number(lead[1]); n++) out.push(total ? `${n}/${total}` : String(n));
+      last = Number(lead[1]);
+      return;
+    }
     const m = /^(\d+)\s*-\s*(\d+)$/.exec(p);
-    if (m) { for (let n = Number(m[1]); n <= Number(m[2]); n++) out.push(total ? `${n}/${total}` : String(n)); }
-    else if (/^\d+$/.test(p)) out.push(total ? `${p}/${total}` : p);
+    if (m) {
+      for (let n = Number(m[1]); n <= Number(m[2]); n++) out.push(total ? `${n}/${total}` : String(n));
+      last = Number(m[2]);
+    } else if (/^\d+$/.test(p)) {
+      out.push(total ? `${p}/${total}` : p);
+      last = Number(p);
+    }
   });
   return out;
 }
@@ -13197,9 +13345,10 @@ function readBatchWorkbook(wb) {
       const row = {
         rowNo: i + 1, sheetName: carried.sheet, jobNumber: carried.job,
         date: normalizeBatchDate(carried.date), reference: carried.ref, lot, codes,
+        pkgs: get(r, "pkgs"),
         kg: get(r, "kg") || get(r, "plkg"), cbm: get(r, "cbm") || get(r, "plcbm"),
         type: get(r, "type") || (/devan/i.test(carried.sheet) ? "Devan" : "CFS"),
-        depot: get(r, "depot") || "Depot 1",
+        depot: get(r, "depot") || DEPOTS[0],
       };
       (isDelivery ? deliveries : arrivals).push(row);
     }
@@ -13237,6 +13386,435 @@ function findBatchTarget(lot, pool) {
   if (hits.length <= 1) return hits[0] || null;
   const byLift = hits.filter((x) => batchNorm(x.unitCode).includes(lift));
   return byLift[0] || hits[0];
+}
+
+
+// ---------------------------------------------------------------------------
+// The reconciler. One workbook carries the packing list and both job-sheet tabs;
+// the three are planned together and applied in a single write, so the arrivals
+// can name lots the same run is creating and the deliveries can name entries the
+// same run is checking in. Uploading the packing list, then the arrivals, then
+// the deliveries as three separate files was three chances to apply two of them.
+//
+// The rules the depot works to, and what this checks before it writes anything:
+//   packing list >= arrivals   a case cannot arrive if it is not on the list
+//   arrivals     >= deliveries a case cannot leave before it comes in
+// The first is an error and the row is not applied; a case that is not there
+// cannot be checked in against anything. The second is a warning: the goods
+// plainly moved, so the row is shown, counted and left for a person to judge.
+// ---------------------------------------------------------------------------
+function reconcilerSiteFromSheet(wb) {
+  for (const name of wb.SheetNames) {
+    const grid = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: "", raw: false });
+    const hi = (grid || []).findIndex((r) => packingListSummaryColumns(r));
+    if (hi === -1) continue;
+    const col = packingListSummaryColumns(grid[hi]);
+    const pick = (key) => {
+      const i = col[key];
+      if (i === undefined) return "";
+      for (let r = hi + 1; r < grid.length; r++) {
+        const v = String((grid[r] || [])[i] == null ? "" : (grid[r] || [])[i]).trim();
+        if (v) return v;
+      }
+      return "";
+    };
+    return { client: pick("client"), clientZh: pick("clientzh"), project: pick("project"), projectZh: pick("projectzh") };
+  }
+  return { client: "", clientZh: "", project: "", projectZh: "" };
+}
+
+function readReconcilerWorkbook(wb) {
+  let pl = null;
+  for (const name of wb.SheetNames) {
+    const grid = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: "", raw: false });
+    const found = groupsFromPackingListSummary(grid);
+    if (found) { pl = found; break; }
+  }
+  const jobs = readBatchWorkbook(wb) || { arrivals: [], deliveries: [] };
+  if (!pl && !jobs.arrivals.length && !jobs.deliveries.length) return null;
+  return {
+    lots: pl ? pl.groups : [],
+    arrivals: jobs.arrivals,
+    deliveries: jobs.deliveries,
+    site: reconcilerSiteFromSheet(wb),
+  };
+}
+
+// A lot on a job sheet is written "60770337/L11"; the same lot on the packing list is
+// written "SHK0476-26 60770337/L11". The sales order is what ties them together, exactly
+// as the job-sheet importer already matches.
+function reconcileMatch(lot, pool) {
+  const so = String(lot).split("/")[0].trim();
+  const lift = batchNorm(String(lot).split("/")[1] || "");
+  const hits = (pool || []).filter((x) => String(x.key || "").includes(so));
+  if (hits.length <= 1) return hits[0] || null;
+  const byLift = hits.filter((x) => batchNorm(x.key).includes(lift));
+  return byLift[0] || hits[0];
+}
+
+// A job sheet writes a run of handling units with the prefix on the first one only -
+// "HEB10133154693, HEBI0132949193, 0132949196, 5000827137". The bare ones are the same
+// cases, written short, and matching them literally against the packing list reports four
+// cases missing out of four. A bare run of six digits or more is matched on its digits
+// against the lot's own case names, and only when exactly one of them ends that way; a
+// case numbered 12/24 is never matched this way, because it is not bare.
+function reconcileCodes(codes, lotCodes) {
+  const known = new Set(lotCodes.map((c) => String(c).trim()));
+  const digits = new Map();
+  lotCodes.forEach((c) => {
+    const d = String(c).replace(/\D/g, "");
+    if (!d) return;
+    digits.set(d, digits.has(d) ? null : String(c).trim());
+  });
+  return codes.map((c) => {
+    const raw = String(c == null ? "" : c).trim();
+    if (known.has(raw)) return raw;
+    if (!/^\d{6,}$/.test(raw)) return raw;
+    if (digits.get(raw)) return digits.get(raw);
+    const tail = lotCodes.filter((k) => {
+      const kd = String(k).replace(/\D/g, "");
+      return kd.length > raw.length && kd.endsWith(raw);
+    });
+    return tail.length === 1 ? String(tail[0]).trim() : raw;
+  });
+}
+
+// Only the clean rows are applied. A row with a warning on it is held back and listed,
+// because a warning means the sheet and the packing list disagree and a person has to say
+// which is right - applying it anyway is how a wrong figure gets into the depot quietly.
+// A held-back row can be let through one at a time by ticking it, and the whole plan is
+// then worked out again, so a delivery that depends on a held-back arrival is still warned.
+function buildReconcilePlan({ parsed, items, incoming, t, include }) {
+  const letThrough = include || new Set();
+  const norm = (c) => String(c == null ? "" : c).trim();
+  const lots = [];
+  // Every lot the depot already knows, plus every lot this file would create, in one
+  // pool - so an arrival can name a lot that does not exist yet and still be placed.
+  (parsed.lots || []).forEach((g) => {
+    const key = String(g.lot || "").trim();
+    const inc = (incoming || []).find((i) => String(i.unitCode || "").trim() === key);
+    const item = (items || []).find((i) => String(i.unitCode || "").trim() === key)
+      || (inc && (items || []).find((i) => i.id === inc.linkedItemId)) || null;
+    const codes = (g.packages || []).map((p) => norm(p.code));
+    let status = "new", detail = "";
+    if (inc || item) {
+      const known = new Set((((inc || item).packages) || []).map((p) => norm(p.code)));
+      const extra = codes.filter((c) => !known.has(c));
+      status = extra.length ? "conflict" : "exists";
+      detail = extra.length ? t.recLotDiffers(extra.join(", ")) : t.recLotAlready;
+    }
+    // A lot the depot already holds brings its history with it, or running the same file
+    // twice would check every case in a second time and report nothing wrong.
+    lots.push({
+      key, group: g, inc, item, codes, status, detail, source: "file",
+      arrived: new Set(inc ? (inc.checkedInCodes || []).map(norm)
+        : (item ? (item.arrivals || []).flatMap((a) => a.codes || []).map(norm) : [])),
+      delivered: new Set(item ? deliveredCodes(item).map(norm) : []),
+    });
+  });
+  // Lots already in the depot that this file says nothing about still have to be found,
+  // or a job sheet naming one would be reported as missing when it is simply older.
+  (incoming || []).forEach((inc) => {
+    const key = String(inc.unitCode || "").trim();
+    if (!key || lots.some((l) => l.key === key)) return;
+    const item = (items || []).find((i) => i.id === inc.linkedItemId) || null;
+    lots.push({ key, group: null, inc, item, codes: (inc.packages || []).map((p) => norm(p.code)),
+      status: "existing", detail: "", arrived: new Set(inc.checkedInCodes || []), delivered: new Set(item ? deliveredCodes(item) : []), source: "depot" });
+  });
+  (items || []).forEach((it) => {
+    const key = String(it.unitCode || "").trim();
+    if (!key || lots.some((l) => l.key === key)) return;
+    lots.push({ key, group: null, inc: null, item: it, codes: (it.packages || []).map((p) => norm(p.code)),
+      status: "existing", detail: "", arrived: new Set((it.arrivals || []).flatMap((a) => a.codes || [])),
+      delivered: new Set(deliveredCodes(it)), source: "depot" });
+  });
+
+  const arrivals = (parsed.arrivals || []).map((r, i) => {
+    const L = reconcileMatch(r.lot, lots);
+    let status = "ok", detail = "";
+    if (!L) { status = "missing"; detail = t.recNoLot; }
+    else {
+      r = { ...r, codes: reconcileCodes(r.codes, L.codes) };
+      const known = new Set(L.codes);
+      const unknown = r.codes.filter((c) => !known.has(norm(c)));
+      const again = r.codes.filter((c) => L.arrived.has(norm(c)));
+      if (unknown.length) { status = "error"; detail = t.recArrivalNotOnList(unknown.join(", ")); }
+      else if (again.length) { status = "warn"; detail = t.recArrivalAgain(again.join(", ")); }
+      const said = Number(r.pkgs);
+      if (said && said !== r.codes.length) { status = status === "ok" ? "warn" : status; detail = (detail ? detail + " " : "") + t.recPkgsMismatch(said, r.codes.length); }
+      if (!r.date) { status = status === "ok" ? "warn" : status; detail = detail || t.recNoDate; }
+      const apply = status === "ok" || (status === "warn" && letThrough.has(`A${i}`));
+      if (apply) r.codes.forEach((c) => L.arrived.add(norm(c)));
+      return { ...r, rowKey: `A${i}`, lotKey: L.key, status, detail, applied: apply };
+    }
+    return { ...r, rowKey: `A${i}`, lotKey: "", status, detail, applied: false };
+  });
+
+  const deliveries = (parsed.deliveries || []).map((r, i) => {
+    const L = reconcileMatch(r.lot, lots);
+    let status = "ok", detail = "";
+    if (!L) { status = "missing"; detail = t.recNoEntry; }
+    else {
+      r = { ...r, codes: reconcileCodes(r.codes, L.codes) };
+      const known = new Set(L.codes);
+      const notOnList = r.codes.filter((c) => !known.has(norm(c)));
+      const notArrived = r.codes.filter((c) => known.has(norm(c)) && !L.arrived.has(norm(c)));
+      const twice = r.codes.filter((c) => L.delivered.has(norm(c)));
+      const bits = [];
+      if (notOnList.length) bits.push(t.recDeliveryNotOnList(notOnList.join(", ")));
+      if (notArrived.length) bits.push(t.recDeliveryNotArrived(notArrived.join(", ")));
+      if (twice.length) bits.push(t.recDeliveryTwice(twice.join(", ")));
+      if (bits.length) { status = "warn"; detail = bits.join(" "); }
+      const said = Number(r.pkgs);
+      if (said && said !== r.codes.length) { status = "warn"; detail = (detail ? detail + " " : "") + t.recPkgsMismatch(said, r.codes.length); }
+      if (!r.date) { status = status === "ok" ? "warn" : status; detail = (detail ? detail + " " : "") + t.recNoDate; }
+      const apply = status === "ok" || (status === "warn" && letThrough.has(`D${i}`));
+      if (apply) r.codes.forEach((c) => L.delivered.add(norm(c)));
+      return { ...r, rowKey: `D${i}`, lotKey: L.key, status, detail, applied: apply };
+    }
+    return { ...r, rowKey: `D${i}`, lotKey: "", status, detail, applied: false };
+  });
+
+  // The two counting rules, per lot, stated once where they can be read at a glance.
+  const balance = lots.filter((L) => L.source === "file" || L.arrived.size || L.delivered.size).map((L) => {
+    const listed = L.codes.length, arr = L.arrived.size, dlv = L.delivered.size;
+    const bits = [];
+    if (arr > listed) bits.push(t.recMoreArrivedThanListed(arr, listed));
+    if (dlv > arr) bits.push(t.recMoreDeliveredThanArrived(dlv, arr));
+    return { key: L.key, listed, arrived: arr, delivered: dlv, left: arr - dlv, warn: bits.join(" ") };
+  });
+  return { lots, arrivals, deliveries, balance };
+}
+
+function ReconcilerPanel({ items, incoming, directory, setDirectory, onReconcile, colors, t, lang }) {
+  const [site, setSite] = useState({ client: CLIENTS[1], clientZh: "", project: "", projectZh: "", directoryId: "", jobRef: "", orderedBy: "", saveToDirectory: false });
+  const [parsed, setParsed] = useState(null);
+  const [include, setInclude] = useState(() => new Set());
+  const [fileName, setFileName] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState("");
+
+  async function onFile(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    setErr(""); setDone(""); setParsed(null); setInclude(new Set());
+    try {
+      const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const p = readReconcilerWorkbook(wb);
+      if (!p) { setErr(t.recNoStructure); return; }
+      // The file names the site on every row of its packing list; it is lifted to the top
+      // once, matched against the directory, and stays editable. A file for a site the
+      // depot already knows should need nothing typed at all.
+      const known = (directory || []).find((d) =>
+        (d.siteEn && p.site.project && d.siteEn.toLowerCase() === p.site.project.toLowerCase()) ||
+        (d.siteZh && p.site.projectZh && d.siteZh === p.site.projectZh));
+      setSite((s) => ({
+        ...s,
+        client: resolveClientGuess(p.site.client) || known?.client || s.client,
+        clientZh: p.site.clientZh || s.clientZh,
+        project: known ? known.siteEn : (p.site.project || s.project),
+        projectZh: known ? (known.siteZh || p.site.projectZh) : (p.site.projectZh || s.projectZh),
+        directoryId: known ? known.id : "",
+        jobRef: known ? (known.jobRef || "") : s.jobRef,
+        orderedBy: known ? (known.orderedBy || "") : s.orderedBy,
+        saveToDirectory: !known,
+      }));
+      setFileName(file.name);
+      setParsed(p);
+    } catch (ex) { setErr(t.recNoStructure); }
+  }
+
+  const plan = useMemo(
+    () => (parsed ? buildReconcilePlan({ parsed, items, incoming, t, include }) : null),
+    [parsed, items, incoming, include, t]);
+  const count = (rows, s) => rows.filter((r) => r.status === s).length;
+  const held = plan ? plan.arrivals.filter((r) => r.status === "warn" && !r.applied).length
+    + plan.deliveries.filter((r) => r.status === "warn" && !r.applied).length : 0;
+  function toggle(key) {
+    setInclude((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }
+  const newLots = plan ? plan.lots.filter((l) => l.status === "new") : [];
+  const conflicts = plan ? plan.lots.filter((l) => l.status === "conflict") : [];
+  const badArrivals = plan ? count(plan.arrivals, "error") + count(plan.arrivals, "missing") : 0;
+  const canApply = !!plan && !!site.project && !busy &&
+    (newLots.length || plan.arrivals.some((r) => r.applied) || plan.deliveries.some((r) => r.applied));
+
+  async function apply() {
+    if (!canApply) return;
+    setBusy(true); setErr("");
+    try {
+      const res = await onReconcile({ site, plan, fileName });
+      setDone(t.recApplied(res.lots, res.arrivals, res.deliveries) + (held ? " " + t.recHeldBack(held) : ""));
+      setParsed(null); setInclude(new Set());
+    } catch (ex) { setErr(t.recApplyFailed); }
+    finally { setBusy(false); }
+  }
+
+  const inputClass = "w-full px-2 py-1.5 rounded text-sm";
+  const inputStyle = { background: colors.surfaceDim, border: `1px solid ${colors.line}`, color: colors.ink };
+  const chip = (n, label, tone) => (
+    <div className="rounded px-3 py-2" style={{ background: tone || colors.surfaceDim, minWidth: 96 }}>
+      <div className="text-lg font-bold" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{n}</div>
+      <div className="text-xs" style={{ color: colors.inkFaint }}>{label}</div>
+    </div>
+  );
+  const tone = (s) => s === "error" || s === "missing" ? colors.redSoft : s === "warn" ? colors.amberSoft : "transparent";
+
+  // The tick is only offered on a row that is being held back. A clean row is applied and
+  // has nothing to decide; an errored row cannot be applied at all, so neither gets one.
+  const rowsTable = (title, rows, cols, tickable) => (
+    <div className="mb-4">
+      <div className="text-sm font-bold mb-2" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{title}</div>
+      <div className="rounded overflow-auto" style={{ border: `1px solid ${colors.line}`, maxHeight: 360 }}>
+        <table className="w-full text-xs" style={{ background: colors.surface }}>
+          <thead><tr style={{ background: colors.surfaceDim }}>
+            {tickable && <th className="text-left px-2 py-1.5 font-semibold" style={{ color: colors.inkFaint, width: 34 }}>{t.recUse}</th>}
+            {cols.map((c) => <th key={c.k} className="text-left px-2 py-1.5 font-semibold" style={{ color: colors.inkFaint }}>{c.h}</th>)}
+          </tr></thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={r.rowKey || i} style={{ borderTop: `1px solid ${colors.line}`, background: tone(r.status),
+                opacity: tickable && r.status !== "ok" && !r.applied ? 0.62 : 1 }}>
+                {tickable && (
+                  <td className="px-2 py-1.5 align-top">
+                    {r.status === "warn"
+                      ? <input type="checkbox" checked={!!r.applied} onChange={() => toggle(r.rowKey)} title={t.recUseHint} />
+                      : <span style={{ color: colors.inkFaint }}>{r.applied ? "\u2713" : "\u2014"}</span>}
+                  </td>
+                )}
+                {cols.map((c) => <td key={c.k} className="px-2 py-1.5 align-top" style={{ color: colors.ink }}>{c.get(r)}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="rounded-lg p-5 flex flex-col gap-4" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+        <div>
+          <h3 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.recTitle}</h3>
+          <p className="text-sm" style={{ color: colors.inkFaint }}>{t.recDesc}</p>
+        </div>
+
+        <div className="rounded p-4" style={{ background: colors.surfaceDim }}>
+          <div className="text-sm font-bold mb-3" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{t.recSiteTitle}</div>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <label className="text-xs" style={{ color: colors.inkFaint }}>{t.recClient}
+              <select className={inputClass} style={inputStyle} value={site.client} onChange={(e) => setSite((s) => ({ ...s, client: e.target.value }))}>
+                {CLIENTS.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </label>
+            <label className="text-xs" style={{ color: colors.inkFaint }}>{t.recClientZh}
+              <input className={inputClass} style={inputStyle} value={site.clientZh} onChange={(e) => setSite((s) => ({ ...s, clientZh: e.target.value }))} />
+            </label>
+            <label className="text-xs" style={{ color: colors.inkFaint }}>{t.recProject}
+              <input className={inputClass} style={inputStyle} value={site.project} onChange={(e) => setSite((s) => ({ ...s, project: e.target.value, directoryId: "" }))} />
+            </label>
+            <label className="text-xs" style={{ color: colors.inkFaint }}>{t.recProjectZh}
+              <input className={inputClass} style={inputStyle} value={site.projectZh} onChange={(e) => setSite((s) => ({ ...s, projectZh: e.target.value }))} />
+            </label>
+            <label className="text-xs" style={{ color: colors.inkFaint }}>{t.recJobRef}
+              <input className={inputClass} style={inputStyle} value={site.jobRef} onChange={(e) => setSite((s) => ({ ...s, jobRef: e.target.value }))} />
+            </label>
+            <label className="text-xs" style={{ color: colors.inkFaint }}>{t.recOrderedBy}
+              <input className={inputClass} style={inputStyle} value={site.orderedBy} onChange={(e) => setSite((s) => ({ ...s, orderedBy: e.target.value }))} />
+            </label>
+            <label className="text-xs" style={{ color: colors.inkFaint }}>{t.recDirectorySite}
+              <select className={inputClass} style={inputStyle} value={site.directoryId}
+                onChange={(e) => {
+                  const d = (directory || []).find((x) => x.id === e.target.value);
+                  setSite((s) => d ? { ...s, directoryId: d.id, client: d.client || s.client, project: d.siteEn || s.project, projectZh: d.siteZh || s.projectZh, jobRef: d.jobRef || "", orderedBy: d.orderedBy || "", saveToDirectory: false } : { ...s, directoryId: "" });
+                }}>
+                <option value="">{t.recNoDirectorySite}</option>
+                {(directory || []).filter((d) => d.client === site.client).map((d) => <option key={d.id} value={d.id}>{d.siteEn}</option>)}
+              </select>
+            </label>
+            {!site.directoryId && site.project && (
+              <label className="text-xs flex items-end gap-2 pb-1" style={{ color: colors.inkFaint }}>
+                <input type="checkbox" checked={!!site.saveToDirectory} onChange={(e) => setSite((s) => ({ ...s, saveToDirectory: e.target.checked }))} />
+                {t.recSaveSite}
+              </label>
+            )}
+          </div>
+        </div>
+
+        <label className="px-3 py-2 rounded text-sm font-semibold cursor-pointer w-fit" style={{ background: colors.amber, color: colors.ink, fontFamily: FONT_DISPLAY }}>
+          {t.recChooseFile}
+          <input type="file" accept=".xlsx,.xls,.xlsm" className="hidden" onChange={onFile} />
+        </label>
+        {err && <div className="px-3 py-2 rounded text-sm" style={{ background: colors.redSoft, color: colors.red }}>{err}</div>}
+        {done && <div className="px-3 py-2 rounded text-sm" style={{ background: colors.greenSoft || colors.surfaceDim, color: colors.ink }}>{done}</div>}
+      </div>
+
+      {plan && (
+        <div className="rounded-lg p-5 flex flex-col gap-4" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
+          <div className="flex flex-wrap gap-2 items-center">
+            {chip(newLots.length, t.recNewLots)}
+            {chip(plan.lots.filter((l) => l.status === "exists" || l.status === "conflict").length, t.recKnownLots)}
+            {chip(plan.arrivals.length, t.recArrivalRows)}
+            {chip(plan.deliveries.length, t.recDeliveryRows)}
+            {chip(badArrivals, t.recBlocked, badArrivals ? colors.redSoft : undefined)}
+            {chip(held, t.recHeld, held ? colors.amberSoft : undefined)}
+            {chip(plan.arrivals.filter((r) => r.applied).length + plan.deliveries.filter((r) => r.applied).length, t.recWillApply)}
+          </div>
+
+          {rowsTable(t.recBalanceTitle, plan.balance.filter((b) => b.listed || b.arrived || b.delivered), [
+            { k: "lot", h: t.recLot, get: (r) => r.key },
+            { k: "l", h: t.recListed, get: (r) => r.listed },
+            { k: "a", h: t.recArrived, get: (r) => r.arrived },
+            { k: "d", h: t.recDelivered, get: (r) => r.delivered },
+            { k: "x", h: t.recLeft, get: (r) => r.left },
+            { k: "w", h: t.recNote, get: (r) => r.warn },
+          ].map((c) => ({ ...c })))}
+
+          {rowsTable(t.recLotsTitle, plan.lots.filter((l) => l.source === "file"), [
+            { k: "lot", h: t.recLot, get: (r) => r.key },
+            { k: "n", h: t.recCases, get: (r) => r.codes.length },
+            { k: "s", h: t.recStatus, get: (r) => r.status === "new" ? t.recWillCreate : r.status === "conflict" ? t.recConflict : t.recSkip },
+            { k: "d", h: t.recNote, get: (r) => r.detail },
+          ])}
+
+          {rowsTable(t.recArrivalsTitle, plan.arrivals, [
+            { k: "s", h: t.recSheet, get: (r) => r.sheetName },
+            { k: "j", h: t.recJob, get: (r) => r.jobNumber },
+            { k: "dt", h: t.recDate, get: (r) => r.date },
+            { k: "lot", h: t.recLot, get: (r) => r.lot },
+            { k: "c", h: t.recCases, get: (r) => r.codes.length },
+            { k: "d", h: t.recNote, get: (r) => r.detail },
+          ], true)}
+
+          {rowsTable(t.recDeliveriesTitle, plan.deliveries, [
+            { k: "s", h: t.recSheet, get: (r) => r.sheetName },
+            { k: "j", h: t.recJob, get: (r) => r.jobNumber },
+            { k: "dt", h: t.recDate, get: (r) => r.date },
+            { k: "lot", h: t.recLot, get: (r) => r.lot },
+            { k: "c", h: t.recCases, get: (r) => r.codes.length },
+            { k: "d", h: t.recNote, get: (r) => r.detail },
+          ], true)}
+
+          <div className="flex items-center gap-3">
+            <button onClick={apply} disabled={!canApply}
+              className="px-4 py-2 rounded text-sm font-semibold"
+              style={{ background: canApply ? colors.amber : colors.surfaceDim, color: colors.ink, fontFamily: FONT_DISPLAY, opacity: canApply ? 1 : 0.6 }}>
+              {busy ? t.recApplying : t.recApply}
+            </button>
+            {!site.project && <span className="text-xs" style={{ color: colors.red }}>{t.recNeedProject}</span>}
+            {badArrivals > 0 && <span className="text-xs" style={{ color: colors.inkFaint }}>{t.recBlockedNote(badArrivals)}</span>}
+            {held > 0 && <span className="text-xs" style={{ color: colors.inkFaint }}>{t.recHeldNote(held)}</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function JobSheetBatchPanel({ items, incoming, onCheckInBatch, onDeliverBatch, colors, t, lang }) {
@@ -15373,6 +15951,107 @@ export default function FarspeedInventory() {
   }
   // Adds shipments from a Packing List upload to the Incoming pool - informational only,
   // not yet checked into the depot via Devan or CFS.
+
+  // One upload, one write. The packing list creates the lots, the arrivals check cases
+  // into them and the deliveries take cases back out - all inside a single update of the
+  // entry list, so nothing here depends on a re-render that has not happened yet. Doing
+  // it in three writes meant the second read the entry list as it was before the first.
+  async function handleReconcile({ site, plan, fileName }) {
+    let directoryId = site.directoryId || "";
+    if (!directoryId && site.saveToDirectory && site.project) {
+      const newSite = {
+        id: `SITE${Date.now()}`, siteEn: site.project, siteZh: site.projectZh || "",
+        client: site.client, jobRef: site.jobRef || "", orderedBy: site.orderedBy || "", accountOfficer: "",
+      };
+      setDirectory((d) => [...d, newSite]);
+      directoryId = newSite.id;
+    }
+    const toCreate = plan.lots.filter((l) => l.status === "new" && l.group);
+    const created = toCreate.length ? handleAddIncoming(toCreate.map((l) => ({
+      client: site.client, project: site.project,
+      constructionSite: site.projectZh || site.project,
+      jobRef: site.jobRef || "", orderedBy: site.orderedBy || "", shkNumber: "",
+      directoryId, unitCode: l.key, packages: l.group.packages,
+      notes: t.recFromFile(fileName),
+    }))) : [];
+    const incByLot = new Map();
+    plan.lots.forEach((l) => { if (l.inc) incByLot.set(l.key, l.inc); });
+    toCreate.forEach((l, i) => incByLot.set(l.key, created[i]));
+
+    const arr = plan.arrivals.filter((r) => r.applied);
+    const dlv = plan.deliveries.filter((r) => r.applied);
+    const incPatches = new Map();
+    await persist((list) => {
+      let out = [...list];
+      let counter = highestFsNumber(out);
+      const itemIdByLot = new Map();
+      plan.lots.forEach((l) => { if (l.item) itemIdByLot.set(l.key, l.item.id); });
+      incByLot.forEach((inc, key) => { if (inc && inc.linkedItemId) itemIdByLot.set(key, inc.linkedItemId); });
+      for (const r of arr) {
+        const inc = incByLot.get(r.lotKey);
+        const batch = {
+          id: `ARR${Date.now()}${Math.floor(Math.random() * 1000)}`,
+          date: r.date, type: r.type, codes: r.codes,
+          declared: (r.kg || r.cbm) ? { kg: r.kg, cbm: r.cbm, split: false } : null,
+          declaredSource: t.recDeclaredSource(r.sheetName || fileName),
+          jobNumber: r.jobNumber || "",
+        };
+        let id = itemIdByLot.get(r.lotKey);
+        if (!id) {
+          if (!inc) continue;
+          counter += 1;
+          const totalWeight = (inc.packages || []).reduce((s, p) => s + (Number(p.weightKg) || 0), 0);
+          const totalCbm = (inc.packages || []).reduce((s, p) => s + (Number(p.cbm) || 0), 0);
+          const newItem = {
+            ...emptyForm(),
+            client: inc.client, project: inc.project, constructionSite: inc.constructionSite || "",
+            jobRef: inc.jobRef || "", orderedBy: inc.orderedBy || "", directoryId: inc.directoryId || "",
+            itemType: "Separate Items", unitCode: inc.unitCode || "",
+            depot: r.depot, depotArrivalDate: r.date, arrivingType: r.type, jobNumber: r.jobNumber,
+            ssDoNo: "", shkNumber: inc.shkNumber || "",
+            weightKg: totalWeight ? String(Math.round(totalWeight * 10) / 10) : "",
+            volumeCbm: totalCbm ? String(Math.round(totalCbm * 1000) / 1000) : "",
+            packages: inc.packages, arrivals: [batch], deliveries: [],
+            notes: t.recFromFile(fileName), numericId: counter,
+            id: `FS-${String(counter).padStart(4, "0")}`, createdAt: todayStr(),
+          };
+          out = [...out, recomputeItemTotals(newItem)];
+          id = newItem.id;
+          itemIdByLot.set(r.lotKey, id);
+        } else {
+          out = out.map((it) => (it.id === id ? recomputeItemTotals({ ...it, arrivals: [...(it.arrivals || []), batch] }) : it));
+        }
+        if (inc) {
+          const prev = incPatches.get(inc.id) || { codes: [], linkedItemId: null };
+          incPatches.set(inc.id, { codes: [...prev.codes, ...r.codes], linkedItemId: id });
+        }
+      }
+      for (const r of dlv) {
+        const id = itemIdByLot.get(r.lotKey);
+        if (!id) continue;
+        const rec = {
+          id: `D${Date.now()}${Math.floor(Math.random() * 10000)}-${id}`,
+          date: r.date, codes: r.codes, jobNumber: r.jobNumber,
+          deliveredTo: site.projectZh || site.project, receivedBy: "",
+          notes: t.recDeclaredSource(r.sheetName || fileName),
+          declared: (r.kg || r.cbm) ? { kg: r.kg, cbm: r.cbm, split: false } : null,
+        };
+        out = out.map((it) => (it.id === id ? { ...it, deliveries: [...(it.deliveries || []), rec] } : it));
+      }
+      return out;
+    });
+    setIncoming((prev) => prev.map((inc) => {
+      const p = incPatches.get(inc.id);
+      if (!p) return inc;
+      return {
+        ...inc,
+        checkedInCodes: [...new Set([...(inc.checkedInCodes || []), ...p.codes])],
+        linkedItemId: p.linkedItemId || inc.linkedItemId,
+      };
+    }));
+    return { lots: created.length, arrivals: arr.length, deliveries: dlv.length };
+  }
+
   function handleAddIncoming(rows) {
     let counter = incoming.reduce((m, i) => Math.max(m, i.numericId || 0), 0);
     const newRows = rows.map((r) => {
@@ -16718,8 +17397,8 @@ export default function FarspeedInventory() {
               ["upload", t.navUpload],
               ["incoming", t.navIncoming],
               ["arrivals", t.navArrivals],
-              ["arrivals", t.navArrivals],
-            ["deliveries", t.navDeliveries],
+              ["deliveries", t.navDeliveries],
+              ["reconciler", t.navReconciler],
               ["billing", t.navBilling],
               ["directory", t.navDirectory],
               ["joblog", t.navJobLog],
@@ -16830,7 +17509,9 @@ export default function FarspeedInventory() {
             ["add", t.navNewEntry],
             ["upload", t.navUpload],
             ["incoming", t.navIncoming],
+            ["arrivals", t.navArrivals],
             ["deliveries", t.navDeliveries],
+            ["reconciler", t.navReconciler],
             ["billing", t.navBilling],
             ["directory", t.navDirectory],
             ["joblog", t.navJobLog],
@@ -18073,6 +18754,15 @@ export default function FarspeedInventory() {
             onPurgeDelivery={handlePermanentlyDeleteDelivery}
             onSetManyCancelled={setDeliveriesCancelled}
             onPrintJobSheet={setPrintJobSheet}
+            colors={colors} t={t} lang={lang}
+          />
+        )}
+
+        {view === "reconciler" && (
+          <ReconcilerPanel
+            items={items} incoming={incoming}
+            directory={directory} setDirectory={setDirectory}
+            onReconcile={handleReconcile}
             colors={colors} t={t} lang={lang}
           />
         )}
