@@ -1429,10 +1429,21 @@ function remainingUnits(item) {
 function deliveredCodes(item) {
   return activeDeliveries(item).flatMap((d) => d.codes || []);
 }
+// What is still in the depot: cases that have arrived and have not gone out again. A case
+// on the packing list that has not landed yet is not stock - New Central Harbourfront read
+// 774 packages that way against the 770 on Schindler's own inventory, the four being cases
+// 1-4/12 of 60766739 that CFS 7 never brought in. An entry with no arrival batches at all
+// has nothing to filter on, so it keeps its whole case pool as before.
 function remainingPackages(item) {
   if (!item.packages || item.packages.length === 0) return [];
   const done = new Set(deliveredCodes(item));
-  return item.packages.filter((p) => !done.has(p.code));
+  const pending = new Set(notYetArrivedPackages(item).map((p) => p.code));
+  return item.packages.filter((p) => !done.has(p.code) && !pending.has(p.code));
+}
+// The same count, for an entry tracked by a plain unit count rather than named cases.
+function remainingCount(item) {
+  if (item.packages && item.packages.length) return remainingPackages(item).length;
+  return remainingUnits(item);
 }
 function activeArrivals(item) {
   return item.arrivals || [];
@@ -17122,7 +17133,7 @@ export default function FarspeedInventory() {
       map[key].kg += remainingWeightKg(it);
       // Cases still at the depot, to match the cbm and kg beside it. Counting entries here
       // instead read "4" for a site holding sixteen cases across four entries.
-      map[key].pkgs += Math.max(0, totalUnits(it) - deliveredUnits(it));
+      map[key].pkgs += remainingCount(it);
       // What is left at this site, broken down by the reference each lot came in under -
       // the DM number for Mitsubishi, the SHK for Schindler, whatever the maker uses. The
       // site row answers "how much"; this answers "which", which is the question that
