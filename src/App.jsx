@@ -1687,6 +1687,9 @@ const TEXT = {
     recBlockedNote: (n) => `${n} arrival ${n === 1 ? "row is" : "rows are"} not applied.`,
     recWarnings: "to look at",
     recHeld: "held back",
+    recNothingHere: "Nothing here.",
+    recNoArrivalTab: "No arrival rows in this workbook. The reconciler looks through every tab for one headed Lot, Cases and Job No. \u2014 the \"Arrivals upload\" tab. If your file only has the checklist tabs, it has no tab in that shape, and the packing list will be created without any arrivals.",
+    recNoDeliveryTab: "No delivery rows in this workbook. Same shape as the arrivals \u2014 Lot, Cases and Job No. \u2014 on a tab whose name contains \"Deliveries\", or with a \"Refers to arrival job\" column.",
     recWillApply: "rows to apply",
     recUse: "Use",
     recUseHint: "Apply this row anyway",
@@ -2703,6 +2706,9 @@ const TEXT = {
     recBlockedNote: (n) => `有 ${n} 行入倉不會過數。`,
     recWarnings: "需要看一看",
     recHeld: "暫不過數",
+    recNothingHere: "沒有記錄。",
+    recNoArrivalTab: "這個檔案沒有入倉行。系統會逐個分頁找帶有 Lot、Cases、Job No. 標題的那一頁（「Arrivals upload」）。如果只有核對表分頁，就找不到，只會新增裝箱單而沒有入倉。",
+    recNoDeliveryTab: "這個檔案沒有送貨行。格式跟入倉一樣 — Lot、Cases、Job No. — 分頁名包含「Deliveries」，或者有「Refers to arrival job」欄。",
     recWillApply: "會過數的行",
     recUse: "採用",
     recUseHint: "這行照樣過數",
@@ -13576,7 +13582,11 @@ function buildReconcilePlan({ parsed, items, incoming, t, include }) {
   });
 
   // The two counting rules, per lot, stated once where they can be read at a glance.
-  const balance = lots.filter((L) => L.source === "file" || L.arrived.size || L.delivered.size).map((L) => {
+  const touched = new Set([
+    ...arrivals.map((r) => r.lotKey).filter(Boolean),
+    ...deliveries.map((r) => r.lotKey).filter(Boolean),
+  ]);
+  const balance = lots.filter((L) => L.source === "file" || touched.has(L.key)).map((L) => {
     const listed = L.codes.length, arr = L.arrived.size, dlv = L.delivered.size;
     const bits = [];
     if (arr > listed) bits.push(t.recMoreArrivedThanListed(arr, listed));
@@ -13668,7 +13678,7 @@ function ReconcilerPanel({ items, incoming, directory, setDirectory, onReconcile
 
   // The tick is only offered on a row that is being held back. A clean row is applied and
   // has nothing to decide; an errored row cannot be applied at all, so neither gets one.
-  const rowsTable = (title, rows, cols, tickable) => (
+  const rowsTable = (title, rows, cols, tickable, empty) => (
     <div className="mb-4">
       <div className="text-sm font-bold mb-2" style={{ fontFamily: FONT_DISPLAY, color: colors.ink }}>{title}</div>
       <div className="rounded overflow-auto" style={{ border: `1px solid ${colors.line}`, maxHeight: 360 }}>
@@ -13678,6 +13688,13 @@ function ReconcilerPanel({ items, incoming, directory, setDirectory, onReconcile
             {cols.map((c) => <th key={c.k} className="text-left px-2 py-1.5 font-semibold" style={{ color: colors.inkFaint }}>{c.h}</th>)}
           </tr></thead>
           <tbody>
+            {rows.length === 0 && (
+              <tr style={{ borderTop: `1px solid ${colors.line}` }}>
+                <td colSpan={cols.length + (tickable ? 1 : 0)} className="px-2 py-3" style={{ color: colors.inkFaint }}>
+                  {empty || t.recNothingHere}
+                </td>
+              </tr>
+            )}
             {rows.map((r, i) => (
               <tr key={r.rowKey || i} style={{ borderTop: `1px solid ${colors.line}`, background: tone(r.status),
                 opacity: tickable && r.status !== "ok" && !r.applied ? 0.62 : 1 }}>
@@ -13790,7 +13807,7 @@ function ReconcilerPanel({ items, incoming, directory, setDirectory, onReconcile
             { k: "lot", h: t.recLot, get: (r) => r.lot },
             { k: "c", h: t.recCases, get: (r) => r.codes.length },
             { k: "d", h: t.recNote, get: (r) => r.detail },
-          ], true)}
+          ], true, t.recNoArrivalTab)}
 
           {rowsTable(t.recDeliveriesTitle, plan.deliveries, [
             { k: "s", h: t.recSheet, get: (r) => r.sheetName },
@@ -13799,7 +13816,7 @@ function ReconcilerPanel({ items, incoming, directory, setDirectory, onReconcile
             { k: "lot", h: t.recLot, get: (r) => r.lot },
             { k: "c", h: t.recCases, get: (r) => r.codes.length },
             { k: "d", h: t.recNote, get: (r) => r.detail },
-          ], true)}
+          ], true, t.recNoDeliveryTab)}
 
           <div className="flex items-center gap-3">
             <button onClick={apply} disabled={!canApply}
