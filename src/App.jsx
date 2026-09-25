@@ -15137,7 +15137,7 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
   return (
     <div className="flex flex-col gap-4">
       <div className="flex gap-1 rounded-lg p-1 w-fit" style={{ background: colors.surfaceDim }}>
-        {[["packinglist", t.tabPackingList], ["pdf", t.tabPdf], ...(hideExcelMode ? [] : [["excel", t.tabExcel]])].map(([k, label]) => (
+        {[["packinglist", t.tabPackingList], ...(hideExcelMode ? [] : [["excel", t.tabExcel]])].map(([k, label]) => (
           <button key={k} onClick={() => setMode(k)} className="px-3 py-1.5 rounded text-sm font-semibold"
             style={{ fontFamily: FONT_DISPLAY, background: mode === k ? colors.surface : "transparent", color: colors.ink }}>
             {label}
@@ -15159,7 +15159,7 @@ function ImportPanel({ onImportRows, onAddIncoming, existingItems, directory, se
         </div>
       )}
 
-      {mode === "pdf" && (
+      {false && mode === "pdf" && (
         <div className="flex flex-col gap-4">
           <div className="rounded-lg p-5 flex flex-col gap-4" style={{ background: colors.surface, border: `1px solid ${colors.line}` }}>
             <div>
@@ -17510,6 +17510,7 @@ export default function FarspeedInventory() {
               </button>
               {settingsOpen && (
                 <div className="absolute right-0 mt-1 rounded-lg overflow-hidden z-20" style={{ background: colors.surface, border: `1px solid ${colors.line}`, minWidth: 200 }}>
+                  {false && (
                   <button
                     className="block w-full text-left px-3 py-2 text-sm font-semibold"
                     style={{ color: colors.ink, fontFamily: FONT_DISPLAY }}
@@ -17517,6 +17518,7 @@ export default function FarspeedInventory() {
                   >
                     {t.navPlReader}
                   </button>
+                  )}
                   <button
                     className="block w-full text-left px-3 py-2 text-sm font-semibold"
                     style={{ color: colors.ink, fontFamily: FONT_DISPLAY, borderTop: `1px solid ${colors.surfaceDim}` }}
@@ -17604,7 +17606,8 @@ export default function FarspeedInventory() {
             ["billing", t.navBilling],
             ["directory", t.navDirectory],
             ["joblog", t.navJobLog],
-            ["plreader", t.navPlReader],
+            // PDF scan parked — Irene / Nana / Polly use Excel + chat for now
+            // ["plreader", t.navPlReader],
             ["jsreader", t.navJsReader],
             ["cases", t.navCaseView],
             ["ledger", t.navLedger],
