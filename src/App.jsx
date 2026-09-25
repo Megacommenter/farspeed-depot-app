@@ -11565,10 +11565,20 @@ SCHINDLER ESCALATOR pack lists (ESCALATOR PACKING LIST, KW SO, Lift No ES-01):
 - Lot: KW SO + lift, e.g. "690135142/ES-01".
 - weightKg = that box's G.W. (kg). cbm from size only if a volume is printed; else "".
 
-OTIS summary packing list (contract rows, Package count, no per-case table):
-- Lot = Contract No. (51N00634, 51N00635). Separate group per contract.
-- Case codes = "1/N" … "N/N" where N is that contract's Package count (67 packages → 1/67 … 67/67).
-- If the sheet has no per-case weights, leave each case weightKg and cbm "" and put the row totals in statedPackages, statedWeightKg (GROSS), statedCbm (Dimensions column is CBM).
+SCHINDLER LIFT booking / packing list_Head (OMC Sales Order, Cases Discript 1/7):
+- This is usually Excel. If scanned: case code = "Cases Discript" / Case # column: "1/7", "2/7", "15/36", "20/20". Not the Handling Unit HSCK0133135898.
+- lot = OMC Sales Order + lift + Comm.No., e.g. "60762836/T1-1/HKG0011815984". Split every OMC / every lift (T1-1 vs T1-3 vs L1).
+- Comm.No. HKG0011815984 maps to one lift (Lookup sheet). Do not dump 280 packages into one lot.
+- weightKg = Estimated/Actual weight on that row. Prefer shipping-mark weight if the header says theoretical vs mark.
+- Ignore leftover job-sheet blocks 60632876/L1 and 60561091/L18 unless that heading is filled for THIS job.
+
+OTIS / SIGMA:
+- Prefer Excel when the job has a project workbook. PDF scan is for Shipping Cards / PL.pdf only.
+- Shipping Card (51N00644/E9): lot = Contract No. (51N00644/E9). Case code = Item column exactly: "50#1/3", "50#2/3", "51#1/1", "60#1/1". weightKg = GW. One card = one lot.
+- Summary-only PL (package count, no item column): lot = 51N00634; cases "1/N"…"N/N".
+- Job-sheet marks 00201, 00901(1-2/2), 01301: case = that mark. Split 00901(1-2/2) into 00901-1/2 and 00901-2/2. Lot = contract/lift (51N00349A/T2(S)-L19).
+- Do not invent 1/5 when 50#1/3 is printed.
+
 
 FUJITEC / 富士达 (C/NO. + PK NO. like ZDZ1703+K-05A):
 - Case code = C/NO. only: "01", "06", "11", "32". Not the PK NO.
@@ -11577,6 +11587,54 @@ FUJITEC / 富士达 (C/NO. + PK NO. like ZDZ1703+K-05A):
 - Two jobs in one file (ZDZ1703 and ZDZ1708) are TWO groups. The same C/NO. on both jobs is two different cases.
 - PK NO. decides the lot, not the inner Job No. column.
 - Follow Shipping Marks C/NO. lists when present.
+
+CHEVALIER / 其士 / TIANJIN SAVERA / FEEL:
+
+Savera rail packing list (Group A/B/C/D/E, Order No. CED-1920, invoice 2026SV001HK):
+- ONE invoice is many Farspeed lots. Split by printed Order No. first (CED-1920 vs CED-NP4476), then by Group letter (A, B, C, D, E).
+- Example: 2026SV001HK Group D and Group E are two lots (job sheet files them as L15 and L16). Group A and Group B are separate lots.
+- lot = "CED-1920/A" or "CED-1920/D" if no lift is printed. If a lift/site is written (EL-1905 L15, Wah Yuen L3), use that.
+- "package" is a COUNT. No C/NO on this form. Number cases 1/N..N/N inside THAT lot only (Group D 7 pkgs → 1/7..7/7). Never 1/109 for the whole invoice.
+- weightKg = GROSS. Hardware lines with package "-" share the previous rail line's boxes; do not invent extra cases for "-" rows.
+
+Chevalier lift packing with G-numbers (G879, G919 to G925, L15/G880):
+- Case code = the G number (G879). Keep L15/G879 if the lift prefix is printed on that line.
+- Expand ranges: "G919 to G925" / "G909-G916" → each G number is one case.
+- Parentheses (G864,G932,G962) = one physical package if the job sheet treats them as one; still list each G as a code if you cannot tell. Prefer one case per G.
+- Split groups by lift: L15 vs L16 vs L1-L8 vs L14. Do not merge lifts.
+
+Chevalier / FEEL case marks like 01-01, 02-01, 08A-1, 08B-01, 7A-01:
+- Case code = that mark exactly (01-01, 08A-1).
+- lot = lift (L14, L13) under EL-1905 / FEEL-094.
+- (08-01, 08A-1) are two cases.
+
+Chevalier escalator job (ES-0111, ES-0211):
+- lot = ES-0111 (one escalator).
+- Case codes = C/S numbers: 1, 2, 3, 4, 5, 6, 7, 8. Expand "4-8" to five cases.
+- Next escalator ES-0211 uses 9-16. Do not merge ES-0111 with ES-0211.
+
+Farspeed Devan/Delivery/CFS job sheets are NOT supplier packing lists. If the page says 工單 / JOB SHEET, extract lots from the lift headings and C/S lines the same way Irene typed them. Ignore template junk at the bottom (Ref Job No. 706128, 60110296/L30) unless that block is filled for this job.
+
+KONE / WITTUR (all KONE jobs use the Hau Tak naming unless told otherwise):
+
+
+Cover letters (KONE HK to Irene) and arrival notices are NOT packing lists. Use the enclosed Wittur Packing Slip or KONE China packing list.
+
+Wittur Packing Slip (Handling Unit column, 12 pieces):
+- Case code = Handling Unit / SK number: 8 digits like 73643599, 73539247, 73993458. One HU = one case.
+- Do not use Packing Slip 400682733, Load 500394375, House B/L, or item SKU 120703509A4MDL… as case codes.
+- lot = project + MOD PO (Hau Tak Estate / 4547561993 or 4547561910). If the slip only says Hau Tak, one lot for the shipment unless Lift No. is printed per line.
+- weightKg = GROSS of that Handling Unit (wooden box 300 → 319.50 kg).
+
+KONE China / equipment packing (Tak Chak / Tak Fu / Tak Hong):
+- Case code = the long numeric ID on the crate: 160934264, 12209565, 42880389, 60404797, 6000230865, 9013622412. One ID = one case.
+- Split lots by printed building + lift: "TAK CHAK HSE/L4", "TAK HONG HSE/L4", "TAK FU HSE/L4". Same MOD PO 4546400536 is many lots.
+- Do not merge Tak Chak with Tak Hong.
+
+Job sheets (工單) for KONE:
+- The comma list under C/S No. is the case list. Use those numbers.
+- Ignore the template block "KHK-4540224338-44658973/1137179574/L6" and old Ref Job No. 706128 unless that heading is filled for THIS job.
+- Ignore a Details tab of 03A1001 / 01B1101 codes unless the job is Mitsubishi — that tab is leftover template.
 
 OTHER BRANDS:
 - Use the printed case/box/C/NO. marking. Lift "(#.nn)" always goes in front if present.
