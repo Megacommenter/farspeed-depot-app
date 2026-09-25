@@ -11538,36 +11538,58 @@ async function readPdfScanStream(response) {
 }
 // The words the scanner is given. Lifted out of the one screen that used to own it so
 // the packing list reader asks for exactly the same reading.
-const PDF_SCAN_PROMPT = `Read this elevator/escalator packing list, delivery memo, or shipping PDF (EN/ZH mixed is normal).
-
+const PDF_SCAN_PROMPT = `Read this elevator/escalator packing list PDF (EN/ZH mixed is normal).
 Return ONLY raw JSON. No markdown, no fences, no commentary.
+I will type project names myself. Do not spend tokens on site/building names or part lists.
 
-I will type project names myself. Do NOT spend tokens on project/site names.
+CASE NUMBER RULES — follow the brand. Wrong case codes cannot be used at the depot.
 
-Extract:
-- client: brand if obvious (Schindler, Mitsubishi, OTIS, TKE, Kone, Fujitec, Chevalier) or ""
-- groups: one object per lot/lift/escalator (SO + lift like "690132331/E12" or "60761718/L22")
+MITSUBISHI / 三菱 / 广东菱电 (e.g. PL 04GT251212081):
+- CASE NUMBER column looks like "E21 01A" next to a lift marker "(#.01)" or "(# 01)".
+- Lift number from the (#.nn) marker goes IN FRONT, then the case column with spaces removed.
+  "E21 01A" + "(#.01)" = "01E2101A"
+  "E21 02A" + "(#.02)" = "02E2102A"
+- Never return "E21 01A" or "E2101A" without the lift prefix.
+- Lot: order number (E-6C-23601 02) or contract number. One group per lift if lifts differ.
+- weightKg = GROSS (毛重). cbm = printed 体积.
+
+TKE / 通力电梯零部件 style with Product ID + Box ID (e.g. L0MO-044005.001):
+- Case code = Box ID exactly as printed: "1-1", "2A-1", "4A-2", "14B-1".
+- Use the Packing Summary table (one row per box). Ignore inner material rows on later pages.
+- Lot: Product ID + Unit ID, e.g. "L0MO-044005.001/L1".
+
+SCHINDLER ESCALATOR pack lists (ESCALATOR PACKING LIST, KW SO, Lift No ES-01):
+- Case code = the Box column number: "001", "004", "501", "502", "503". Keep the printed digits (001 not 1).
+- Do NOT use PAC… / HSHW… Box ID or HU numbers as the case code.
+- One physical box per distinct Box number. Do not emit a case per parts row.
+- Lot: KW SO + lift, e.g. "690135142/ES-01".
+- weightKg = that box's G.W. (kg). cbm from size only if a volume is printed; else "".
+
+OTIS summary packing list (contract rows, Package count, no per-case table):
+- Lot = Contract No. (51N00634, 51N00635). Separate group per contract.
+- Case codes = "1/N" … "N/N" where N is that contract's Package count (67 packages → 1/67 … 67/67).
+- If the sheet has no per-case weights, leave each case weightKg and cbm "" and put the row totals in statedPackages, statedWeightKg (GROSS), statedCbm (Dimensions column is CBM).
+
+FUJITEC / 富士达 (C/NO. + PK NO. like ZDZ1703+K-05A):
+- Case code = C/NO. only: "01", "06", "11", "32". Not the PK NO.
+- Lot = the job in the PK NO. before the "+": "ZDZ1703+K-05A" → lot ZDZ1703.
+- Inner ITEM/PART rows are contents, not cases. Never count them.
+- Two jobs in one file (ZDZ1703 and ZDZ1708) are TWO groups. The same C/NO. on both jobs is two different cases.
+- PK NO. decides the lot, not the inner Job No. column.
+- Follow Shipping Marks C/NO. lists when present.
+
+OTHER BRANDS:
+- Use the printed case/box/C/NO. marking. Lift "(#.nn)" always goes in front if present.
+- Never invent case numbers. Never list part numbers as cases.
 
 Each group:
-- lot: the client reference for that batch (SHK/SO/DM + lift/escalator id). Compact.
-- statedPackages: package count printed on the document, or ""
-- statedWeightKg: gross kg total for that lot, or ""
-- statedCbm: CBM total for that lot, or ""
-- packages: one entry per physical case, in printed order
-  - code: case number exactly as printed (001, 501, 1/16, 01B1101)
-  - weightKg: GROSS kg for that case, or ""
-  - cbm: volume m3 for that case if printed. If only LxWxH, leave cbm "" (do not invent)
-- caseNumbers: only if the doc lists markings but no per-case weights (memos). Otherwise omit.
+- lot: compact client ref (SO/order/product/job + lift)
+- statedPackages, statedWeightKg (gross), statedCbm
+- packages: [{code, weightKg, cbm}] in printed order
 
-Rules:
-- Never invent case numbers.
-- Never list part numbers inside a case.
-- Omit empty keys.
-- One lot per distinct lift/escalator/SO. Do not merge E11 and E12.
-- If two totals disagree, keep the per-case figures and the printed lot total as stated*.
-
+Omit empty keys.
 Shape:
-{"client":"","groups":[{"lot":"","statedPackages":"","statedWeightKg":"","statedCbm":"","packages":[{"code":"001","weightKg":"700","cbm":"1.65"}]}]}
+{"client":"Mitsubishi","groups":[{"lot":"E-6C-23601 02","statedPackages":"2","statedWeightKg":"288","statedCbm":"3.536","packages":[{"code":"01E2101A","weightKg":"144","cbm":"1.768"},{"code":"02E2102A","weightKg":"144","cbm":"1.768"}]}]}
 `;
 
 async function postPdfScan(body, attempt = 0) {
