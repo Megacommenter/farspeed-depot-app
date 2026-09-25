@@ -125,6 +125,7 @@ export default async function handler(req) {
       body: JSON.stringify({
         model: MODEL,
         stream: true,
+        max_output_tokens: 32000,
         input: [
           {
             role: "user",

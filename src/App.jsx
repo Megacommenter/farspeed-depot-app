@@ -11538,60 +11538,38 @@ async function readPdfScanStream(response) {
 }
 // The words the scanner is given. Lifted out of the one screen that used to own it so
 // the packing list reader asks for exactly the same reading.
-const PDF_SCAN_PROMPT = `This is a packing list, delivery memo, shipping list, or similar logistics document for elevator/escalator materials, possibly in English, Traditional or Simplified Chinese, or mixed.
+const PDF_SCAN_PROMPT = `Read this elevator/escalator packing list, delivery memo, or shipping PDF (EN/ZH mixed is normal).
 
-Follow these extraction rules exactly - they keep the output compact even for long, dense documents:
+Return ONLY raw JSON. No markdown, no fences, no commentary.
 
-1. Each row/block of the table is ONE case/package. For each case extract exactly these 5 things:
-   - "code": the case/box number exactly as printed, letters and dashes included - "01A2101", "02C3102-3-1", "16D5416C", "C01". Never renumber or simplify them.
-   - "description" on the group: a short generic name for what the order holds, e.g. "ELEVATOR MATERIALS" or the commodity named on an accompanying delivery order ("Guide Rail"). Used for any case whose own line gives no description.
-   - "lot": for a Mitsubishi document, the Delivery Memo number - "13-DM-26-0500", printed as "DM No." - which is what these lots are filed under; fall back to the shipping mark (S/M) if the DM number is blank. Otherwise the lift/unit number. This is very often printed right next to the case number in parentheses, like "(#.01)" or "(#.23)" - extract just the number (e.g. "01", "23"). Different cases sharing the same case-number prefix (e.g. multiple "C21" cases) but different lift numbers are DIFFERENT packages in DIFFERENT lots. If there's no such lift marker anywhere, use the shop order number or another batch identifier as the lot instead.
-   - "description": ONLY the general category/heading text for that case (e.g. "Guide Rail", "Rail Bracket", "Traction Machine", "Installation Material"). Do NOT list the individual part numbers or sub-components underneath it even if the document itemizes many - this is the single most important rule for keeping output size manageable on long documents.
-   - "weightKg": use the GROSS weight (毛重 / GROSS column), not net weight - gross is what matters here.
-   - "cbm": ONLY if a CBM/volume/m3 figure is printed directly for that case. If the document does not give one, use '' - do NOT try to work it out yourself.
-   - "length", "width", "height": that case's dimensions exactly as printed, as plain numbers. These are very often three separate columns headed "Length cm", "Width cm", "Height cm" (or L/W/H, 長/闊/高), but may instead be one combined cell like "500*20*20" or "500x20x20" - read either form. Use '' for any you cannot find. Do not convert or round them.
-   - "dimUnit": the unit those dimensions are printed in - "cm" or "mm". Take it from the column heading or a nearby note. If nothing says, use "" rather than guessing.
-2. Group all cases by their lot/lift number into the "groups" array - one entry per distinct lot.
-2b. Also look for shipping/bill-of-lading details anywhere on the document: vessel/ship name (often after "ex ss." or 船名), voyage number (航次), container numbers (貨櫃號), and bill-of-lading number (提單編號 / BL NO.). Combine them into one line for "ssDoNo" in roughly this style: ex ss."SHIP NAME" V.VOYAGE; CONTAINERS NO. XXXX/40GP. If none present, use ''. Also return them separately in "shipping".
-2b-ii. IMPORTANT - a factory packing list often has a "package"/"Packages"/件數 column that gives the NUMBER of packages on that line, not a case number. One line reading "29 | APK00171P001 | T89/B" is twenty-nine packages, not one. Never count table rows as packages. For a document like that, return each line of the order in "lines" and leave "packages" empty:
-   - "packages": how many packages that line covers, as a number. A dash or blank means zero - loose hardware travelling inside another line's cases.
-   - "description": the short material description on that line.
-   - "netWeightKg" and "grossWeightKg": both if both columns exist, else whichever is given. Do NOT pick between them; the app takes the heavier.
-   - "cbm": only if that line states one.
-   Group the lines by the order the document groups them under - "Order No.CED-1831" and the reference beside it - and put that whole heading in "lot", e.g. "CED-1831 (EL-1926)".
-2b-iii. IMPORTANT - a single order is often subdivided further by a "Group" column carrying A, B, C, D against runs of lines, with a handwritten or printed annotation in the left margin beside each group naming what it is for: an INS reference like "0/24/576", a project number like "EL-1924" or "EL-1876", and the lifts like "#L2-L4", "#L-C01, L-C02, #L-C03, L-C04, #L-C05" or "#L-C06". Those groups go to different lifts and must NOT be merged.
-   Return ONE entry in "groups" per group letter, each holding only that group's lines, and build its "lot" from the order, the group letter and the annotation, e.g. "CED-1833/B (EL-1876 #L-C01 to L-C05)". Put the group letter in "group" and the INS reference in "insRef". Read the margin annotations even when handwritten; where a group has none, use just the order and letter.
-2b-iv. IMPORTANT - a Fujitec packing list has two levels of row and only the outer one is a package. An outer row carries a C/NO. (the case number), a PK NO. like "ZDZ1703+K-05A", N.W(KGS), G.W(KGS), Volume(M3) and a TYPE such as WOODEN CASE. Underneath it sit indented ITEM NO. rows listing that case's contents - PART NAME, PART NO., Job No., QTY PCS. Those inner rows are contents, NOT packages: never count them, and never take their weights.
-   The lot is the job number at the FRONT of the PK NO., before the "+": "ZDZ1703+K-05A" and "ZDZ1703+Z-12HA" are both lot ZDZ1703. Use exactly that, e.g. "ZDZ1703".
-   CRITICAL - do NOT use the inner rows' "Job No." column to decide which lot a case belongs to. One case can hold parts for several jobs: a case whose PK NO. begins "ZDZ1703" may list contents against both ZDZ1703 and ZDZ1708, but the case is ZDZ1703's. The PK NO. decides, always.
-   Set "code" to the C/NO. exactly as printed ("01", "06", "32"), the weight from G.W(KGS), and the volume from Volume(M3).
-   CRITICAL - each job is numbered separately and both usually start at 02, so the two jobs share most of their case numbers and differ only in their last few: one job may end 34-35 while the other ends 32-33. Read every C/NO. from the left-hand column of that case's own row and never carry a number over from the other job's section, never continue a job's numbering past what is printed, and never assume the two jobs end on the same numbers.
-2b-v. A Shipping Marks block at the end of a packing list states, per job, which case numbers belong to it - "FUJITEC / ZDZ1703 / PO NO.HE-6717 / C/NO. 02-05, 09-10, 13-30, 34-35". Return every such block in "shippingMarks", copying the C/NO. line verbatim, ranges and all, with the job/order number from the mark as its "lot". Use it to check your grouping; where it disagrees with what you read off the rows, follow the Shipping Marks.
-2c. IMPORTANT - many documents are NOT per-case tables at all. A Delivery Memo (DM), an arrival/release notice (到貨通知提貨單), or a shipping order states only the OVERALL totals - "29 Package(s)", "14.088 CBM", "12,909 Kgs", "29 件" - and then lists the case markings separately under a heading like "C/S NO." or "SHIPPING MARK", one marking per line, sometimes several comma-separated per line (e.g. "01C01,01C02,01C03"). For a document like that:
-   - put the stated totals in "statedPackages", "statedWeightKg" and "statedCbm" on the group;
-   - put every case marking, expanded from any comma-separated lines into individual entries, into "caseNumbers" on the group, exactly as printed;
-   - leave "packages" as an empty array. Do NOT invent per-case weights or volumes for these - the totals are all the document states.
-2c-ii. The list of markings is often on a separate attached page laid out in several columns across the page, each row holding the marking split into parts - a lift number, a component code and a case suffix, e.g. "09  B11  09" or "19  D41  21-2-2". Read each column from top to bottom, then move to the next column to its right. Every row is ONE package. Join that row's parts, in the order printed and with no spaces, to form the marking - "09B1109", "19D4121-2-2" - following the style the memo's own face uses where it prints a few of them.
-2c-ii-b. On a packing list the case number and its lift marker sit on the SAME row, with the marker in parentheses: "B11 01  (#.01)", "E21 23  (#.23)", "B31 02 (#.02)". The lift number goes at the FRONT of the marking, not the back, and the row's own parts follow it in the order printed, with no spaces anywhere:
-    "B11 01   (#.01)"  ->  "01B1101"
-    "B11 02   (#.02)"  ->  "02B1102"
-    "E21 23   (#.23)"  ->  "23E2123"
-    "D11 01-3-1 (#.01)" ->  "01D1101-3-1"
-  Never leave the space in "B11 01", never return the marking without its leading lift number, and never put the lift number on the end. This is the form every delivery memo, job sheet and depot record uses, and a marking built any other way matches nothing.
-  Moving the lift number to the front of a marking does NOT make it the lot. The lot stays whatever rule 2c gives - the DM number for a Mitsubishi document, or the shipping mark or shop order where there is no DM - and the lift number belongs in front of each case marking and nowhere else. Returning "23" as the lot because the cases are lift 23 loses the reference every other document keys on.
-  The lift number is READ from the document, never assumed: a job covering lifts 01 and 02 has only 01 and 02 in front, and one covering 23 and 24 has only those. Take it from that row's own "(#.nn)" marker, and where a row has none, from the lift the section it sits under is announced with. Do not carry a number over from an example or from another document.
-2c-ii-c. Where a list of markings is separated by "&" before the last one - "01B81, 01D41, 01Z11 & 92B11" - the "&" is simply the final comma. Return that last marking like any other.
-2c-iii. CRITICAL - return exactly the markings that are printed, and no others. If they come to fewer than the stated package count, return the ones you can see: do NOT invent, pad, repeat or renumber markings to reach the stated total, and do NOT drop any to match a smaller one. The document disagreeing with itself is something the reader needs told, and it is reported from the two figures.
-2c-iv. Where a totals-only document's markings fall into more than one group, its face totals cover the whole document, so put them in "documentTotals" and NOT in "statedPackages"/"statedWeightKg"/"statedCbm" on any single group. Where everything is one group, put them on that group. Either way, state them once and never divide them yourself.
-2c-v. A packing list is often sent with a delivery order or arrival notice covering the same shipment. Where the total CBM or weight appears only on that companion page and not per order, put it in "documentTotals" - do NOT divide it between the orders yourself, and do NOT copy it onto one of them.
-2d. Look for terminal/storage dates: the arrival/ETA date (到港日期 / ETA) as "terminalArrivalDate" and the last free storage day (免費倉期 ... 至) as "lastFreeDay", both as YYYY-MM-DD. Use '' if absent.
-3. Keep everything as compact as possible: short descriptions, no commentary, no repeated sub-item lists.
+I will type project names myself. Do NOT spend tokens on project/site names.
 
-Respond with ONLY a raw JSON object in EXACTLY this shape and nothing else (no markdown fences, no commentary, no explanation before or after):
-{"client": "best-guess client name or ''", "project": "site/building/project name found in the document, or ''", "ssDoNo": "vessel + voyage + container line or ''", "shipping": {"vessel": "", "voyage": "", "blNo": "", "containerNo": ""}, "terminalArrivalDate": "YYYY-MM-DD or ''", "lastFreeDay": "YYYY-MM-DD or ''", "documentTotals": {"packages": number_or_empty_string, "weightKg": number_or_empty_string, "cbm": number_or_empty_string}, "shippingMarks": [{"lot": "job/order number in the mark", "cases": "that mark's C/NO. line exactly as printed, ranges and all"}], "groups": [{"lot": "lift/lot/shop-order number identifying this batch", "containers": ["container numbers if any, else empty array"], "statedPackages": number_or_empty_string, "statedWeightKg": number_or_empty_string, "statedCbm": number_or_empty_string, "caseNumbers": ["case markings, one per entry, only for totals-only documents"], "group": "group letter if the document has one, else ''", "insRef": "INS/works reference beside the group, e.g. 0/24/576, else ''", "lines": [{"packages": number, "description": "", "netWeightKg": number_or_empty_string, "grossWeightKg": number_or_empty_string, "cbm": number_or_empty_string}], "packages": [{"code": "case/package number", "description": "short category name, a few words only", "weightKg": number_or_empty_string, "cbm": number_or_empty_string, "length": number_or_empty_string, "width": number_or_empty_string, "height": number_or_empty_string, "dimUnit": "cm_or_mm_or_empty"}]}]}
-If the document only has one overall lot/shipment with no explicit lift/case breakdown, put everything under a single group with a sensible lot name.
+Extract:
+- client: brand if obvious (Schindler, Mitsubishi, OTIS, TKE, Kone, Fujitec, Chevalier) or ""
+- groups: one object per lot/lift/escalator (SO + lift like "690132331/E12" or "60761718/L22")
 
-SIZE MATTERS - a long document has to be answered before the request times out, so keep the reply as short as it can be while staying complete. OMIT any key you would set to '' or to an empty array: write {"code":"01","weightKg":17,"cbm":0.08} rather than repeating every field with empty values. Never abbreviate or omit a case itself - every package must appear - but say nothing about its contents, and use no whitespace beyond what JSON requires.`;
+Each group:
+- lot: the client reference for that batch (SHK/SO/DM + lift/escalator id). Compact.
+- statedPackages: package count printed on the document, or ""
+- statedWeightKg: gross kg total for that lot, or ""
+- statedCbm: CBM total for that lot, or ""
+- packages: one entry per physical case, in printed order
+  - code: case number exactly as printed (001, 501, 1/16, 01B1101)
+  - weightKg: GROSS kg for that case, or ""
+  - cbm: volume m3 for that case if printed. If only LxWxH, leave cbm "" (do not invent)
+- caseNumbers: only if the doc lists markings but no per-case weights (memos). Otherwise omit.
+
+Rules:
+- Never invent case numbers.
+- Never list part numbers inside a case.
+- Omit empty keys.
+- One lot per distinct lift/escalator/SO. Do not merge E11 and E12.
+- If two totals disagree, keep the per-case figures and the printed lot total as stated*.
+
+Shape:
+{"client":"","groups":[{"lot":"","statedPackages":"","statedWeightKg":"","statedCbm":"","packages":[{"code":"001","weightKg":"700","cbm":"1.65"}]}]}
+`;
+
 async function postPdfScan(body, attempt = 0) {
   let response;
   try {
